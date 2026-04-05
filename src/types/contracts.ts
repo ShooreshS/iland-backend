@@ -224,6 +224,75 @@ export type AppUserDto = {
   updatedAt: string;
 };
 
+export type WalletStatus = "not_created" | "local_only" | "issued";
+
+export type BackendCredentialStatus = "not_issued" | "issued" | "revoked";
+
+export type WalletCredentialDto = {
+  id: string;
+  userId: string;
+  walletPublicId: string;
+  holderId: string;
+  backendCredentialStatus: BackendCredentialStatus;
+  issuedAt: string | null;
+  revokedAt: string | null;
+};
+
+export type ViewerWalletStateDto = {
+  exists: boolean;
+  status: WalletStatus;
+  backendCredentialStatus: BackendCredentialStatus;
+  credentialId: string | null;
+  walletPublicId: string | null;
+  issuedAt: string | null;
+  revokedAt: string | null;
+};
+
+export type IssuedWalletCredentialDto = {
+  id: string;
+  issuer: string;
+  type: "IlandIdentityCredential";
+  version: "0.0.86";
+  subjectId: string;
+  holderId: string;
+  walletPublicId: string;
+  walletPublicKey: string;
+  verifiedIdentity: boolean;
+  status: "issued";
+  issuedAt: string;
+  proof: {
+    type: "hmac_sha256";
+    value: string;
+  };
+};
+
+export type IssueWalletCredentialRequestDto = {
+  walletPublicId: string;
+  holderId: string;
+  walletPublicKey: string;
+};
+
+export type IssueWalletCredentialErrorCode =
+  | "USER_NOT_FOUND"
+  | "INVALID_INPUT"
+  | "IDENTITY_PROFILE_REQUIRED"
+  | "CREDENTIAL_REVOKED";
+
+export type IssueWalletCredentialResultDto =
+  | {
+      success: true;
+      wallet: ViewerWalletStateDto;
+      walletCredential: WalletCredentialDto;
+      issuedCredential: IssuedWalletCredentialDto;
+    }
+  | {
+      success: false;
+      wallet: ViewerWalletStateDto;
+      walletCredential: WalletCredentialDto | null;
+      errorCode: IssueWalletCredentialErrorCode;
+      message: string;
+    };
+
 export type IdentityProfileDto = {
   id: string;
   userId: string;
@@ -276,7 +345,8 @@ export type CurrentViewerProfileDto = {
   user: AppUserDto;
   identityProfile: IdentityProfileDto;
   homeArea: GeoAreaOptionDto | null;
-  walletCredential: null;
+  wallet: ViewerWalletStateDto;
+  walletCredential: WalletCredentialDto | null;
   selectedLand: LandDto | null;
   primaryCitizenship: null;
 };

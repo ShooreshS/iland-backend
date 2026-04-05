@@ -77,6 +77,30 @@ export type IdentityProfileMapSeedRow = {
   home_approx_longitude: number | null;
 };
 
+export type WalletCredentialStatus = "not_issued" | "issued" | "revoked";
+
+export type WalletCredentialRow = {
+  id: string;
+  user_id: string;
+  wallet_public_id: string;
+  holder_id: string;
+  wallet_public_key: string;
+  issuance_status: WalletCredentialStatus;
+  issued_at: string | null;
+  revoked_at: string | null;
+  revocation_reason: string | null;
+  credential_payload: Record<string, unknown> | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type NewWalletCredentialRegistrationRow = {
+  user_id: string;
+  wallet_public_id: string;
+  holder_id: string;
+  wallet_public_key: string;
+};
+
 export type PollRow = {
   id: string;
   slug: string;

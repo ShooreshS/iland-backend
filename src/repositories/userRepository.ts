@@ -67,6 +67,32 @@ export const userRepository = {
 
     return data || null;
   },
+
+  async updateWalletCredentialLink(
+    userId: string,
+    params: {
+      hasWallet: boolean;
+      walletCredentialId: string | null;
+    },
+  ): Promise<UserRow | null> {
+    const supabase = requireSupabaseAdminClient();
+
+    const { data, error } = await supabase
+      .from("users")
+      .update({
+        has_wallet: params.hasWallet,
+        wallet_credential_id: params.walletCredentialId,
+      })
+      .eq("id", userId)
+      .select(USER_COLUMNS)
+      .maybeSingle<UserRow>();
+
+    if (error) {
+      throw error;
+    }
+
+    return data || null;
+  },
 };
 
 export default userRepository;

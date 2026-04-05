@@ -1,17 +1,32 @@
+import { createHmac, randomUUID } from "node:crypto";
+import env from "../config/env";
 import identityProfileRepository from "../repositories/identityProfileRepository";
 import landRepository from "../repositories/landRepository";
 import pollRepository from "../repositories/pollRepository";
 import userRepository from "../repositories/userRepository";
+import walletCredentialRepository from "../repositories/walletCredentialRepository";
 import type {
+  BackendCredentialStatus,
   CurrentViewerProfileDto,
   GeoAreaOptionDto,
+  IssueWalletCredentialRequestDto,
+  IssueWalletCredentialResultDto,
+  IssuedWalletCredentialDto,
   LandDto,
   PollCreationCountryOptionDto,
   PollCreationReferenceDataDto,
+  ViewerWalletStateDto,
+  WalletCredentialDto,
+  WalletStatus,
   ViewerLandSelectionResultDto,
   ViewerLandStateDto,
 } from "../types/contracts";
-import type { IdentityProfileRow, LandRow, UserRow } from "../types/db";
+import type {
+  IdentityProfileRow,
+  LandRow,
+  UserRow,
+  WalletCredentialRow,
+} from "../types/db";
 
 type UpdateSelectedLandInput = {
   landId: string | null;
@@ -32,6 +47,8 @@ type CreateLandInput = {
   flagEmoji?: string | null;
   selectAfterCreate?: boolean;
 };
+
+type IssueWalletCredentialInput = IssueWalletCredentialRequestDto;
 
 const normalizeText = (value: unknown): string | null => {
   if (typeof value !== "string") {
@@ -136,6 +153,60 @@ const mapIdentityProfileToDto = (row: IdentityProfileRow | null) => {
   };
 };
 
+const normalizeBackendCredentialStatus = (
+  value: unknown,
+): BackendCredentialStatus => {
+  if (value === "issued" || value === "revoked") {
+    return value;
+  }
+
+  return "not_issued";
+};
+
+const mapWalletCredentialToDto = (
+  row: WalletCredentialRow | null,
+): WalletCredentialDto | null => {
+  if (!row) {
+    return null;
+  }
+
+  return {
+    id: row.id,
+    userId: row.user_id,
+    walletPublicId: row.wallet_public_id,
+    holderId: row.holder_id,
+    backendCredentialStatus: normalizeBackendCredentialStatus(row.issuance_status),
+    issuedAt: row.issued_at,
+    revokedAt: row.revoked_at,
+  };
+};
+
+const buildViewerWalletState = (
+  user: UserRow,
+  walletCredential: WalletCredentialDto | null,
+): ViewerWalletStateDto => {
+  const walletExists = user.has_wallet || Boolean(walletCredential);
+  const backendCredentialStatus: BackendCredentialStatus =
+    walletCredential?.backendCredentialStatus || "not_issued";
+
+  const status: WalletStatus =
+    !walletExists
+      ? "not_created"
+      : backendCredentialStatus === "issued" || backendCredentialStatus === "revoked"
+        ? "issued"
+        : "local_only";
+
+  return {
+    exists: walletExists,
+    status,
+    backendCredentialStatus,
+    credentialId: walletCredential?.id || user.wallet_credential_id || null,
+    walletPublicId: walletCredential?.walletPublicId || null,
+    issuedAt: walletCredential?.issuedAt || null,
+    revokedAt: walletCredential?.revokedAt || null,
+  };
+};
+
 const mapUserToDto = (user: UserRow) => ({
   id: user.id,
   ...(user.username ? { username: user.username } : null),
@@ -167,12 +238,14 @@ const resolveSelectedLand = async (user: UserRow): Promise<LandDto | null> => {
 const buildCurrentViewerProfile = async (
   user: UserRow,
 ): Promise<CurrentViewerProfileDto> => {
-  const [identityProfileRow, selectedLand] = await Promise.all([
+  const [identityProfileRow, selectedLand, walletCredentialRow] = await Promise.all([
     identityProfileRepository.getByUserId(user.id),
     resolveSelectedLand(user),
+    walletCredentialRepository.getByUserId(user.id),
   ]);
 
   const identityProfile = mapIdentityProfileToDto(identityProfileRow);
+  const walletCredential = mapWalletCredentialToDto(walletCredentialRow);
 
   const homeArea =
     identityProfile?.homeLocation?.areaId && identityProfile?.homeLocation?.countryCode
@@ -186,7 +259,8 @@ const buildCurrentViewerProfile = async (
     user: mapUserToDto(user),
     identityProfile,
     homeArea,
-    walletCredential: null,
+    wallet: buildViewerWalletState(user, walletCredential),
+    walletCredential,
     selectedLand,
     primaryCitizenship: null,
   };
@@ -323,6 +397,54 @@ const mapSelectionSuccess = async (
   ...(land ? { land } : null),
 });
 
+const buildWalletCredentialProofValue = (
+  unsignedCredential: Omit<IssuedWalletCredentialDto, "proof">,
+): string =>
+  createHmac("sha256", env.wallet.issuerSigningSecret)
+    .update(JSON.stringify(unsignedCredential))
+    .digest("hex");
+
+const buildIssuedWalletCredential = (params: {
+  user: UserRow;
+  request: IssueWalletCredentialInput;
+  issuedAt: string;
+}): IssuedWalletCredentialDto => {
+  const unsignedCredential: Omit<IssuedWalletCredentialDto, "proof"> = {
+    id: `urn:iland:credential:${randomUUID()}`,
+    issuer: env.wallet.issuerId,
+    type: "IlandIdentityCredential",
+    version: "0.0.86",
+    subjectId: `did:iland:user:${params.user.id}`,
+    holderId: params.request.holderId,
+    walletPublicId: params.request.walletPublicId,
+    walletPublicKey: params.request.walletPublicKey,
+    verifiedIdentity: params.user.verification_level !== "anonymous",
+    status: "issued",
+    issuedAt: params.issuedAt,
+  };
+
+  return {
+    ...unsignedCredential,
+    proof: {
+      type: "hmac_sha256",
+      value: buildWalletCredentialProofValue(unsignedCredential),
+    },
+  };
+};
+
+const createWalletIssuanceFailure = (params: {
+  user: UserRow;
+  walletCredential: WalletCredentialDto | null;
+  errorCode: "INVALID_INPUT" | "IDENTITY_PROFILE_REQUIRED" | "CREDENTIAL_REVOKED";
+  message: string;
+}): IssueWalletCredentialResultDto => ({
+  success: false,
+  wallet: buildViewerWalletState(params.user, params.walletCredential),
+  walletCredential: params.walletCredential,
+  errorCode: params.errorCode,
+  message: params.message,
+});
+
 export const viewerProfileService = {
   async getCurrentViewerProfile(viewerUserId: string): Promise<CurrentViewerProfileDto | null> {
     const user = await userRepository.getById(viewerUserId);
@@ -331,6 +453,128 @@ export const viewerProfileService = {
     }
 
     return buildCurrentViewerProfile(user);
+  },
+
+  async issueWalletCredential(
+    viewerUserId: string,
+    input: IssueWalletCredentialInput,
+  ): Promise<IssueWalletCredentialResultDto> {
+    const user = await userRepository.getById(viewerUserId);
+    if (!user) {
+      return {
+        success: false,
+        wallet: {
+          exists: false,
+          status: "not_created",
+          backendCredentialStatus: "not_issued",
+          credentialId: null,
+          walletPublicId: null,
+          issuedAt: null,
+          revokedAt: null,
+        },
+        walletCredential: null,
+        errorCode: "USER_NOT_FOUND",
+        message: "The current user could not be resolved.",
+      };
+    }
+
+    const walletPublicId = normalizeText(input.walletPublicId);
+    const holderId = normalizeText(input.holderId);
+    const walletPublicKey = normalizeText(input.walletPublicKey);
+
+    if (!walletPublicId || !holderId || !walletPublicKey) {
+      return createWalletIssuanceFailure({
+        user,
+        walletCredential: mapWalletCredentialToDto(
+          await walletCredentialRepository.getByUserId(user.id),
+        ),
+        errorCode: "INVALID_INPUT",
+        message:
+          "Wallet issuance requires walletPublicId, holderId, and walletPublicKey.",
+      });
+    }
+
+    const registeredCredentialRow = await walletCredentialRepository.upsertPublicMaterial({
+      user_id: user.id,
+      wallet_public_id: walletPublicId,
+      holder_id: holderId,
+      wallet_public_key: walletPublicKey,
+    });
+
+    const linkedUser =
+      (await userRepository.updateWalletCredentialLink(user.id, {
+        hasWallet: true,
+        walletCredentialId: registeredCredentialRow.id,
+      })) || {
+        ...user,
+        has_wallet: true,
+        wallet_credential_id: registeredCredentialRow.id,
+      };
+
+    const registeredWalletCredential =
+      mapWalletCredentialToDto(registeredCredentialRow);
+
+    if (registeredCredentialRow.issuance_status === "revoked") {
+      return createWalletIssuanceFailure({
+        user: linkedUser,
+        walletCredential: registeredWalletCredential,
+        errorCode: "CREDENTIAL_REVOKED",
+        message: "Credential issuance is blocked because this wallet credential is revoked.",
+      });
+    }
+
+    const identityProfile = await identityProfileRepository.getByUserId(user.id);
+    if (!identityProfile) {
+      return createWalletIssuanceFailure({
+        user: linkedUser,
+        walletCredential: registeredWalletCredential,
+        errorCode: "IDENTITY_PROFILE_REQUIRED",
+        message: "An identity profile is required before wallet credential issuance.",
+      });
+    }
+
+    const issuedAt = new Date().toISOString();
+    const issuedCredential = buildIssuedWalletCredential({
+      user: linkedUser,
+      request: {
+        walletPublicId,
+        holderId,
+        walletPublicKey,
+      },
+      issuedAt,
+    });
+
+    const issuedCredentialRow = await walletCredentialRepository.updateByUserId(user.id, {
+      issuance_status: "issued",
+      issued_at: issuedAt,
+      revoked_at: null,
+      revocation_reason: null,
+      credential_payload: issuedCredential as unknown as Record<string, unknown>,
+    });
+
+    const resolvedIssuedRow = issuedCredentialRow || registeredCredentialRow;
+    const finalWalletCredential = mapWalletCredentialToDto(resolvedIssuedRow);
+    if (!finalWalletCredential) {
+      return createWalletIssuanceFailure({
+        user: linkedUser,
+        walletCredential: registeredWalletCredential,
+        errorCode: "INVALID_INPUT",
+        message: "Wallet credential issuance produced an invalid credential state.",
+      });
+    }
+
+    const finalUser =
+      (await userRepository.updateWalletCredentialLink(user.id, {
+        hasWallet: true,
+        walletCredentialId: resolvedIssuedRow.id,
+      })) || linkedUser;
+
+    return {
+      success: true,
+      wallet: buildViewerWalletState(finalUser, finalWalletCredential),
+      walletCredential: finalWalletCredential,
+      issuedCredential,
+    };
   },
 
   async getViewerLandState(viewerUserId: string): Promise<ViewerLandSelectionResultDto> {

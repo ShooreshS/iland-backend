@@ -24,6 +24,8 @@ const parsed = z
     SUPABASE_PROJECT_REF: z.string().min(1).optional(),
     ENABLE_DEV_VIEWER_AUTH: z.string().optional(),
     DEV_VIEWER_ID_HEADER: z.string().min(1).optional(),
+    WALLET_ISSUER_ID: z.string().min(1).optional(),
+    WALLET_ISSUER_SIGNING_SECRET: z.string().min(1).optional(),
   })
   .superRefine((input, context) => {
     const hasUrl = Boolean(input.SUPABASE_URL);
@@ -47,6 +49,10 @@ const parsed = z
     SUPABASE_PROJECT_REF: emptyToUndefined(process.env.SUPABASE_PROJECT_REF),
     ENABLE_DEV_VIEWER_AUTH: emptyToUndefined(process.env.ENABLE_DEV_VIEWER_AUTH),
     DEV_VIEWER_ID_HEADER: emptyToUndefined(process.env.DEV_VIEWER_ID_HEADER),
+    WALLET_ISSUER_ID: emptyToUndefined(process.env.WALLET_ISSUER_ID),
+    WALLET_ISSUER_SIGNING_SECRET: emptyToUndefined(
+      process.env.WALLET_ISSUER_SIGNING_SECRET,
+    ),
   });
 
 const enableDevViewerAuth =
@@ -57,6 +63,12 @@ const enableDevViewerAuth =
 const devViewerIdHeader = (parsed.DEV_VIEWER_ID_HEADER || "x-dev-viewer-id")
   .trim()
   .toLowerCase();
+
+const walletIssuerId =
+  parsed.WALLET_ISSUER_ID || "did:iland:backend:issuer:v0.0.86";
+
+const walletIssuerSigningSecret =
+  parsed.WALLET_ISSUER_SIGNING_SECRET || "iland-backend-wallet-issuer-dev-secret";
 
 export const env = Object.freeze({
   nodeEnv: parsed.NODE_ENV,
@@ -71,6 +83,10 @@ export const env = Object.freeze({
   auth: Object.freeze({
     enableDevViewerAuth,
     devViewerIdHeader,
+  }),
+  wallet: Object.freeze({
+    issuerId: walletIssuerId,
+    issuerSigningSecret: walletIssuerSigningSecret,
   }),
 });
 

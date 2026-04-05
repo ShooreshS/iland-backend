@@ -26,6 +26,7 @@ Set at least:
 - `SUPABASE_URL`
 - `SUPABASE_SERVICE_ROLE_KEY`
 - `SUPABASE_PROJECT_REF` (used by Supabase CLI)
+- `WALLET_ISSUER_SIGNING_SECRET` (recommended for non-local environments)
 
 3. Apply migrations to hosted Supabase:
 
@@ -60,6 +61,8 @@ curl -X POST http://127.0.0.1:3001/users/bootstrap
 - `GET /health`
 - `GET /health/db`
 - `POST /users/bootstrap`
+- `GET /me/profile`
+- `POST /me/wallet/issue`
 - `GET /polls`
 - `GET /polls/:id`
 - `POST /polls/:id/votes`

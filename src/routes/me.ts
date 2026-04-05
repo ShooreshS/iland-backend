@@ -2,7 +2,10 @@ import { z } from "zod";
 import requireViewer from "../auth/requireViewer";
 import { json } from "../middleware/json";
 import viewerProfileService from "../services/viewerProfileService";
-import type { ViewerLandSelectionResultDto } from "../types/contracts";
+import type {
+  IssueWalletCredentialResultDto,
+  ViewerLandSelectionResultDto,
+} from "../types/contracts";
 import type { RouteDefinition } from "../types/http";
 
 const selectedLandUpdateSchema = z
@@ -32,10 +35,28 @@ const createLandSchema = z
   })
   .strict();
 
+const issueWalletCredentialSchema = z
+  .object({
+    walletPublicId: z.string().trim().min(1),
+    holderId: z.string().trim().min(1),
+    walletPublicKey: z.string().trim().min(1),
+  })
+  .strict();
+
 const selectionErrorStatusMap: Record<NonNullable<ViewerLandSelectionResultDto["errorCode"]>, number> = {
   USER_NOT_FOUND: 401,
   LAND_NOT_FOUND: 404,
   INVALID_INPUT: 400,
+};
+
+const walletIssueErrorStatusMap: Record<
+  NonNullable<Extract<IssueWalletCredentialResultDto, { success: false }>["errorCode"]>,
+  number
+> = {
+  USER_NOT_FOUND: 401,
+  INVALID_INPUT: 400,
+  IDENTITY_PROFILE_REQUIRED: 409,
+  CREDENTIAL_REVOKED: 409,
 };
 
 const getCurrentViewerProfileRoute: RouteDefinition = {
@@ -233,12 +254,59 @@ const createViewerLandRoute: RouteDefinition = {
   },
 };
 
+const issueViewerWalletCredentialRoute: RouteDefinition = {
+  method: "POST",
+  path: "/me/wallet/issue",
+  handler: async ({ request }) => {
+    const viewerResult = await requireViewer(request);
+    if (!viewerResult.ok) {
+      return viewerResult.response;
+    }
+
+    let requestBody: unknown;
+    try {
+      requestBody = await request.json();
+    } catch {
+      return json(
+        {
+          error: "invalid_request",
+          message: "Request body must be valid JSON.",
+        },
+        400,
+      );
+    }
+
+    const parsedBody = issueWalletCredentialSchema.safeParse(requestBody);
+    if (!parsedBody.success) {
+      return json(
+        {
+          error: "invalid_request",
+          message: "Wallet issuance request body is invalid.",
+        },
+        400,
+      );
+    }
+
+    const result = await viewerProfileService.issueWalletCredential(
+      viewerResult.viewer.userId,
+      parsedBody.data,
+    );
+
+    if (result.success) {
+      return json(result);
+    }
+
+    return json(result, walletIssueErrorStatusMap[result.errorCode || "INVALID_INPUT"]);
+  },
+};
+
 export const meRoutes: RouteDefinition[] = [
   getCurrentViewerProfileRoute,
   getViewerLandStateRoute,
   updateViewerLandRoute,
   updateViewerLandFlagRoute,
   createViewerLandRoute,
+  issueViewerWalletCredentialRoute,
 ];
 
 export default meRoutes;
