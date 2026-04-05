@@ -1,8 +1,10 @@
 import { z } from "zod";
 import requireViewer from "../auth/requireViewer";
 import { json } from "../middleware/json";
+import verifiedIdentityBindService from "../services/verifiedIdentityBindService";
 import viewerProfileService from "../services/viewerProfileService";
 import type {
+  BindVerifiedIdentityResultDto,
   IssueWalletCredentialResultDto,
   UpdateViewerHomeLocationResultDto,
   ViewerLandSelectionResultDto,
@@ -56,6 +58,14 @@ const updateHomeLocationSchema = z
   })
   .strict();
 
+const verifyIdentitySchema = z
+  .object({
+    nidnh: z.string().trim().min(1),
+    normalizationVersion: z.number().int(),
+    verificationMethod: z.enum(["passport_nfc"]).optional(),
+  })
+  .strict();
+
 const selectionErrorStatusMap: Record<NonNullable<ViewerLandSelectionResultDto["errorCode"]>, number> = {
   USER_NOT_FOUND: 401,
   LAND_NOT_FOUND: 404,
@@ -80,6 +90,15 @@ const homeLocationErrorStatusMap: Record<
   IDENTITY_PROFILE_NOT_FOUND: 409,
   INVALID_COORDINATES: 400,
   INVALID_INPUT: 400,
+};
+
+const verifyIdentityErrorStatusMap: Record<
+  NonNullable<Extract<BindVerifiedIdentityResultDto, { success: false }>["errorCode"]>,
+  number
+> = {
+  USER_NOT_FOUND: 401,
+  INVALID_INPUT: 400,
+  IDENTITY_ALREADY_BOUND: 409,
 };
 
 const getCurrentViewerProfileRoute: RouteDefinition = {
@@ -372,6 +391,74 @@ const issueViewerWalletCredentialRoute: RouteDefinition = {
   },
 };
 
+type VerifyIdentityRouteDependencies = {
+  requireViewerFn?: typeof requireViewer;
+  bindService?: Pick<
+    typeof verifiedIdentityBindService,
+    "bindVerifiedIdentityForViewer"
+  >;
+};
+
+export const createVerifyIdentityRoute = (
+  dependencies: VerifyIdentityRouteDependencies = {},
+): RouteDefinition => {
+  const requireViewerFn = dependencies.requireViewerFn || requireViewer;
+  const bindService = dependencies.bindService || verifiedIdentityBindService;
+
+  return {
+    method: "POST",
+    path: "/me/verify-identity",
+    handler: async ({ request }) => {
+      const viewerResult = await requireViewerFn(request);
+      if (!viewerResult.ok) {
+        return viewerResult.response;
+      }
+
+      let requestBody: unknown;
+      try {
+        requestBody = await request.json();
+      } catch {
+        return json(
+          {
+            error: "invalid_request",
+            message: "Request body must be valid JSON.",
+          },
+          400,
+        );
+      }
+
+      const parsedBody = verifyIdentitySchema.safeParse(requestBody);
+      if (!parsedBody.success) {
+        return json(
+          {
+            error: "invalid_request",
+            message: "Identity verification request body is invalid.",
+          },
+          400,
+        );
+      }
+
+      const result = await bindService.bindVerifiedIdentityForViewer({
+        viewerUserId: viewerResult.viewer.userId,
+        nidnh: parsedBody.data.nidnh,
+        normalizationVersion: parsedBody.data.normalizationVersion,
+        verificationMethod: parsedBody.data.verificationMethod,
+      });
+
+      if (result.success) {
+        return json(result);
+      }
+
+      return json(
+        result,
+        verifyIdentityErrorStatusMap[result.errorCode || "INVALID_INPUT"],
+      );
+    },
+  };
+};
+
+const verifyIdentityRoute = createVerifyIdentityRoute();
+
 export const meRoutes: RouteDefinition[] = [
   getCurrentViewerProfileRoute,
   updateViewerHomeLocationRoute,
@@ -380,6 +467,7 @@ export const meRoutes: RouteDefinition[] = [
   updateViewerLandFlagRoute,
   createViewerLandRoute,
   issueViewerWalletCredentialRoute,
+  verifyIdentityRoute,
 ];
 
 export default meRoutes;

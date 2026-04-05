@@ -293,6 +293,39 @@ export type IssueWalletCredentialResultDto =
       message: string;
     };
 
+export type BindVerifiedIdentityRequestDto = {
+  // Device-side hash: SHA-512(normalized_nidn)
+  nidnh: string;
+  normalizationVersion: number;
+  verificationMethod?: "passport_nfc";
+};
+
+export type VerifiedIdentityBindingDto = {
+  id: string;
+  userId: string;
+  normalizationVersion: number;
+  verificationMethod: string;
+  verifiedAt: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type BindVerifiedIdentityErrorCode =
+  | "USER_NOT_FOUND"
+  | "INVALID_INPUT"
+  | "IDENTITY_ALREADY_BOUND";
+
+export type BindVerifiedIdentityResultDto =
+  | {
+      success: true;
+      verifiedIdentity: VerifiedIdentityBindingDto;
+    }
+  | {
+      success: false;
+      errorCode: BindVerifiedIdentityErrorCode;
+      message: string;
+    };
+
 export type IdentityProfileDto = {
   id: string;
   userId: string;

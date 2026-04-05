@@ -93,6 +93,42 @@ export const userRepository = {
 
     return data || null;
   },
+
+  async updateVerificationState(
+    userId: string,
+    params: {
+      verificationLevel?: string;
+      onboardingStatus?: string;
+    },
+  ): Promise<UserRow | null> {
+    const supabase = requireSupabaseAdminClient();
+
+    const updatePayload: Record<string, unknown> = {};
+    if (typeof params.verificationLevel === "string") {
+      updatePayload.verification_level = params.verificationLevel;
+    }
+
+    if (typeof params.onboardingStatus === "string") {
+      updatePayload.onboarding_status = params.onboardingStatus;
+    }
+
+    if (Object.keys(updatePayload).length === 0) {
+      return this.getById(userId);
+    }
+
+    const { data, error } = await supabase
+      .from("users")
+      .update(updatePayload)
+      .eq("id", userId)
+      .select(USER_COLUMNS)
+      .maybeSingle<UserRow>();
+
+    if (error) {
+      throw error;
+    }
+
+    return data || null;
+  },
 };
 
 export default userRepository;

@@ -77,6 +77,25 @@ export type IdentityProfileMapSeedRow = {
   home_approx_longitude: number | null;
 };
 
+export type VerifiedIdentityRow = {
+  id: string;
+  user_id: string;
+  canonical_identity_key: string;
+  normalization_version: number;
+  verification_method: string;
+  verified_at: string;
+  created_at: string;
+  updated_at: string;
+};
+
+export type NewVerifiedIdentityRow = {
+  user_id: string;
+  canonical_identity_key: string;
+  normalization_version: number;
+  verification_method: string;
+  verified_at: string;
+};
+
 export type WalletCredentialStatus = "not_issued" | "issued" | "revoked";
 
 export type WalletCredentialRow = {

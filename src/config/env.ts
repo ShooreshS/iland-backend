@@ -26,6 +26,7 @@ const parsed = z
     DEV_VIEWER_ID_HEADER: z.string().min(1).optional(),
     WALLET_ISSUER_ID: z.string().min(1).optional(),
     WALLET_ISSUER_SIGNING_SECRET: z.string().min(1).optional(),
+    VERIFIED_IDENTITY_PEPPER: z.string().min(1).optional(),
   })
   .superRefine((input, context) => {
     const hasUrl = Boolean(input.SUPABASE_URL);
@@ -53,6 +54,7 @@ const parsed = z
     WALLET_ISSUER_SIGNING_SECRET: emptyToUndefined(
       process.env.WALLET_ISSUER_SIGNING_SECRET,
     ),
+    VERIFIED_IDENTITY_PEPPER: emptyToUndefined(process.env.VERIFIED_IDENTITY_PEPPER),
   });
 
 const enableDevViewerAuth =
@@ -69,6 +71,8 @@ const walletIssuerId =
 
 const walletIssuerSigningSecret =
   parsed.WALLET_ISSUER_SIGNING_SECRET || "iland-backend-wallet-issuer-dev-secret";
+const verifiedIdentityPepper =
+  parsed.VERIFIED_IDENTITY_PEPPER || "iland-backend-verified-identity-dev-pepper";
 
 export const env = Object.freeze({
   nodeEnv: parsed.NODE_ENV,
@@ -87,6 +91,9 @@ export const env = Object.freeze({
   wallet: Object.freeze({
     issuerId: walletIssuerId,
     issuerSigningSecret: walletIssuerSigningSecret,
+  }),
+  verifiedIdentity: Object.freeze({
+    pepper: verifiedIdentityPepper,
   }),
 });
 
