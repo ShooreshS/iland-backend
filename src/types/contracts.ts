@@ -209,3 +209,100 @@ export type ProvisionalUserBootstrapDto = {
     updatedAt: string;
   };
 };
+
+export type AppUserDto = {
+  id: string;
+  username?: string;
+  displayName?: string;
+  onboardingStatus: string;
+  verificationLevel: string;
+  hasWallet: boolean;
+  walletCredentialId: string | null;
+  selectedLandId: string | null;
+  preferredLanguage?: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type IdentityProfileDto = {
+  id: string;
+  userId: string;
+  passportScanCompleted: boolean;
+  passportNfcCompleted: boolean;
+  nationalIdScanCompleted: boolean;
+  faceScanCompleted: boolean;
+  faceBoundToIdentity: boolean;
+  documentCountryCode: string | null;
+  issuingCountryCode: string | null;
+  homeLocation: {
+    countryCode: string;
+    areaId: string;
+    approxLatitude: number | null;
+    approxLongitude: number | null;
+    source: string;
+    updatedAt: string;
+  } | null;
+  createdAt: string;
+  updatedAt: string;
+} | null;
+
+export type LandDto = {
+  id: string;
+  name: string;
+  slug: string;
+  type: string;
+  flagType: string;
+  flagAsset: string | null;
+  flagEmoji: string | null;
+  founderUserId: string | null;
+  description: string | null;
+  isActive: boolean;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type GeoAreaOptionDto = {
+  id: string;
+  level: string;
+  countryCode: string;
+  centerLatitude: number;
+  centerLongitude: number;
+  parentAreaId: string | null;
+  label: string | null;
+  isActive: boolean;
+};
+
+export type CurrentViewerProfileDto = {
+  user: AppUserDto;
+  identityProfile: IdentityProfileDto;
+  homeArea: GeoAreaOptionDto | null;
+  walletCredential: null;
+  selectedLand: LandDto | null;
+  primaryCitizenship: null;
+};
+
+export type ViewerLandStateDto = {
+  selectedLandId: string | null;
+  selectedLand: LandDto | null;
+  lands: LandDto[];
+};
+
+export type ViewerLandSelectionResultDto = {
+  success: boolean;
+  profile?: CurrentViewerProfileDto;
+  state?: ViewerLandStateDto;
+  land?: LandDto | null;
+  errorCode?: "USER_NOT_FOUND" | "LAND_NOT_FOUND" | "INVALID_INPUT";
+  message?: string;
+};
+
+export type PollCreationCountryOptionDto = {
+  value: string;
+  label: string;
+};
+
+export type PollCreationReferenceDataDto = {
+  lands: LandDto[];
+  areaOptions: GeoAreaOptionDto[];
+  countryOptions: PollCreationCountryOptionDto[];
+};

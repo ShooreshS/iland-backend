@@ -62,6 +62,13 @@ export type NewIdentityProfileRow = {
   home_location_updated_at: string | null;
 };
 
+export type IdentityProfileReferenceRow = {
+  home_area_id: string | null;
+  home_country_code: string | null;
+  document_country_code: string | null;
+  issuing_country_code: string | null;
+};
+
 export type PollRow = {
   id: string;
   slug: string;
@@ -124,6 +131,34 @@ export type NewPollOptionRow = {
   display_order: number;
   is_active: boolean;
   created_at?: string;
+};
+
+export type LandRow = {
+  id: string;
+  name: string;
+  slug: string;
+  type: string;
+  flag_type: string;
+  flag_asset: string | null;
+  flag_emoji: string | null;
+  founder_user_id: string | null;
+  description: string | null;
+  is_active: boolean;
+  created_at: string;
+  updated_at: string;
+};
+
+export type NewLandRow = {
+  id?: string;
+  name: string;
+  slug: string;
+  type?: string;
+  flag_type?: string;
+  flag_asset?: string | null;
+  flag_emoji?: string | null;
+  founder_user_id?: string | null;
+  description?: string | null;
+  is_active?: boolean;
 };
 
 export type VoteRow = {

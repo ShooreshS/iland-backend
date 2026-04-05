@@ -45,6 +45,28 @@ export const userRepository = {
 
     return data;
   },
+
+  async updateSelectedLandId(
+    userId: string,
+    selectedLandId: string | null,
+  ): Promise<UserRow | null> {
+    const supabase = requireSupabaseAdminClient();
+
+    const { data, error } = await supabase
+      .from("users")
+      .update({
+        selected_land_id: selectedLandId,
+      })
+      .eq("id", userId)
+      .select(USER_COLUMNS)
+      .maybeSingle<UserRow>();
+
+    if (error) {
+      throw error;
+    }
+
+    return data || null;
+  },
 };
 
 export default userRepository;

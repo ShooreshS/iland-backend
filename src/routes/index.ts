@@ -1,9 +1,17 @@
 import { healthRoutes } from "./health";
+import { meRoutes } from "./me";
 import { pollRoutes } from "./polls";
+import { referenceRoutes } from "./reference";
 import { userRoutes } from "./users";
 import type { ResolvedRoute, RouteDefinition } from "../types/http";
 
-export const routes: RouteDefinition[] = [...healthRoutes, ...userRoutes, ...pollRoutes];
+export const routes: RouteDefinition[] = [
+  ...healthRoutes,
+  ...userRoutes,
+  ...pollRoutes,
+  ...meRoutes,
+  ...referenceRoutes,
+];
 
 const normalizePath = (path: string): string =>
   path.length > 1 && path.endsWith("/") ? path.slice(0, -1) : path;
