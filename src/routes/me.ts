@@ -4,6 +4,7 @@ import { json } from "../middleware/json";
 import viewerProfileService from "../services/viewerProfileService";
 import type {
   IssueWalletCredentialResultDto,
+  UpdateViewerHomeLocationResultDto,
   ViewerLandSelectionResultDto,
 } from "../types/contracts";
 import type { RouteDefinition } from "../types/http";
@@ -43,6 +44,18 @@ const issueWalletCredentialSchema = z
   })
   .strict();
 
+const updateHomeLocationSchema = z
+  .object({
+    approxLatitude: z.number().finite(),
+    approxLongitude: z.number().finite(),
+    source: z
+      .enum(["user_selected", "derived_from_document", "admin_set", "mock"])
+      .optional(),
+    countryCode: z.string().trim().min(1).nullable().optional(),
+    areaId: z.string().trim().min(1).nullable().optional(),
+  })
+  .strict();
+
 const selectionErrorStatusMap: Record<NonNullable<ViewerLandSelectionResultDto["errorCode"]>, number> = {
   USER_NOT_FOUND: 401,
   LAND_NOT_FOUND: 404,
@@ -57,6 +70,16 @@ const walletIssueErrorStatusMap: Record<
   INVALID_INPUT: 400,
   IDENTITY_PROFILE_REQUIRED: 409,
   CREDENTIAL_REVOKED: 409,
+};
+
+const homeLocationErrorStatusMap: Record<
+  NonNullable<UpdateViewerHomeLocationResultDto["errorCode"]>,
+  number
+> = {
+  USER_NOT_FOUND: 401,
+  IDENTITY_PROFILE_NOT_FOUND: 409,
+  INVALID_COORDINATES: 400,
+  INVALID_INPUT: 400,
 };
 
 const getCurrentViewerProfileRoute: RouteDefinition = {
@@ -83,6 +106,55 @@ const getCurrentViewerProfileRoute: RouteDefinition = {
     }
 
     return json(profile);
+  },
+};
+
+const updateViewerHomeLocationRoute: RouteDefinition = {
+  method: "PATCH",
+  path: "/me/profile/home-location",
+  handler: async ({ request }) => {
+    const viewerResult = await requireViewer(request);
+    if (!viewerResult.ok) {
+      return viewerResult.response;
+    }
+
+    let requestBody: unknown;
+    try {
+      requestBody = await request.json();
+    } catch {
+      return json(
+        {
+          error: "invalid_request",
+          message: "Request body must be valid JSON.",
+        },
+        400,
+      );
+    }
+
+    const parsedBody = updateHomeLocationSchema.safeParse(requestBody);
+    if (!parsedBody.success) {
+      return json(
+        {
+          error: "invalid_request",
+          message: "Home location update request body is invalid.",
+        },
+        400,
+      );
+    }
+
+    const result = await viewerProfileService.updateHomeLocation(
+      viewerResult.viewer.userId,
+      parsedBody.data,
+    );
+
+    if (result.success) {
+      return json(result);
+    }
+
+    return json(
+      result,
+      homeLocationErrorStatusMap[result.errorCode || "INVALID_INPUT"],
+    );
   },
 };
 
@@ -302,6 +374,7 @@ const issueViewerWalletCredentialRoute: RouteDefinition = {
 
 export const meRoutes: RouteDefinition[] = [
   getCurrentViewerProfileRoute,
+  updateViewerHomeLocationRoute,
   getViewerLandStateRoute,
   updateViewerLandRoute,
   updateViewerLandFlagRoute,

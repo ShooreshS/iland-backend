@@ -366,6 +366,25 @@ export type ViewerLandSelectionResultDto = {
   message?: string;
 };
 
+export type UpdateViewerHomeLocationRequestDto = {
+  approxLatitude: number;
+  approxLongitude: number;
+  source?: "user_selected" | "derived_from_document" | "admin_set" | "mock";
+  countryCode?: string | null;
+  areaId?: string | null;
+};
+
+export type UpdateViewerHomeLocationResultDto = {
+  success: boolean;
+  profile?: CurrentViewerProfileDto;
+  errorCode?:
+    | "USER_NOT_FOUND"
+    | "IDENTITY_PROFILE_NOT_FOUND"
+    | "INVALID_COORDINATES"
+    | "INVALID_INPUT";
+  message?: string;
+};
+
 export type PollCreationCountryOptionDto = {
   value: string;
   label: string;

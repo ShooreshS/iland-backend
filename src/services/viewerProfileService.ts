@@ -15,6 +15,8 @@ import type {
   LandDto,
   PollCreationCountryOptionDto,
   PollCreationReferenceDataDto,
+  UpdateViewerHomeLocationRequestDto,
+  UpdateViewerHomeLocationResultDto,
   ViewerWalletStateDto,
   WalletCredentialDto,
   WalletStatus,
@@ -49,6 +51,16 @@ type CreateLandInput = {
 };
 
 type IssueWalletCredentialInput = IssueWalletCredentialRequestDto;
+type UpdateHomeLocationInput = UpdateViewerHomeLocationRequestDto;
+
+const ALLOWED_HOME_LOCATION_SOURCES = new Set([
+  "user_selected",
+  "derived_from_document",
+  "admin_set",
+  "mock",
+]);
+
+const DEFAULT_HOME_COUNTRY_CODE = "ZZ";
 
 const normalizeText = (value: unknown): string | null => {
   if (typeof value !== "string") {
@@ -62,6 +74,61 @@ const normalizeText = (value: unknown): string | null => {
 const normalizeCountryCode = (value: unknown): string | null => {
   const normalized = normalizeText(value);
   return normalized ? normalized.toUpperCase() : null;
+};
+
+const normalizeCoordinate = (
+  value: unknown,
+  bounds: { min: number; max: number },
+): number | null => {
+  if (!Number.isFinite(value)) {
+    return null;
+  }
+
+  const numericValue = Number(value);
+  if (numericValue < bounds.min || numericValue > bounds.max) {
+    return null;
+  }
+
+  return numericValue;
+};
+
+const deriveHomeAreaIdFromCoordinates = (
+  latitude: number,
+  longitude: number,
+): string => {
+  const latBucket = Math.round(latitude * 10);
+  const lngBucket = Math.round(longitude * 10);
+  const latPrefix = latBucket >= 0 ? "n" : "s";
+  const lngPrefix = lngBucket >= 0 ? "e" : "w";
+
+  return `grid_${latPrefix}${Math.abs(latBucket)}_${lngPrefix}${Math.abs(lngBucket)}`;
+};
+
+const resolveHomeCountryCode = (
+  identityProfile: IdentityProfileRow,
+  requestedCountryCode: unknown,
+): string =>
+  normalizeCountryCode(requestedCountryCode) ||
+  normalizeCountryCode(identityProfile.home_country_code) ||
+  normalizeCountryCode(identityProfile.document_country_code) ||
+  normalizeCountryCode(identityProfile.issuing_country_code) ||
+  DEFAULT_HOME_COUNTRY_CODE;
+
+const resolveHomeAreaId = (
+  requestedAreaId: unknown,
+  latitude: number,
+  longitude: number,
+): string => normalizeText(requestedAreaId) || deriveHomeAreaIdFromCoordinates(latitude, longitude);
+
+const normalizeHomeLocationSource = (value: unknown): string => {
+  const normalized = normalizeText(value);
+  if (!normalized) {
+    return "user_selected";
+  }
+
+  return ALLOWED_HOME_LOCATION_SOURCES.has(normalized)
+    ? normalized
+    : "user_selected";
 };
 
 const slugify = (value: string): string =>
@@ -453,6 +520,83 @@ export const viewerProfileService = {
     }
 
     return buildCurrentViewerProfile(user);
+  },
+
+  async updateHomeLocation(
+    viewerUserId: string,
+    input: UpdateHomeLocationInput,
+  ): Promise<UpdateViewerHomeLocationResultDto> {
+    const approxLatitude = normalizeCoordinate(input.approxLatitude, {
+      min: -90,
+      max: 90,
+    });
+    const approxLongitude = normalizeCoordinate(input.approxLongitude, {
+      min: -180,
+      max: 180,
+    });
+
+    if (approxLatitude === null || approxLongitude === null) {
+      return {
+        success: false,
+        errorCode: "INVALID_COORDINATES",
+        message: "A valid approximate latitude and longitude are required.",
+      };
+    }
+
+    const user = await userRepository.getById(viewerUserId);
+    if (!user) {
+      return {
+        success: false,
+        errorCode: "USER_NOT_FOUND",
+        message: "The current user could not be resolved.",
+      };
+    }
+
+    const identityProfile = await identityProfileRepository.getByUserId(user.id);
+    if (!identityProfile) {
+      return {
+        success: false,
+        errorCode: "IDENTITY_PROFILE_NOT_FOUND",
+        message: "An identity profile is required before updating home location.",
+      };
+    }
+
+    const nextHomeCountryCode = resolveHomeCountryCode(
+      identityProfile,
+      input.countryCode,
+    );
+    const nextHomeAreaId = resolveHomeAreaId(
+      input.areaId,
+      approxLatitude,
+      approxLongitude,
+    );
+    const nextHomeLocationSource = normalizeHomeLocationSource(input.source);
+    const now = new Date().toISOString();
+
+    const updatedProfile = await identityProfileRepository.updateHomeLocationByUserId(
+      user.id,
+      {
+        home_country_code: nextHomeCountryCode,
+        home_area_id: nextHomeAreaId,
+        home_approx_latitude: approxLatitude,
+        home_approx_longitude: approxLongitude,
+        home_location_source: nextHomeLocationSource,
+        home_location_updated_at: now,
+      },
+    );
+
+    if (!updatedProfile) {
+      return {
+        success: false,
+        errorCode: "IDENTITY_PROFILE_NOT_FOUND",
+        message: "The identity profile could not be updated.",
+      };
+    }
+
+    return {
+      success: true,
+      profile: await buildCurrentViewerProfile(user),
+    };
   },
 
   async issueWalletCredential(

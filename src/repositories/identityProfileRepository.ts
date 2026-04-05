@@ -57,6 +57,40 @@ export const identityProfileRepository = {
     return data;
   },
 
+  async updateHomeLocationByUserId(
+    userId: string,
+    input: {
+      home_country_code: string;
+      home_area_id: string;
+      home_approx_latitude: number;
+      home_approx_longitude: number;
+      home_location_source: string;
+      home_location_updated_at: string;
+    },
+  ): Promise<IdentityProfileRow | null> {
+    const supabase = requireSupabaseAdminClient();
+
+    const { data, error } = await supabase
+      .from("identity_profiles")
+      .update({
+        home_country_code: input.home_country_code,
+        home_area_id: input.home_area_id,
+        home_approx_latitude: input.home_approx_latitude,
+        home_approx_longitude: input.home_approx_longitude,
+        home_location_source: input.home_location_source,
+        home_location_updated_at: input.home_location_updated_at,
+      })
+      .eq("user_id", userId)
+      .select(IDENTITY_PROFILE_COLUMNS)
+      .maybeSingle<IdentityProfileRow>();
+
+    if (error) {
+      throw error;
+    }
+
+    return data || null;
+  },
+
   async listReferenceRows(): Promise<IdentityProfileReferenceRow[]> {
     const supabase = requireSupabaseAdminClient();
 
