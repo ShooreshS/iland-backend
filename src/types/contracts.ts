@@ -165,6 +165,14 @@ export type UpdateDraftPollResultDto = {
   message?: string;
 };
 
+export type PublishDraftPollResultDto = {
+  success: boolean;
+  poll?: PollDto;
+  options?: PollOptionDto[];
+  errorCode?: PollManagementErrorCode;
+  message?: string;
+};
+
 export type PollEditabilityResultDto = {
   editable: boolean;
   errorCode?: PollManagementErrorCode;
@@ -180,4 +188,24 @@ export type DraftPollEditorResultDto = {
   errorCode?: PollManagementErrorCode;
   message?: string;
   voteCount?: number;
+};
+
+export type ProvisionalUserBootstrapDto = {
+  user: {
+    id: string;
+    onboardingStatus: string;
+    verificationLevel: string;
+    hasWallet: boolean;
+    selectedLandId: string | null;
+    isProvisional: boolean;
+    createdAt: string;
+    updatedAt: string;
+  };
+  identityProfile: {
+    id: string;
+    userId: string;
+    hasHomeLocation: boolean;
+    createdAt: string;
+    updatedAt: string;
+  };
 };

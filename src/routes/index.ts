@@ -1,8 +1,9 @@
 import { healthRoutes } from "./health";
 import { pollRoutes } from "./polls";
+import { userRoutes } from "./users";
 import type { ResolvedRoute, RouteDefinition } from "../types/http";
 
-export const routes: RouteDefinition[] = [...healthRoutes, ...pollRoutes];
+export const routes: RouteDefinition[] = [...healthRoutes, ...userRoutes, ...pollRoutes];
 
 const normalizePath = (path: string): string =>
   path.length > 1 && path.endsWith("/") ? path.slice(0, -1) : path;

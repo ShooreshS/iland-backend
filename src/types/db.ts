@@ -14,6 +14,17 @@ export type UserRow = {
   updated_at: string;
 };
 
+export type NewUserRow = {
+  username: string | null;
+  display_name: string | null;
+  onboarding_status: string;
+  verification_level: string;
+  has_wallet: boolean;
+  wallet_credential_id: string | null;
+  selected_land_id: string | null;
+  preferred_language: string | null;
+};
+
 export type IdentityProfileRow = {
   id: string;
   user_id: string;
@@ -32,6 +43,23 @@ export type IdentityProfileRow = {
   home_location_updated_at: string | null;
   created_at: string;
   updated_at: string;
+};
+
+export type NewIdentityProfileRow = {
+  user_id: string;
+  passport_scan_completed: boolean;
+  passport_nfc_completed: boolean;
+  national_id_scan_completed: boolean;
+  face_scan_completed: boolean;
+  face_bound_to_identity: boolean;
+  document_country_code: string | null;
+  issuing_country_code: string | null;
+  home_country_code: string | null;
+  home_area_id: string | null;
+  home_approx_latitude: number | null;
+  home_approx_longitude: number | null;
+  home_location_source: string;
+  home_location_updated_at: string | null;
 };
 
 export type PollRow = {

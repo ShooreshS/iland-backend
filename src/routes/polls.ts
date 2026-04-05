@@ -255,6 +255,39 @@ const updateDraftPollRoute: RouteDefinition = {
   },
 };
 
+const publishDraftPollRoute: RouteDefinition = {
+  method: "POST",
+  path: "/polls/drafts/:id/publish",
+  handler: async ({ request, params }) => {
+    const viewerResult = await requireViewer(request);
+    if (!viewerResult.ok) {
+      return viewerResult.response;
+    }
+
+    const pollId = params.id?.trim() || "";
+    if (!pollId) {
+      return json(
+        {
+          error: "invalid_poll_id",
+          message: "A poll id is required.",
+        },
+        400,
+      );
+    }
+
+    const result = await pollDraftService.publishDraftPoll(
+      pollId,
+      viewerResult.viewer.userId,
+    );
+
+    if (result.success) {
+      return json(result);
+    }
+
+    return json(result, draftErrorStatusMap[result.errorCode || "VALIDATION_FAILED"] || 400);
+  },
+};
+
 const getPollDetailsRoute: RouteDefinition = {
   method: "GET",
   path: "/polls/:id",
@@ -353,7 +386,8 @@ export const pollRoutes: RouteDefinition[] = [
   createDraftPollRoute,
   canEditDraftPollRoute,
   getDraftPollRoute,
-  getPollDetailsRoute,
   updateDraftPollRoute,
+  publishDraftPollRoute,
+  getPollDetailsRoute,
   submitVoteRoute,
 ];

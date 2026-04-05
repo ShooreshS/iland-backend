@@ -11,6 +11,7 @@ import type {
   PollOptionDto,
   PollOptionInputDto,
   PollStatus,
+  PublishDraftPollResultDto,
   UpdateDraftPollRequestDto,
   UpdateDraftPollResultDto,
 } from "../types/contracts";
@@ -29,6 +30,7 @@ const OPTION_COLOR_PALETTE = [
   "#8B5CF6",
   "#14B8A6",
 ];
+const MIN_PUBLISHABLE_ACTIVE_OPTIONS = 2;
 
 type NormalizedPollMutationInput = {
   title: string;
@@ -353,6 +355,11 @@ const buildCreateSlug = (title: string): string => {
   return `${base}-${suffix}`;
 };
 
+const countPublishableOptions = (options: PollOptionRow[]): number =>
+  options.filter(
+    (option) => option.is_active && option.label.trim().length > 0,
+  ).length;
+
 const createDraftFailure = (
   editability: PollEditabilityResultDto,
   poll: PollRow | null,
@@ -518,6 +525,75 @@ export const pollDraftService = {
       success: true,
       poll: mapPoll(updatedPoll),
       options: updatedOptions.map(mapOption),
+    };
+  },
+
+  async publishDraftPoll(
+    pollId: string,
+    viewerUserId: string,
+  ): Promise<PublishDraftPollResultDto> {
+    const [existingPoll, existingOptions, editability] = await Promise.all([
+      pollRepository.getById(pollId),
+      pollRepository.getOptionsByPollId(pollId),
+      this.canEditPoll(pollId, viewerUserId),
+    ]);
+
+    if (!existingPoll) {
+      return {
+        success: false,
+        errorCode: "POLL_NOT_FOUND",
+        message: "The draft poll could not be found.",
+      };
+    }
+
+    if (!editability.editable) {
+      return {
+        success: false,
+        errorCode: editability.errorCode,
+        message: editability.message,
+      };
+    }
+
+    if (countPublishableOptions(existingOptions) < MIN_PUBLISHABLE_ACTIVE_OPTIONS) {
+      return {
+        success: false,
+        errorCode: "VALIDATION_FAILED",
+        message: "At least two active options are required to publish this draft poll.",
+      };
+    }
+
+    const now = new Date().toISOString();
+    const publishedPoll = await pollRepository.updateById(existingPoll.id, {
+      slug: existingPoll.slug,
+      created_by_user_id: existingPoll.created_by_user_id || viewerUserId,
+      title: existingPoll.title,
+      description: existingPoll.description,
+      status: "active",
+      jurisdiction_type: existingPoll.jurisdiction_type,
+      jurisdiction_country_code: existingPoll.jurisdiction_country_code,
+      jurisdiction_area_ids: existingPoll.jurisdiction_area_ids || [],
+      jurisdiction_land_ids: existingPoll.jurisdiction_land_ids || [],
+      requires_verified_identity: existingPoll.requires_verified_identity,
+      allowed_document_country_codes: existingPoll.allowed_document_country_codes || [],
+      allowed_home_area_ids: existingPoll.allowed_home_area_ids || [],
+      allowed_land_ids: existingPoll.allowed_land_ids || [],
+      minimum_age: existingPoll.minimum_age,
+      starts_at: existingPoll.starts_at || now,
+      ends_at: existingPoll.ends_at,
+    });
+
+    if (!publishedPoll) {
+      return {
+        success: false,
+        errorCode: "POLL_NOT_FOUND",
+        message: "The draft poll could not be published.",
+      };
+    }
+
+    return {
+      success: true,
+      poll: mapPoll(publishedPoll),
+      options: existingOptions.map(mapOption),
     };
   },
 };

@@ -1,5 +1,5 @@
 import { requireSupabaseAdminClient } from "../db/supabaseClient";
-import type { UserRow } from "../types/db";
+import type { NewUserRow, UserRow } from "../types/db";
 
 const USER_COLUMNS =
   "id,username,display_name,onboarding_status,verification_level,has_wallet,wallet_credential_id,selected_land_id,preferred_language,created_at,updated_at";
@@ -19,6 +19,31 @@ export const userRepository = {
     }
 
     return data || null;
+  },
+
+  async insert(input: NewUserRow): Promise<UserRow> {
+    const supabase = requireSupabaseAdminClient();
+
+    const { data, error } = await supabase
+      .from("users")
+      .insert({
+        username: input.username,
+        display_name: input.display_name,
+        onboarding_status: input.onboarding_status,
+        verification_level: input.verification_level,
+        has_wallet: input.has_wallet,
+        wallet_credential_id: input.wallet_credential_id,
+        selected_land_id: input.selected_land_id,
+        preferred_language: input.preferred_language,
+      })
+      .select(USER_COLUMNS)
+      .single<UserRow>();
+
+    if (error) {
+      throw error;
+    }
+
+    return data;
   },
 };
 
