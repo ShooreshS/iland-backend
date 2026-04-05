@@ -203,6 +203,14 @@ const evaluateEligibility = (
   return null;
 };
 
+const pollRequiresIdentityProfile = (poll: PollRow): boolean =>
+  poll.requires_verified_identity ||
+  toArray(poll.allowed_document_country_codes).length > 0 ||
+  toArray(poll.allowed_home_area_ids).length > 0;
+
+const pollRequiresHomeArea = (poll: PollRow): boolean =>
+  toArray(poll.allowed_home_area_ids).length > 0;
+
 export const pollVotingService = {
   async getPollSummaries(viewerUserId: string): Promise<PollSummaryDto[]> {
     const polls = await pollRepository.listAll();
@@ -319,21 +327,26 @@ export const pollVotingService = {
     }
 
     const identityProfile = await identityProfileRepository.getByUserId(viewer.id);
-    if (!identityProfile) {
+    const requiresIdentityProfile = pollRequiresIdentityProfile(poll);
+
+    if (!identityProfile && requiresIdentityProfile) {
       return buildFailure(
         "IDENTITY_PROFILE_NOT_FOUND",
-        "No identity profile exists for the current viewer.",
+        "This poll requires identity profile data before voting.",
       );
     }
 
-    if (!identityProfile.home_area_id || !identityProfile.home_country_code) {
+    if (pollRequiresHomeArea(poll) && !identityProfile?.home_area_id) {
       return buildFailure(
         "HOME_LOCATION_MISSING",
-        "A home location with area and country is required before voting.",
+        "A home location area is required for this poll.",
       );
     }
 
-    const eligibilityFailure = evaluateEligibility(poll, viewer, identityProfile);
+    const eligibilityFailure = evaluateEligibility(poll, viewer, {
+      document_country_code: identityProfile?.document_country_code || null,
+      home_area_id: identityProfile?.home_area_id || null,
+    });
     if (eligibilityFailure) {
       return eligibilityFailure;
     }
