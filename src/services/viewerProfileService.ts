@@ -4,6 +4,7 @@ import identityProfileRepository from "../repositories/identityProfileRepository
 import landRepository from "../repositories/landRepository";
 import pollRepository from "../repositories/pollRepository";
 import userRepository from "../repositories/userRepository";
+import verifiedIdentityRepository from "../repositories/verifiedIdentityRepository";
 import walletCredentialRepository from "../repositories/walletCredentialRepository";
 import type {
   BackendCredentialStatus,
@@ -485,7 +486,8 @@ const buildIssuedWalletCredential = (params: {
     holderId: params.request.holderId,
     walletPublicId: params.request.walletPublicId,
     walletPublicKey: params.request.walletPublicKey,
-    verifiedIdentity: params.user.verification_level !== "anonymous",
+    // 0.0.86 enforcement: backend issuance only runs after verified identity linkage.
+    verifiedIdentity: true,
     status: "issued",
     issuedAt: params.issuedAt,
   };
@@ -502,7 +504,11 @@ const buildIssuedWalletCredential = (params: {
 const createWalletIssuanceFailure = (params: {
   user: UserRow;
   walletCredential: WalletCredentialDto | null;
-  errorCode: "INVALID_INPUT" | "IDENTITY_PROFILE_REQUIRED" | "CREDENTIAL_REVOKED";
+  errorCode:
+    | "INVALID_INPUT"
+    | "IDENTITY_PROFILE_REQUIRED"
+    | "VERIFIED_IDENTITY_REQUIRED"
+    | "CREDENTIAL_REVOKED";
   message: string;
 }): IssueWalletCredentialResultDto => ({
   success: false,
@@ -635,6 +641,19 @@ export const viewerProfileService = {
         errorCode: "INVALID_INPUT",
         message:
           "Wallet issuance requires walletPublicId, holderId, and walletPublicKey.",
+      });
+    }
+
+    const verifiedIdentity = await verifiedIdentityRepository.getByUserId(user.id);
+    if (!verifiedIdentity) {
+      return createWalletIssuanceFailure({
+        user,
+        walletCredential: mapWalletCredentialToDto(
+          await walletCredentialRepository.getByUserId(user.id),
+        ),
+        errorCode: "VERIFIED_IDENTITY_REQUIRED",
+        message:
+          "A verified identity link is required before backend credential issuance.",
       });
     }
 

@@ -276,6 +276,7 @@ export type IssueWalletCredentialErrorCode =
   | "USER_NOT_FOUND"
   | "INVALID_INPUT"
   | "IDENTITY_PROFILE_REQUIRED"
+  | "VERIFIED_IDENTITY_REQUIRED"
   | "CREDENTIAL_REVOKED";
 
 export type IssueWalletCredentialResultDto =
