@@ -6,9 +6,9 @@ import { resolveRoute } from "./routes";
 import type { RouteHandler } from "./types/http";
 
 const baseHandler: RouteHandler = async (context) => {
-  const route = resolveRoute(context.request.method, context.url.pathname);
+  const resolvedRoute = resolveRoute(context.request.method, context.url.pathname);
 
-  if (!route) {
+  if (!resolvedRoute) {
     return json(
       {
         error: "not_found",
@@ -18,7 +18,10 @@ const baseHandler: RouteHandler = async (context) => {
     );
   }
 
-  return route.handler(context);
+  return resolvedRoute.route.handler({
+    ...context,
+    params: resolvedRoute.params,
+  });
 };
 
 const fetchHandler = withErrorHandling(withRequestLogging(baseHandler));
@@ -30,6 +33,7 @@ const server = Bun.serve({
     fetchHandler({
       request,
       url: new URL(request.url),
+      params: {},
     }),
 });
 

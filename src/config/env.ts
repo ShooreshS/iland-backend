@@ -9,6 +9,11 @@ const emptyToUndefined = (value: unknown): string | undefined => {
   return trimmed.length > 0 ? trimmed : undefined;
 };
 
+const toBoolean = (value: string): boolean => {
+  const normalized = value.trim().toLowerCase();
+  return normalized === "1" || normalized === "true" || normalized === "yes";
+};
+
 const parsed = z
   .object({
     NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
@@ -17,6 +22,8 @@ const parsed = z
     SUPABASE_URL: z.string().url().optional(),
     SUPABASE_SERVICE_ROLE_KEY: z.string().min(1).optional(),
     SUPABASE_PROJECT_REF: z.string().min(1).optional(),
+    ENABLE_DEV_VIEWER_AUTH: z.string().optional(),
+    DEV_VIEWER_ID_HEADER: z.string().min(1).optional(),
   })
   .superRefine((input, context) => {
     const hasUrl = Boolean(input.SUPABASE_URL);
@@ -38,7 +45,18 @@ const parsed = z
     SUPABASE_URL: emptyToUndefined(process.env.SUPABASE_URL),
     SUPABASE_SERVICE_ROLE_KEY: emptyToUndefined(process.env.SUPABASE_SERVICE_ROLE_KEY),
     SUPABASE_PROJECT_REF: emptyToUndefined(process.env.SUPABASE_PROJECT_REF),
+    ENABLE_DEV_VIEWER_AUTH: emptyToUndefined(process.env.ENABLE_DEV_VIEWER_AUTH),
+    DEV_VIEWER_ID_HEADER: emptyToUndefined(process.env.DEV_VIEWER_ID_HEADER),
   });
+
+const enableDevViewerAuth =
+  parsed.ENABLE_DEV_VIEWER_AUTH !== undefined
+    ? toBoolean(parsed.ENABLE_DEV_VIEWER_AUTH)
+    : parsed.NODE_ENV !== "production";
+
+const devViewerIdHeader = (parsed.DEV_VIEWER_ID_HEADER || "x-dev-viewer-id")
+  .trim()
+  .toLowerCase();
 
 export const env = Object.freeze({
   nodeEnv: parsed.NODE_ENV,
@@ -49,6 +67,10 @@ export const env = Object.freeze({
     url: parsed.SUPABASE_URL ?? null,
     serviceRoleKey: parsed.SUPABASE_SERVICE_ROLE_KEY ?? null,
     projectRef: parsed.SUPABASE_PROJECT_REF ?? null,
+  }),
+  auth: Object.freeze({
+    enableDevViewerAuth,
+    devViewerIdHeader,
   }),
 });
 
