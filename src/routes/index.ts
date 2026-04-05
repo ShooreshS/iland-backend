@@ -1,4 +1,5 @@
 import { healthRoutes } from "./health";
+import { mapRoutes } from "./map";
 import { meRoutes } from "./me";
 import { pollRoutes } from "./polls";
 import { referenceRoutes } from "./reference";
@@ -10,6 +11,7 @@ export const routes: RouteDefinition[] = [
   ...userRoutes,
   ...pollRoutes,
   ...meRoutes,
+  ...mapRoutes,
   ...referenceRoutes,
 ];
 

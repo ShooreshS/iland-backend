@@ -306,3 +306,52 @@ export type PollCreationReferenceDataDto = {
   areaOptions: GeoAreaOptionDto[];
   countryOptions: PollCreationCountryOptionDto[];
 };
+
+export type MapAreaLevel = "city" | "country";
+
+export type GetPollVoteMapMarkersRequestDto = {
+  pollId: string;
+  areaLevel?: MapAreaLevel;
+  parentAreaId?: string | null;
+  countryCode?: string | null;
+  includeEmptyAreas?: boolean;
+};
+
+export type VoteMapMarkerOptionBreakdownDto = {
+  optionId: string;
+  label: string;
+  count: number;
+  color: string | null;
+  percentageWithinArea: number;
+};
+
+export type VoteMapMarkerPrivacyDto = {
+  thresholdK: number;
+  mergeStrategy: "hierarchical_parent_k";
+  mergedFromAreaIds: string[];
+  mergedAreaCount: number;
+  maxMergeDepth: number;
+};
+
+export type VoteMapMarkerDto = {
+  id: string;
+  pollId: string;
+  areaId: string;
+  areaLevel: MapAreaLevel;
+  parentAreaId: string | null;
+  latitude: number;
+  longitude: number;
+  totalVotes: number;
+  optionBreakdown: VoteMapMarkerOptionBreakdownDto[];
+  leadingOptionId: string | null;
+  leadingOptionLabel: string | null;
+  leadingOptionColor: string | null;
+  leadingOptionCount: number | null;
+  leadingOptionPercentage: number | null;
+  mergedAreaCount: number;
+  privacy: VoteMapMarkerPrivacyDto;
+  updatedAt: string;
+};
+
+// 0.0.86: backend map retrieval is poll-scoped only; all-polls mode is deferred.
+export type GetPollVoteMapMarkersResponseDto = VoteMapMarkerDto[];

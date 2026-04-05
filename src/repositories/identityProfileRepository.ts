@@ -1,5 +1,6 @@
 import { requireSupabaseAdminClient } from "../db/supabaseClient";
 import type {
+  IdentityProfileMapSeedRow,
   IdentityProfileReferenceRow,
   IdentityProfileRow,
   NewIdentityProfileRow,
@@ -70,6 +71,29 @@ export const identityProfileRepository = {
     }
 
     return (data || []) as IdentityProfileReferenceRow[];
+  },
+
+  async listMapSeedByUserIds(
+    userIds: string[],
+  ): Promise<IdentityProfileMapSeedRow[]> {
+    if (userIds.length === 0) {
+      return [];
+    }
+
+    const supabase = requireSupabaseAdminClient();
+
+    const { data, error } = await supabase
+      .from("identity_profiles")
+      .select(
+        "user_id,home_area_id,home_country_code,home_approx_latitude,home_approx_longitude",
+      )
+      .in("user_id", userIds);
+
+    if (error) {
+      throw error;
+    }
+
+    return (data || []) as IdentityProfileMapSeedRow[];
   },
 };
 

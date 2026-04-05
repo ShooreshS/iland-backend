@@ -69,6 +69,14 @@ export type IdentityProfileReferenceRow = {
   issuing_country_code: string | null;
 };
 
+export type IdentityProfileMapSeedRow = {
+  user_id: string;
+  home_area_id: string | null;
+  home_country_code: string | null;
+  home_approx_latitude: number | null;
+  home_approx_longitude: number | null;
+};
+
 export type PollRow = {
   id: string;
   slug: string;
