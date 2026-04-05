@@ -61,6 +61,9 @@ export const userBootstrapService = {
   async bootstrapProvisionalUser(): Promise<ProvisionalUserBootstrapDto> {
     const user = await createProvisionalUser();
     const identityProfile = await createIdentityProfile(user.id);
+    console.info("[viewer/bootstrap] provisional user created", {
+      viewerUserId: user.id,
+    });
 
     return mapBootstrapDto(user, identityProfile);
   },

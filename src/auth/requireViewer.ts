@@ -45,6 +45,12 @@ export const requireViewer = async (request: Request): Promise<RequireViewerResu
 
   const headerName = env.auth.devViewerIdHeader;
   const viewerId = request.headers.get(headerName)?.trim() || null;
+  console.info("[viewer/auth] resolving viewer header", {
+    headerName,
+    viewerUserId: viewerId,
+    method: request.method,
+    path: new URL(request.url).pathname,
+  });
 
   if (!viewerId) {
     return buildFailure(
@@ -56,12 +62,23 @@ export const requireViewer = async (request: Request): Promise<RequireViewerResu
 
   const user = await userRepository.getById(viewerId);
   if (!user) {
+    console.warn("[viewer/auth] viewer id not found", {
+      viewerUserId: viewerId,
+      method: request.method,
+      path: new URL(request.url).pathname,
+    });
     return buildFailure(
       401,
       "viewer_not_resolved",
       `No user found for viewer id from header ${headerName}.`,
     );
   }
+
+  console.info("[viewer/auth] viewer resolved", {
+    viewerUserId: user.id,
+    method: request.method,
+    path: new URL(request.url).pathname,
+  });
 
   return {
     ok: true,

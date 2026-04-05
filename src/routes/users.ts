@@ -18,6 +18,9 @@ const bootstrapUserRoute: RouteDefinition = {
     }
 
     const result = await userBootstrapService.bootstrapProvisionalUser();
+    console.info("[viewer/bootstrap] /users/bootstrap issued user", {
+      viewerUserId: result.user.id,
+    });
     return json(result, 201);
   },
 };
