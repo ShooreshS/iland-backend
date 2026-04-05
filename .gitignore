@@ -1,0 +1,8 @@
+node_modules
+.env
+.env.local
+
+
+# debug
+test.json
+test.md

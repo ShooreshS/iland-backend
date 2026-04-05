@@ -1,0 +1,15 @@
+# iLand backend Supabase CLI config skeleton.
+# Link this project with: supabase link --project-ref <YOUR_PROJECT_REF>
+project_id = "iland-backend"
+
+[api]
+enabled = true
+port = 54321
+schemas = ["public", "auth", "storage"]
+extra_search_path = ["public", "extensions"]
+max_rows = 1000
+
+[db]
+port = 54322
+shadow_port = 54320
+major_version = 15

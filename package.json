@@ -1,0 +1,19 @@
+{
+  "name": "iland-backend",
+  "version": "0.0.86",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "bun --watch src/server.ts",
+    "start": "bun src/server.ts",
+    "typecheck": "bunx tsc --noEmit"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.57.4",
+    "zod": "^3.25.76"
+  },
+  "devDependencies": {
+    "bun-types": "^1.2.15",
+    "typescript": "^5.9.3"
+  }
+}
