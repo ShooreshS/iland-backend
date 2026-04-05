@@ -23,8 +23,9 @@ declare
   ------------------------------------------------------------------------------
 
   -- Poll owner. Paste an existing user UUID as text.
-  -- Leave empty ('') to auto-use the latest created user.
+  -- Leave empty ('') to auto-use latest user, or auto-create one when DB is empty.
   cfg_created_by_user_id_text text := '';
+  cfg_auto_create_creator_if_missing boolean := true;
 
   -- Must be unique across polls.
   cfg_poll_slug text := 'dev-sample-poll-001';
@@ -77,6 +78,10 @@ declare
     '#10B981'
   ];
 
+  -- Optional creator defaults (used only when auto-creating creator user).
+  cfg_creator_username text := 'dev-poll-creator';
+  cfg_creator_display_name text := 'Dev Poll Creator';
+
   -- Synthetic user generation settings.
   -- Prefix is auto-suffixed with timestamp each run to avoid collisions.
   cfg_synthetic_user_prefix text := 'devpoll';
@@ -89,6 +94,8 @@ declare
   cfg_synthetic_selected_land_id text := null;
 
   -- If true, create identity_profiles for synthetic users too.
+  -- Recommended true when testing poll-scoped map markers. If home fields are null,
+  -- backend map service will fall back to generic privacy-safe unknown area buckets.
   cfg_create_identity_profiles boolean := true;
 
   -- If true, mark synthetic identity checks as completed in identity_profiles.
@@ -156,8 +163,31 @@ begin
     limit 1;
   end if;
 
+  if resolved_created_by_user_id is null and cfg_auto_create_creator_if_missing then
+    insert into public.users (
+      username,
+      display_name,
+      onboarding_status,
+      verification_level,
+      has_wallet,
+      wallet_credential_id,
+      selected_land_id,
+      preferred_language
+    ) values (
+      nullif(trim(coalesce(cfg_creator_username, '')), ''),
+      nullif(trim(coalesce(cfg_creator_display_name, '')), ''),
+      'not_started',
+      'anonymous',
+      false,
+      null,
+      null,
+      null
+    )
+    returning id into resolved_created_by_user_id;
+  end if;
+
   if resolved_created_by_user_id is null then
-    raise exception 'No users found. Set cfg_created_by_user_id_text or create/bootstrap a user first.';
+    raise exception 'No users found. Set cfg_created_by_user_id_text or enable cfg_auto_create_creator_if_missing.';
   end if;
 
   perform 1 from public.users u where u.id = resolved_created_by_user_id;
