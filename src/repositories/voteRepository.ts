@@ -2,7 +2,7 @@ import { requireSupabaseAdminClient } from "../db/supabaseClient";
 import type { NewVoteRow, VoteRow } from "../types/db";
 
 const VOTE_COLUMNS =
-  "id,poll_id,option_id,user_id,submitted_at,is_valid,invalid_reason,created_at,updated_at";
+  "id,poll_id,option_id,user_id,verified_identity_id,submitted_at,is_valid,invalid_reason,created_at,updated_at";
 
 export const voteRepository = {
   async getByUserIdAndPollId(userId: string, pollId: string): Promise<VoteRow | null> {
@@ -12,6 +12,26 @@ export const voteRepository = {
       .from("votes")
       .select(VOTE_COLUMNS)
       .eq("user_id", userId)
+      .eq("poll_id", pollId)
+      .maybeSingle<VoteRow>();
+
+    if (error) {
+      throw error;
+    }
+
+    return data || null;
+  },
+
+  async getByVerifiedIdentityIdAndPollId(
+    verifiedIdentityId: string,
+    pollId: string,
+  ): Promise<VoteRow | null> {
+    const supabase = requireSupabaseAdminClient();
+
+    const { data, error } = await supabase
+      .from("votes")
+      .select(VOTE_COLUMNS)
+      .eq("verified_identity_id", verifiedIdentityId)
       .eq("poll_id", pollId)
       .maybeSingle<VoteRow>();
 
@@ -77,7 +97,7 @@ export const voteRepository = {
 
     const { data, error } = await supabase
       .from("votes")
-      .select("poll_id,option_id,user_id,submitted_at,is_valid")
+      .select("poll_id,option_id,user_id,verified_identity_id,submitted_at,is_valid")
       .in("poll_id", pollIds)
       .eq("is_valid", true);
 
@@ -97,7 +117,7 @@ export const voteRepository = {
 
     const { data, error } = await supabase
       .from("votes")
-      .select("poll_id,option_id,user_id,submitted_at")
+      .select("poll_id,option_id,user_id,verified_identity_id,submitted_at")
       .eq("user_id", userId)
       .in("poll_id", pollIds);
 
@@ -117,6 +137,7 @@ export const voteRepository = {
         poll_id: input.poll_id,
         option_id: input.option_id,
         user_id: input.user_id,
+        verified_identity_id: input.verified_identity_id ?? null,
         submitted_at: input.submitted_at,
         is_valid: input.is_valid ?? true,
         invalid_reason: input.invalid_reason ?? null,

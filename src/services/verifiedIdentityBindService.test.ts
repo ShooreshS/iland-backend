@@ -113,6 +113,8 @@ describe("verifiedIdentityBindService", () => {
 
     expect(result.success).toBe(true);
     if (result.success) {
+      expect(result.status).toBe("bound_new");
+      expect(result.authoritativeUserId).toBe("user-1");
       expect(result.verifiedIdentity.userId).toBe("user-1");
       expect(result.verifiedIdentity.verificationMethod).toBe("passport_nfc");
       expect(result.verifiedIdentity.normalizationVersion).toBe(1);
@@ -147,13 +149,15 @@ describe("verifiedIdentityBindService", () => {
     expect(second.success).toBe(true);
 
     if (first.success && second.success) {
+      expect(second.status).toBe("bound_existing_same_user");
+      expect(second.authoritativeUserId).toBe("user-1");
       expect(second.verifiedIdentity.id).toBe(first.verifiedIdentity.id);
     }
 
     expect(deps.getVerifiedIdentityCount()).toBe(1);
   });
 
-  it("returns IDENTITY_ALREADY_BOUND when another user tries to bind the same identity", async () => {
+  it("recovers existing authoritative account when another user binds the same identity", async () => {
     const deps = createInMemoryDependencies([
       createUser("user-1"),
       createUser("user-2"),
@@ -177,10 +181,114 @@ describe("verifiedIdentityBindService", () => {
     });
 
     expect(first.success).toBe(true);
+    expect(second.success).toBe(true);
+    if (second.success) {
+      expect(second.status).toBe("recovered_existing_user");
+      expect(second.authoritativeUserId).toBe("user-1");
+      expect(second.verifiedIdentity.userId).toBe("user-1");
+    }
+  });
+
+  it("returns IDENTITY_ALREADY_BOUND when user is already linked to a different identity", async () => {
+    const deps = createInMemoryDependencies([createUser("user-1")]);
+    const service = createVerifiedIdentityBindService({
+      pepper: "test-pepper",
+      now: () => FIXED_NOW,
+      userRepo: deps.userRepo,
+      verifiedIdentityRepo: deps.verifiedIdentityRepo,
+    });
+
+    const first = await service.bindVerifiedIdentityForViewer({
+      viewerUserId: "user-1",
+      nidnh: "b".repeat(128),
+      normalizationVersion: 1,
+    });
+
+    const second = await service.bindVerifiedIdentityForViewer({
+      viewerUserId: "user-1",
+      nidnh: "c".repeat(128),
+      normalizationVersion: 1,
+    });
+
+    expect(first.success).toBe(true);
     expect(second.success).toBe(false);
     if (!second.success) {
       expect(second.errorCode).toBe("IDENTITY_ALREADY_BOUND");
     }
   });
-});
 
+  it("recovers authoritative account after insert race unique violation", async () => {
+    const viewer = createUser("viewer-user");
+    const canonicalUser = createUser("canonical-user");
+    let getByCanonicalCalls = 0;
+
+    const service = createVerifiedIdentityBindService({
+      pepper: "test-pepper",
+      now: () => FIXED_NOW,
+      userRepo: {
+        async getById(userId: string): Promise<UserRow | null> {
+          if (userId === viewer.id) {
+            return viewer;
+          }
+
+          if (userId === canonicalUser.id) {
+            return canonicalUser;
+          }
+
+          return null;
+        },
+        async updateVerificationState(userId: string): Promise<UserRow | null> {
+          if (userId === viewer.id) {
+            return viewer;
+          }
+
+          if (userId === canonicalUser.id) {
+            return canonicalUser;
+          }
+
+          return null;
+        },
+      },
+      verifiedIdentityRepo: {
+        async getByUserId(): Promise<VerifiedIdentityRow | null> {
+          return null;
+        },
+        async getByCanonicalIdentityKey(): Promise<VerifiedIdentityRow | null> {
+          getByCanonicalCalls += 1;
+          if (getByCanonicalCalls <= 1) {
+            return null;
+          }
+
+          return {
+            id: "verified-identity-raced",
+            user_id: canonicalUser.id,
+            canonical_identity_key: "raced-canonical-key",
+            normalization_version: 1,
+            verification_method: "passport_nfc",
+            verified_at: FIXED_NOW,
+            created_at: FIXED_NOW,
+            updated_at: FIXED_NOW,
+          };
+        },
+        async insert(): Promise<VerifiedIdentityRow> {
+          throw Object.assign(new Error("duplicate key"), {
+            code: "23505",
+          });
+        },
+      },
+    });
+
+    const result = await service.bindVerifiedIdentityForViewer({
+      viewerUserId: viewer.id,
+      nidnh: VALID_NIDNH,
+      normalizationVersion: 1,
+    });
+
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.status).toBe("recovered_existing_user");
+      expect(result.authoritativeUserId).toBe(canonicalUser.id);
+      expect(result.verifiedIdentity.userId).toBe(canonicalUser.id);
+    }
+  });
+});

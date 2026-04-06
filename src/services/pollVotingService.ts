@@ -1,5 +1,6 @@
 import identityProfileRepository from "../repositories/identityProfileRepository";
 import pollRepository from "../repositories/pollRepository";
+import verifiedIdentityRepository from "../repositories/verifiedIdentityRepository";
 import voteRepository from "../repositories/voteRepository";
 import type {
   PollDetailsDto,
@@ -75,6 +76,13 @@ const buildFailure = (
   errorCode,
   message,
 });
+
+const DUPLICATE_USER_VOTE_MESSAGE =
+  "Only one vote per user and poll is allowed.";
+const DUPLICATE_VERIFIED_IDENTITY_VOTE_MESSAGE =
+  "Only one vote per verified identity and poll is allowed.";
+const VERIFIED_IDENTITY_REQUIRED_MESSAGE =
+  "This poll requires a linked verified identity.";
 
 const isUniqueViolation = (error: unknown): boolean => {
   if (!error || typeof error !== "object") {
@@ -153,13 +161,14 @@ const buildResults = (
 
 const evaluateEligibility = (
   poll: PollRow,
-  user: UserRow,
+  user: Pick<UserRow, "selected_land_id">,
+  hasLinkedVerifiedIdentity: boolean,
   identityProfile: { document_country_code: string | null; home_area_id: string | null },
 ): VoteSubmissionFailureDto | null => {
-  if (poll.requires_verified_identity && user.verification_level === "anonymous") {
+  if (poll.requires_verified_identity && !hasLinkedVerifiedIdentity) {
     return buildFailure(
       "ELIGIBILITY_FAILED",
-      "This poll requires a verified identity.",
+      VERIFIED_IDENTITY_REQUIRED_MESSAGE,
     );
   }
 
@@ -321,9 +330,29 @@ export const pollVotingService = {
       );
     }
 
-    const existingVote = await voteRepository.getByUserIdAndPollId(viewer.id, pollId);
-    if (existingVote) {
-      return buildFailure("ALREADY_VOTED", "Only one vote per user and poll is allowed.");
+    let verifiedIdentityId: string | null = null;
+    if (poll.requires_verified_identity) {
+      const verifiedIdentity = await verifiedIdentityRepository.getByUserId(viewer.id);
+      if (!verifiedIdentity) {
+        return buildFailure(
+          "ELIGIBILITY_FAILED",
+          VERIFIED_IDENTITY_REQUIRED_MESSAGE,
+        );
+      }
+
+      verifiedIdentityId = verifiedIdentity.id;
+      const existingVote = await voteRepository.getByVerifiedIdentityIdAndPollId(
+        verifiedIdentity.id,
+        pollId,
+      );
+      if (existingVote) {
+        return buildFailure("ALREADY_VOTED", DUPLICATE_VERIFIED_IDENTITY_VOTE_MESSAGE);
+      }
+    } else {
+      const existingVote = await voteRepository.getByUserIdAndPollId(viewer.id, pollId);
+      if (existingVote) {
+        return buildFailure("ALREADY_VOTED", DUPLICATE_USER_VOTE_MESSAGE);
+      }
     }
 
     const identityProfile = await identityProfileRepository.getByUserId(viewer.id);
@@ -343,10 +372,15 @@ export const pollVotingService = {
       );
     }
 
-    const eligibilityFailure = evaluateEligibility(poll, viewer, {
-      document_country_code: identityProfile?.document_country_code || null,
-      home_area_id: identityProfile?.home_area_id || null,
-    });
+    const eligibilityFailure = evaluateEligibility(
+      poll,
+      viewer,
+      Boolean(verifiedIdentityId),
+      {
+        document_country_code: identityProfile?.document_country_code || null,
+        home_area_id: identityProfile?.home_area_id || null,
+      },
+    );
     if (eligibilityFailure) {
       return eligibilityFailure;
     }
@@ -358,6 +392,7 @@ export const pollVotingService = {
         poll_id: pollId,
         option_id: optionId,
         user_id: viewer.id,
+        verified_identity_id: verifiedIdentityId,
         submitted_at: submittedAt,
         is_valid: true,
         invalid_reason: null,
@@ -373,7 +408,12 @@ export const pollVotingService = {
       };
     } catch (error) {
       if (isUniqueViolation(error)) {
-        return buildFailure("ALREADY_VOTED", "Only one vote per user and poll is allowed.");
+        return buildFailure(
+          "ALREADY_VOTED",
+          poll.requires_verified_identity
+            ? DUPLICATE_VERIFIED_IDENTITY_VOTE_MESSAGE
+            : DUPLICATE_USER_VOTE_MESSAGE,
+        );
       }
 
       throw error;

@@ -5,6 +5,7 @@ import type {
   BindVerifiedIdentityErrorCode,
   BindVerifiedIdentityRequestDto,
   BindVerifiedIdentityResultDto,
+  BindVerifiedIdentityStatus,
   VerifiedIdentityBindingDto,
 } from "../types/contracts";
 import type { UserRow, VerifiedIdentityRow } from "../types/db";
@@ -67,6 +68,16 @@ const buildFailure = (
   success: false,
   errorCode,
   message,
+});
+
+const buildSuccess = (
+  row: VerifiedIdentityRow,
+  status: BindVerifiedIdentityStatus,
+): BindVerifiedIdentityResultDto => ({
+  success: true,
+  status,
+  authoritativeUserId: row.user_id,
+  verifiedIdentity: toBindingDto(row),
 });
 
 const resolveVerificationMethod = (
@@ -137,16 +148,15 @@ const tryResolveAfterUniqueViolation = async (
 
   if (byCanonical) {
     if (byCanonical.user_id !== viewerUserId) {
-      return buildFailure(
-        "IDENTITY_ALREADY_BOUND",
-        "This verified identity is already linked to another user.",
-      );
+      const authoritativeUser = await deps.userRepo.getById(byCanonical.user_id);
+      if (authoritativeUser) {
+        await maybeUpgradeUserVerificationState(authoritativeUser, deps);
+      }
+
+      return buildSuccess(byCanonical, "recovered_existing_user");
     }
 
-    return {
-      success: true,
-      verifiedIdentity: toBindingDto(byCanonical),
-    };
+    return buildSuccess(byCanonical, "bound_existing_same_user");
   }
 
   if (byUser) {
@@ -157,10 +167,7 @@ const tryResolveAfterUniqueViolation = async (
       );
     }
 
-    return {
-      success: true,
-      verifiedIdentity: toBindingDto(byUser),
-    };
+    return buildSuccess(byUser, "bound_existing_same_user");
   }
 
   return null;
@@ -224,17 +231,18 @@ export const createVerifiedIdentityBindService = (
 
       if (existingByCanonical) {
         if (existingByCanonical.user_id !== viewerUserId) {
-          return buildFailure(
-            "IDENTITY_ALREADY_BOUND",
-            "This verified identity is already linked to another user.",
+          const authoritativeUser = await deps.userRepo.getById(
+            existingByCanonical.user_id,
           );
+          if (authoritativeUser) {
+            await maybeUpgradeUserVerificationState(authoritativeUser, deps);
+          }
+
+          return buildSuccess(existingByCanonical, "recovered_existing_user");
         }
 
         await maybeUpgradeUserVerificationState(viewer, deps);
-        return {
-          success: true,
-          verifiedIdentity: toBindingDto(existingByCanonical),
-        };
+        return buildSuccess(existingByCanonical, "bound_existing_same_user");
       }
 
       const existingByUser = await deps.verifiedIdentityRepo.getByUserId(viewerUserId);
@@ -247,10 +255,7 @@ export const createVerifiedIdentityBindService = (
         }
 
         await maybeUpgradeUserVerificationState(viewer, deps);
-        return {
-          success: true,
-          verifiedIdentity: toBindingDto(existingByUser),
-        };
+        return buildSuccess(existingByUser, "bound_existing_same_user");
       }
 
       const verifiedAt = deps.now();
@@ -265,10 +270,7 @@ export const createVerifiedIdentityBindService = (
         });
 
         await maybeUpgradeUserVerificationState(viewer, deps);
-        return {
-          success: true,
-          verifiedIdentity: toBindingDto(inserted),
-        };
+        return buildSuccess(inserted, "bound_new");
       } catch (error) {
         if (!isUniqueViolation(error)) {
           throw error;
@@ -292,4 +294,3 @@ export const createVerifiedIdentityBindService = (
 export const verifiedIdentityBindService = createVerifiedIdentityBindService();
 
 export default verifiedIdentityBindService;
-

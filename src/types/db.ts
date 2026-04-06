@@ -217,6 +217,7 @@ export type VoteRow = {
   poll_id: string;
   option_id: string;
   user_id: string;
+  verified_identity_id: string | null;
   submitted_at: string;
   is_valid: boolean;
   invalid_reason: string | null;
@@ -228,6 +229,7 @@ export type NewVoteRow = {
   poll_id: string;
   option_id: string;
   user_id: string;
+  verified_identity_id?: string | null;
   submitted_at: string;
   is_valid?: boolean;
   invalid_reason?: string | null;

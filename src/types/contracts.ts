@@ -316,9 +316,16 @@ export type BindVerifiedIdentityErrorCode =
   | "INVALID_INPUT"
   | "IDENTITY_ALREADY_BOUND";
 
+export type BindVerifiedIdentityStatus =
+  | "bound_new"
+  | "bound_existing_same_user"
+  | "recovered_existing_user";
+
 export type BindVerifiedIdentityResultDto =
   | {
       success: true;
+      status: BindVerifiedIdentityStatus;
+      authoritativeUserId: string;
       verifiedIdentity: VerifiedIdentityBindingDto;
     }
   | {

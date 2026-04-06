@@ -39,8 +39,12 @@ const invokeRoute = async (
 
 const buildSuccessResult = (
   userId = viewerUser.id,
+  status: "bound_new" | "bound_existing_same_user" | "recovered_existing_user" =
+    "bound_new",
 ): BindVerifiedIdentityResultDto => ({
   success: true,
+  status,
+  authoritativeUserId: userId,
   verifiedIdentity: {
     id: "verified-identity-1",
     userId,
@@ -113,7 +117,36 @@ describe("POST /me/verify-identity route", () => {
     expect(body.success).toBe(true);
   });
 
-  it("returns handled collision with IDENTITY_ALREADY_BOUND", async () => {
+  it("returns recovery success when canonical identity is already linked to another user", async () => {
+    const route = createVerifyIdentityRoute({
+      requireViewerFn: async () => ({
+        ok: true,
+        viewer: {
+          userId: viewerUser.id,
+          user: viewerUser,
+        },
+      }),
+      bindService: {
+        bindVerifiedIdentityForViewer: async () =>
+          buildSuccessResult("canonical-user-1", "recovered_existing_user"),
+      },
+    });
+
+    const response = await invokeRoute(route, {
+      nidnh: "c".repeat(128),
+      normalizationVersion: 1,
+    });
+
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as BindVerifiedIdentityResultDto;
+    expect(body.success).toBe(true);
+    if (body.success) {
+      expect(body.status).toBe("recovered_existing_user");
+      expect(body.authoritativeUserId).toBe("canonical-user-1");
+    }
+  });
+
+  it("returns handled IDENTITY_ALREADY_BOUND failure for conflicting user-linked identity", async () => {
     const route = createVerifyIdentityRoute({
       requireViewerFn: async () => ({
         ok: true,
@@ -126,7 +159,7 @@ describe("POST /me/verify-identity route", () => {
         bindVerifiedIdentityForViewer: async () => ({
           success: false,
           errorCode: "IDENTITY_ALREADY_BOUND",
-          message: "This verified identity is already linked to another user.",
+          message: "This user is already linked to a different verified identity.",
         }),
       },
     });
@@ -225,4 +258,3 @@ describe("POST /me/verify-identity route", () => {
     expect(body.error).toBe("viewer_not_resolved");
   });
 });
-
