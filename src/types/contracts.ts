@@ -438,8 +438,10 @@ export type PollCreationReferenceDataDto = {
 };
 
 export type MapAreaLevel = "city" | "country";
+export const MAP_ALL_POLLS_SCOPE_ID = "all_polls" as const;
 
 export type GetPollVoteMapMarkersRequestDto = {
+  // Use MAP_ALL_POLLS_SCOPE_ID for aggregate all-polls map mode.
   pollId: string;
   areaLevel?: MapAreaLevel;
   parentAreaId?: string | null;
@@ -465,6 +467,7 @@ export type VoteMapMarkerPrivacyDto = {
 
 export type VoteMapMarkerDto = {
   id: string;
+  // For all-polls aggregate markers, this is MAP_ALL_POLLS_SCOPE_ID.
   pollId: string;
   areaId: string;
   areaLevel: MapAreaLevel;
@@ -483,5 +486,4 @@ export type VoteMapMarkerDto = {
   updatedAt: string;
 };
 
-// 0.0.86: backend map retrieval is poll-scoped only; all-polls mode is deferred.
 export type GetPollVoteMapMarkersResponseDto = VoteMapMarkerDto[];

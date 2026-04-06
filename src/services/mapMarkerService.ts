@@ -1,6 +1,7 @@
 import identityProfileRepository from "../repositories/identityProfileRepository";
 import pollRepository from "../repositories/pollRepository";
 import voteRepository from "../repositories/voteRepository";
+import { MAP_ALL_POLLS_SCOPE_ID } from "../types/contracts";
 import type {
   GetPollVoteMapMarkersRequestDto,
   MapAreaLevel,
@@ -33,6 +34,11 @@ type AreaNode = {
   latitude: number;
   longitude: number;
   label: string | null;
+};
+
+type OptionMetadata = {
+  label: string;
+  color: string | null;
 };
 
 const DEFAULT_COUNTRY_CODE = "ZZ";
@@ -282,57 +288,106 @@ const areaMatchesParentFilter = (
   return false;
 };
 
-const buildMarkers = (
-  pollId: string,
-  buckets: Map<string, AggregationBucket>,
-  areaById: Map<string, AreaNode>,
-  pollOptions: Awaited<ReturnType<typeof pollRepository.getOptionsByPollId>>,
-): VoteMapMarkerDto[] => {
-  const pollOptionOrderById = new Map(
-    pollOptions.map((option) => [option.id, option.display_order]),
+const buildOptionMetadataById = (
+  options: Awaited<ReturnType<typeof pollRepository.getOptionsByPollIds>>,
+): Map<string, OptionMetadata> =>
+  new Map(
+    options.map((option) => [
+      option.id,
+      {
+        label: option.label,
+        color: option.color ?? null,
+      },
+    ]),
   );
 
-  return Array.from(buckets.values())
+const buildOptionBreakdown = (
+  bucket: AggregationBucket,
+  scopedPollOptions: Awaited<ReturnType<typeof pollRepository.getOptionsByPollId>> | null,
+  optionMetadataById: Map<string, OptionMetadata>,
+): VoteMapMarkerDto["optionBreakdown"] => {
+  if (scopedPollOptions && scopedPollOptions.length > 0) {
+    const pollOptionOrderById = new Map(
+      scopedPollOptions.map((option) => [option.id, option.display_order]),
+    );
+
+    return scopedPollOptions
+      .map((option) => {
+        const count = bucket.countsByOptionId[option.id] || 0;
+        return {
+          optionId: option.id,
+          label: option.label,
+          count,
+          color: option.color ?? null,
+          percentageWithinArea: bucket.totalVotes > 0 ? count / bucket.totalVotes : 0,
+        };
+      })
+      .sort((left, right) => {
+        if (right.count !== left.count) {
+          return right.count - left.count;
+        }
+
+        const leftOrder =
+          pollOptionOrderById.get(left.optionId) ?? Number.MAX_SAFE_INTEGER;
+        const rightOrder =
+          pollOptionOrderById.get(right.optionId) ?? Number.MAX_SAFE_INTEGER;
+        if (leftOrder !== rightOrder) {
+          return leftOrder - rightOrder;
+        }
+
+        return left.optionId.localeCompare(right.optionId);
+      });
+  }
+
+  return Object.entries(bucket.countsByOptionId)
+    .map(([optionId, count]) => {
+      const metadata = optionMetadataById.get(optionId);
+      return {
+        optionId,
+        label: metadata?.label || optionId,
+        count,
+        color: metadata?.color ?? null,
+        percentageWithinArea: bucket.totalVotes > 0 ? count / bucket.totalVotes : 0,
+      };
+    })
+    .sort((left, right) => {
+      if (right.count !== left.count) {
+        return right.count - left.count;
+      }
+
+      if (left.label !== right.label) {
+        return left.label.localeCompare(right.label);
+      }
+
+      return left.optionId.localeCompare(right.optionId);
+    });
+};
+
+const buildMarkers = (
+  markerScopeId: string,
+  buckets: Map<string, AggregationBucket>,
+  areaById: Map<string, AreaNode>,
+  scopedPollOptions: Awaited<ReturnType<typeof pollRepository.getOptionsByPollId>> | null,
+  optionMetadataById: Map<string, OptionMetadata>,
+): VoteMapMarkerDto[] =>
+  Array.from(buckets.values())
     .map((bucket) => {
       const area = areaById.get(bucket.areaId);
       if (!area) {
         return null;
       }
 
-      const optionBreakdown = pollOptions
-        .map((option) => {
-          const count = bucket.countsByOptionId[option.id] || 0;
-          return {
-            optionId: option.id,
-            label: option.label,
-            count,
-            color: option.color ?? null,
-            percentageWithinArea:
-              bucket.totalVotes > 0 ? count / bucket.totalVotes : 0,
-          };
-        })
-        .sort((left, right) => {
-          if (right.count !== left.count) {
-            return right.count - left.count;
-          }
-
-          const leftOrder = pollOptionOrderById.get(left.optionId) ?? Number.MAX_SAFE_INTEGER;
-          const rightOrder =
-            pollOptionOrderById.get(right.optionId) ?? Number.MAX_SAFE_INTEGER;
-
-          if (leftOrder !== rightOrder) {
-            return leftOrder - rightOrder;
-          }
-
-          return left.optionId.localeCompare(right.optionId);
-        });
-
+      const optionBreakdown = buildOptionBreakdown(
+        bucket,
+        scopedPollOptions,
+        optionMetadataById,
+      );
       const leading = optionBreakdown.find((entry) => entry.count > 0) || null;
       const mergedFromAreaIds = Array.from(bucket.mergedFromAreaIds).sort();
 
       return {
-        id: `marker_${pollId}_${area.id}`,
-        pollId,
+        id: `marker_${markerScopeId}_${area.id}`,
+        pollId: markerScopeId,
         areaId: area.id,
         areaLevel: area.level,
         parentAreaId: area.parentAreaId,
@@ -369,10 +424,107 @@ const buildMarkers = (
 
       return left.areaId.localeCompare(right.areaId);
     });
-};
 
 const normalizeAreaLevel = (value: unknown): MapAreaLevel =>
   value === "country" ? "country" : "city";
+
+const applyMapFilters = (
+  markers: VoteMapMarkerDto[],
+  input: GetPollVoteMapMarkersRequestDto,
+  areasById: Map<string, AreaNode>,
+): VoteMapMarkerDto[] => {
+  const normalizedCountryFilter = normalizeCountryCode(input.countryCode);
+  let filteredMarkers = markers;
+
+  if (normalizedCountryFilter) {
+    filteredMarkers = filteredMarkers.filter((marker) => {
+      const area = areasById.get(marker.areaId);
+      return area?.countryCode === normalizedCountryFilter;
+    });
+  }
+
+  const normalizedParentAreaId = normalizeText(input.parentAreaId);
+  if (normalizedParentAreaId) {
+    filteredMarkers = filteredMarkers.filter((marker) => {
+      const area = areasById.get(marker.areaId);
+      if (!area) {
+        return false;
+      }
+
+      return areaMatchesParentFilter(area, normalizedParentAreaId, areasById);
+    });
+  }
+
+  return filteredMarkers;
+};
+
+const buildMapMarkersFromVotes = async (params: {
+  markerScopeId: string;
+  areaLevel: MapAreaLevel;
+  input: GetPollVoteMapMarkersRequestDto;
+  validVotes: Awaited<ReturnType<typeof voteRepository.getValidByPollId>>;
+  scopedPollOptions: Awaited<ReturnType<typeof pollRepository.getOptionsByPollId>> | null;
+  optionMetadataById: Map<string, OptionMetadata>;
+}): Promise<VoteMapMarkerDto[]> => {
+  const { markerScopeId, areaLevel, input, validVotes, scopedPollOptions, optionMetadataById } =
+    params;
+
+  if (validVotes.length === 0) {
+    return [];
+  }
+
+  const userIds = Array.from(new Set(validVotes.map((vote) => vote.user_id)));
+  const mapSeedProfiles = await identityProfileRepository.listMapSeedByUserIds(userIds);
+  const profileByUserId = new Map(
+    mapSeedProfiles.map((profile) => [profile.user_id, profile]),
+  );
+
+  const areasById = new Map<string, AreaNode>();
+  const seedGroupsByAreaId = new Map<string, SeedGroup>();
+
+  for (const vote of validVotes) {
+    const profile = profileByUserId.get(vote.user_id);
+    const countryCode =
+      normalizeCountryCode(profile?.home_country_code) || DEFAULT_COUNTRY_CODE;
+    const homeAreaId = normalizeText(profile?.home_area_id) || DEFAULT_HOME_AREA_ID;
+
+    const startAreaId = ensureAreaHierarchy(
+      countryCode,
+      homeAreaId,
+      areaLevel,
+      areasById,
+    );
+
+    upsertSeedGroup(
+      seedGroupsByAreaId,
+      startAreaId,
+      { [vote.option_id]: 1 },
+      vote.submitted_at,
+    );
+  }
+
+  const privacyFilteredGroups = applyHierarchicalPrivacyFilter(
+    Array.from(seedGroupsByAreaId.values()).sort((left, right) =>
+      left.originAreaId.localeCompare(right.originAreaId),
+    ),
+    areasById,
+  );
+
+  if (privacyFilteredGroups.length === 0) {
+    return [];
+  }
+
+  const buckets = aggregatePrivacyFilteredGroups(privacyFilteredGroups);
+  const markers = buildMarkers(
+    markerScopeId,
+    buckets,
+    areasById,
+    scopedPollOptions,
+    optionMetadataById,
+  );
+
+  return applyMapFilters(markers, input, areasById);
+};
 
 export const mapMarkerService = {
   async getPollVoteMarkers(
@@ -381,6 +533,34 @@ export const mapMarkerService = {
     const pollId = normalizeText(input.pollId);
     if (!pollId) {
       return [];
+    }
+
+    const areaLevel = normalizeAreaLevel(input.areaLevel);
+
+    if (pollId === MAP_ALL_POLLS_SCOPE_ID) {
+      const polls = await pollRepository.listAll();
+      if (polls.length === 0) {
+        return [];
+      }
+
+      const pollIds = polls.map((poll) => poll.id);
+      const [allOptions, validVotes] = await Promise.all([
+        pollRepository.getOptionsByPollIds(pollIds),
+        voteRepository.getValidByPollIds(pollIds),
+      ]);
+
+      if (allOptions.length === 0 || validVotes.length === 0) {
+        return [];
+      }
+
+      return buildMapMarkersFromVotes({
+        markerScopeId: MAP_ALL_POLLS_SCOPE_ID,
+        areaLevel,
+        input,
+        validVotes,
+        scopedPollOptions: null,
+        optionMetadataById: buildOptionMetadataById(allOptions),
+      });
     }
 
     const poll = await pollRepository.getById(pollId);
@@ -397,72 +577,14 @@ export const mapMarkerService = {
       return [];
     }
 
-    const areaLevel = normalizeAreaLevel(input.areaLevel);
-    const userIds = Array.from(new Set(validVotes.map((vote) => vote.user_id)));
-    const mapSeedProfiles = await identityProfileRepository.listMapSeedByUserIds(userIds);
-    const profileByUserId = new Map(mapSeedProfiles.map((profile) => [profile.user_id, profile]));
-
-    const areasById = new Map<string, AreaNode>();
-    const seedGroupsByAreaId = new Map<string, SeedGroup>();
-
-    for (const vote of validVotes) {
-      const profile = profileByUserId.get(vote.user_id);
-      const countryCode =
-        normalizeCountryCode(profile?.home_country_code) || DEFAULT_COUNTRY_CODE;
-      const homeAreaId = normalizeText(profile?.home_area_id) || DEFAULT_HOME_AREA_ID;
-
-      const startAreaId = ensureAreaHierarchy(
-        countryCode,
-        homeAreaId,
-        areaLevel,
-        areasById,
-      );
-
-      upsertSeedGroup(
-        seedGroupsByAreaId,
-        startAreaId,
-        { [vote.option_id]: 1 },
-        vote.submitted_at,
-      );
-    }
-
-    const privacyFilteredGroups = applyHierarchicalPrivacyFilter(
-      Array.from(seedGroupsByAreaId.values()).sort((left, right) =>
-        left.originAreaId.localeCompare(right.originAreaId),
-      ),
-      areasById,
-    );
-
-    if (privacyFilteredGroups.length === 0) {
-      return [];
-    }
-
-    const buckets = aggregatePrivacyFilteredGroups(privacyFilteredGroups);
-    let markers = buildMarkers(pollId, buckets, areasById, pollOptions);
-
-    const normalizedCountryFilter = normalizeCountryCode(input.countryCode);
-    if (normalizedCountryFilter) {
-      markers = markers.filter((marker) => {
-        const area = areasById.get(marker.areaId);
-        return area?.countryCode === normalizedCountryFilter;
-      });
-    }
-
-    const normalizedParentAreaId = normalizeText(input.parentAreaId);
-    if (normalizedParentAreaId) {
-      markers = markers.filter((marker) => {
-        const area = areasById.get(marker.areaId);
-        if (!area) {
-          return false;
-        }
-
-        return areaMatchesParentFilter(area, normalizedParentAreaId, areasById);
-      });
-    }
-
-    // includeEmptyAreas is intentionally ignored in this backend slice because
-    // there is no approved empty-area catalog table yet.
-    return markers;
+    return buildMapMarkersFromVotes({
+      markerScopeId: pollId,
+      areaLevel,
+      input,
+      validVotes,
+      scopedPollOptions: pollOptions,
+      optionMetadataById: buildOptionMetadataById(pollOptions),
+    });
   },
 };
 

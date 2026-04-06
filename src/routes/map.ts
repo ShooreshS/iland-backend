@@ -17,46 +17,61 @@ const parseIncludeEmptyAreas = (
   value: "true" | "false" | "1" | "0" | undefined,
 ): boolean => value === "true" || value === "1";
 
-const getMapMarkersRoute: RouteDefinition = {
-  method: "GET",
-  path: "/map/markers",
-  handler: async ({ request, url }) => {
-    const viewerResult = await requireViewer(request);
-    if (!viewerResult.ok) {
-      return viewerResult.response;
-    }
+type MapMarkersRouteDependencies = {
+  requireViewerFn?: typeof requireViewer;
+  mapMarkerServiceLike?: Pick<typeof mapMarkerService, "getPollVoteMarkers">;
+};
 
-    const parsedQuery = mapMarkersQuerySchema.safeParse({
-      pollId: url.searchParams.get("pollId") || undefined,
-      areaLevel: url.searchParams.get("areaLevel") || undefined,
-      parentAreaId: url.searchParams.get("parentAreaId") || undefined,
-      countryCode: url.searchParams.get("countryCode") || undefined,
-      includeEmptyAreas: url.searchParams.get("includeEmptyAreas") || undefined,
-    });
+export const createGetMapMarkersRoute = (
+  dependencies: MapMarkersRouteDependencies = {},
+): RouteDefinition => {
+  const requireViewerFn = dependencies.requireViewerFn || requireViewer;
+  const mapMarkerServiceLike =
+    dependencies.mapMarkerServiceLike || mapMarkerService;
 
-    if (!parsedQuery.success) {
-      return json(
-        {
-          error: "invalid_request",
-          message:
-            "Map markers request is invalid. pollId is required; all-polls mode is deferred in 0.0.86.",
-        },
-        400,
-      );
-    }
+  return {
+    method: "GET",
+    path: "/map/markers",
+    handler: async ({ request, url }) => {
+      const viewerResult = await requireViewerFn(request);
+      if (!viewerResult.ok) {
+        return viewerResult.response;
+      }
 
-    const markers: GetPollVoteMapMarkersResponseDto =
-      await mapMarkerService.getPollVoteMarkers({
-        pollId: parsedQuery.data.pollId,
-        areaLevel: parsedQuery.data.areaLevel,
-        parentAreaId: parsedQuery.data.parentAreaId,
-        countryCode: parsedQuery.data.countryCode,
-        includeEmptyAreas: parseIncludeEmptyAreas(parsedQuery.data.includeEmptyAreas),
+      const parsedQuery = mapMarkersQuerySchema.safeParse({
+        pollId: url.searchParams.get("pollId") || undefined,
+        areaLevel: url.searchParams.get("areaLevel") || undefined,
+        parentAreaId: url.searchParams.get("parentAreaId") || undefined,
+        countryCode: url.searchParams.get("countryCode") || undefined,
+        includeEmptyAreas: url.searchParams.get("includeEmptyAreas") || undefined,
       });
 
-    return json(markers);
-  },
+      if (!parsedQuery.success) {
+        return json(
+          {
+            error: "invalid_request",
+            message:
+              "Map markers request is invalid. pollId is required (use all_polls for all-polls aggregate mode).",
+          },
+          400,
+        );
+      }
+
+      const markers: GetPollVoteMapMarkersResponseDto =
+        await mapMarkerServiceLike.getPollVoteMarkers({
+          pollId: parsedQuery.data.pollId,
+          areaLevel: parsedQuery.data.areaLevel,
+          parentAreaId: parsedQuery.data.parentAreaId,
+          countryCode: parsedQuery.data.countryCode,
+          includeEmptyAreas: parseIncludeEmptyAreas(parsedQuery.data.includeEmptyAreas),
+        });
+
+      return json(markers);
+    },
+  };
 };
+
+const getMapMarkersRoute = createGetMapMarkersRoute();
 
 export const mapRoutes: RouteDefinition[] = [getMapMarkersRoute];
 
