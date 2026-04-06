@@ -251,6 +251,50 @@ describe("pollVotingService.submitVote", () => {
     }
   });
 
+  it("enforces verified uniqueness by verified_identity_id even when prior vote user_id differs", async () => {
+    const viewer = createViewer({
+      id: "viewer-user-2",
+    });
+    const poll = createPoll({ requires_verified_identity: true });
+    const option = createOption();
+    const verifiedIdentity = createVerifiedIdentity({
+      id: "verified-identity-shared-1",
+      user_id: viewer.id,
+    });
+
+    const restoreFns = [
+      patchMethod(pollRepository, "getById", async () => poll),
+      patchMethod(pollRepository, "getOptionByIdForPoll", async () => option),
+      patchMethod(
+        verifiedIdentityRepository,
+        "getByUserId",
+        async () => verifiedIdentity,
+      ),
+      patchMethod(voteRepository, "getByVerifiedIdentityIdAndPollId", async () =>
+        createVote({
+          user_id: "canonical-user-1",
+          verified_identity_id: verifiedIdentity.id,
+        }),
+      ),
+    ];
+
+    try {
+      const result = await pollVotingService.submitVote({
+        pollId: poll.id,
+        optionId: option.id,
+        viewer,
+      });
+
+      expect(result.success).toBe(false);
+      if (!result.success) {
+        expect(result.errorCode).toBe("ALREADY_VOTED");
+        expect(result.message).toContain("verified identity");
+      }
+    } finally {
+      restoreFns.reverse().forEach((restore) => restore());
+    }
+  });
+
   it("keeps provisional non-verified poll vote behavior unchanged", async () => {
     const viewer = createViewer({
       verification_level: "anonymous",
