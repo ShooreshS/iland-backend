@@ -33,6 +33,7 @@ type AreaNode = {
   parentAreaId: string | null;
   latitude: number;
   longitude: number;
+  coordinateSource: "fallback" | "profile";
   label: string | null;
 };
 
@@ -45,6 +46,13 @@ const DEFAULT_COUNTRY_CODE = "ZZ";
 const DEFAULT_HOME_AREA_ID = "unknown";
 const PRIVACY_THRESHOLD_K = 3;
 const PRIVACY_MERGE_STRATEGY = "hierarchical_parent_k" as const;
+const MAP_PROFILE_LOOKUP_CHUNK_SIZE = 500;
+const MAP_VOTE_BATCH_SIZE = 5000;
+
+type ResolvedCoordinates = {
+  latitude: number;
+  longitude: number;
+};
 
 const normalizeText = (value: unknown): string | null => {
   if (typeof value !== "string") {
@@ -83,55 +91,124 @@ const deterministicCoordinate = (
   return min + ratio * (max - min);
 };
 
-const createCountryArea = (countryCode: string): AreaNode => {
+const resolveCoordinate = (
+  value: unknown,
+  min: number,
+  max: number,
+): number | null => {
+  if (!Number.isFinite(value)) {
+    return null;
+  }
+
+  return clamp(Number(value), min, max);
+};
+
+const resolveProfileCoordinates = (profile: {
+  home_approx_latitude: number | null;
+  home_approx_longitude: number | null;
+} | null): ResolvedCoordinates | null => {
+  if (!profile) {
+    return null;
+  }
+
+  const latitude = resolveCoordinate(profile.home_approx_latitude, -85, 85);
+  const longitude = resolveCoordinate(profile.home_approx_longitude, -180, 180);
+  if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) {
+    return null;
+  }
+
+  return {
+    latitude,
+    longitude,
+  };
+};
+
+const createCountryArea = (
+  countryCode: string,
+  coordinates: ResolvedCoordinates | null,
+): AreaNode => {
   const id = `country:${countryCode}`;
+  const latitude = coordinates?.latitude ?? clamp(deterministicCoordinate(id, -60, 75, "lat"), -85, 85);
+  const longitude =
+    coordinates?.longitude ?? clamp(deterministicCoordinate(id, -175, 175, "lng"), -180, 180);
+
   return {
     id,
     level: "country",
     countryCode,
     parentAreaId: null,
-    // Deterministic pseudo-centroid for privacy-safe rendering.
-    latitude: clamp(deterministicCoordinate(id, -60, 75, "lat"), -85, 85),
-    longitude: clamp(deterministicCoordinate(id, -175, 175, "lng"), -180, 180),
+    latitude,
+    longitude,
+    coordinateSource: coordinates ? "profile" : "fallback",
     label: countryCode,
   };
 };
 
-const createCityArea = (countryCode: string, homeAreaId: string): AreaNode => {
+const createCityArea = (
+  countryCode: string,
+  homeAreaId: string,
+  coordinates: ResolvedCoordinates | null,
+): AreaNode => {
   const id = `city:${countryCode}:${homeAreaId}`;
+  const latitude = coordinates?.latitude ?? clamp(deterministicCoordinate(id, -60, 75, "lat"), -85, 85);
+  const longitude =
+    coordinates?.longitude ?? clamp(deterministicCoordinate(id, -175, 175, "lng"), -180, 180);
+
   return {
     id,
     level: "city",
     countryCode,
     parentAreaId: `country:${countryCode}`,
-    // Deterministic pseudo-centroid per geoarea id.
-    latitude: clamp(deterministicCoordinate(id, -60, 75, "lat"), -85, 85),
-    longitude: clamp(deterministicCoordinate(id, -175, 175, "lng"), -180, 180),
+    latitude,
+    longitude,
+    coordinateSource: coordinates ? "profile" : "fallback",
     label: homeAreaId,
   };
+};
+
+const updateAreaCoordinatesFromProfile = (
+  area: AreaNode,
+  coordinates: ResolvedCoordinates | null,
+): void => {
+  if (!coordinates) {
+    return;
+  }
+
+  if (area.coordinateSource === "fallback") {
+    area.latitude = coordinates.latitude;
+    area.longitude = coordinates.longitude;
+    area.coordinateSource = "profile";
+  }
 };
 
 const ensureAreaHierarchy = (
   countryCode: string,
   homeAreaId: string,
+  coordinates: ResolvedCoordinates | null,
   areaLevel: MapAreaLevel,
   areasById: Map<string, AreaNode>,
 ): string => {
-  const countryArea = createCountryArea(countryCode);
-  if (!areasById.has(countryArea.id)) {
-    areasById.set(countryArea.id, countryArea);
+  const countryAreaId = `country:${countryCode}`;
+  const existingCountryArea = areasById.get(countryAreaId);
+  if (existingCountryArea) {
+    updateAreaCoordinatesFromProfile(existingCountryArea, coordinates);
+  } else {
+    areasById.set(countryAreaId, createCountryArea(countryCode, coordinates));
   }
 
   if (areaLevel === "country") {
-    return countryArea.id;
+    return countryAreaId;
   }
 
-  const cityArea = createCityArea(countryCode, homeAreaId);
-  if (!areasById.has(cityArea.id)) {
-    areasById.set(cityArea.id, cityArea);
+  const cityAreaId = `city:${countryCode}:${homeAreaId}`;
+  const existingCityArea = areasById.get(cityAreaId);
+  if (existingCityArea) {
+    updateAreaCoordinatesFromProfile(existingCityArea, coordinates);
+  } else {
+    areasById.set(cityAreaId, createCityArea(countryCode, homeAreaId, coordinates));
   }
 
-  return cityArea.id;
+  return cityAreaId;
 };
 
 const mergeCounts = (
@@ -458,6 +535,35 @@ const applyMapFilters = (
   return filteredMarkers;
 };
 
+const listMapSeedProfilesByUserIds = async (
+  userIds: string[],
+): Promise<Awaited<ReturnType<typeof identityProfileRepository.listMapSeedByUserIds>>> => {
+  if (userIds.length === 0) {
+    return [];
+  }
+
+  const profiles: Awaited<
+    ReturnType<typeof identityProfileRepository.listMapSeedByUserIds>
+  > = [];
+
+  for (
+    let offset = 0;
+    offset < userIds.length;
+    offset += MAP_PROFILE_LOOKUP_CHUNK_SIZE
+  ) {
+    const userIdsChunk = userIds.slice(offset, offset + MAP_PROFILE_LOOKUP_CHUNK_SIZE);
+    if (userIdsChunk.length === 0) {
+      continue;
+    }
+
+    const chunkProfiles =
+      await identityProfileRepository.listMapSeedByUserIds(userIdsChunk);
+    profiles.push(...chunkProfiles);
+  }
+
+  return profiles;
+};
+
 const buildMapMarkersFromVotes = async (params: {
   markerScopeId: string;
   areaLevel: MapAreaLevel;
@@ -474,7 +580,7 @@ const buildMapMarkersFromVotes = async (params: {
   }
 
   const userIds = Array.from(new Set(validVotes.map((vote) => vote.user_id)));
-  const mapSeedProfiles = await identityProfileRepository.listMapSeedByUserIds(userIds);
+  const mapSeedProfiles = await listMapSeedProfilesByUserIds(userIds);
   const profileByUserId = new Map(
     mapSeedProfiles.map((profile) => [profile.user_id, profile]),
   );
@@ -487,10 +593,12 @@ const buildMapMarkersFromVotes = async (params: {
     const countryCode =
       normalizeCountryCode(profile?.home_country_code) || DEFAULT_COUNTRY_CODE;
     const homeAreaId = normalizeText(profile?.home_area_id) || DEFAULT_HOME_AREA_ID;
+    const coordinates = resolveProfileCoordinates(profile || null);
 
     const startAreaId = ensureAreaHierarchy(
       countryCode,
       homeAreaId,
+      coordinates,
       areaLevel,
       areasById,
     );
@@ -510,6 +618,95 @@ const buildMapMarkersFromVotes = async (params: {
     areasById,
   );
 
+  if (privacyFilteredGroups.length === 0) {
+    return [];
+  }
+
+  const buckets = aggregatePrivacyFilteredGroups(privacyFilteredGroups);
+  const markers = buildMarkers(
+    markerScopeId,
+    buckets,
+    areasById,
+    scopedPollOptions,
+    optionMetadataById,
+  );
+
+  return applyMapFilters(markers, input, areasById);
+};
+
+const buildPollMarkersFromAllVotes = async (params: {
+  markerScopeId: string;
+  pollId: string;
+  areaLevel: MapAreaLevel;
+  input: GetPollVoteMapMarkersRequestDto;
+  scopedPollOptions: Awaited<ReturnType<typeof pollRepository.getOptionsByPollId>> | null;
+  optionMetadataById: Map<string, OptionMetadata>;
+}): Promise<VoteMapMarkerDto[]> => {
+  const { markerScopeId, pollId, areaLevel, input, scopedPollOptions, optionMetadataById } =
+    params;
+
+  const totalValidVotes = await voteRepository.countValidByPollId(pollId);
+  if (totalValidVotes <= 0) {
+    return [];
+  }
+
+  const areasById = new Map<string, AreaNode>();
+  const seedGroupsByAreaId = new Map<string, SeedGroup>();
+
+  for (
+    let offset = 0;
+    offset < totalValidVotes;
+    offset += MAP_VOTE_BATCH_SIZE
+  ) {
+    const voteBatch = await voteRepository.getValidByPollIdPage(
+      pollId,
+      offset,
+      offset + MAP_VOTE_BATCH_SIZE - 1,
+    );
+    if (voteBatch.length === 0) {
+      break;
+    }
+
+    const userIds = Array.from(new Set(voteBatch.map((vote) => vote.user_id)));
+    const mapSeedProfiles = await listMapSeedProfilesByUserIds(userIds);
+    const profileByUserId = new Map(
+      mapSeedProfiles.map((profile) => [profile.user_id, profile]),
+    );
+
+    for (const vote of voteBatch) {
+      const profile = profileByUserId.get(vote.user_id);
+      const countryCode =
+        normalizeCountryCode(profile?.home_country_code) || DEFAULT_COUNTRY_CODE;
+      const homeAreaId = normalizeText(profile?.home_area_id) || DEFAULT_HOME_AREA_ID;
+      const coordinates = resolveProfileCoordinates(profile || null);
+
+      const startAreaId = ensureAreaHierarchy(
+        countryCode,
+        homeAreaId,
+        coordinates,
+        areaLevel,
+        areasById,
+      );
+
+      upsertSeedGroup(
+        seedGroupsByAreaId,
+        startAreaId,
+        { [vote.option_id]: 1 },
+        vote.submitted_at,
+      );
+    }
+  }
+
+  if (seedGroupsByAreaId.size === 0) {
+    return [];
+  }
+
+  const privacyFilteredGroups = applyHierarchicalPrivacyFilter(
+    Array.from(seedGroupsByAreaId.values()).sort((left, right) =>
+      left.originAreaId.localeCompare(right.originAreaId),
+    ),
+    areasById,
+  );
   if (privacyFilteredGroups.length === 0) {
     return [];
   }
@@ -568,20 +765,16 @@ export const mapMarkerService = {
       return [];
     }
 
-    const [pollOptions, validVotes] = await Promise.all([
-      pollRepository.getOptionsByPollId(pollId),
-      voteRepository.getValidByPollId(pollId),
-    ]);
-
-    if (pollOptions.length === 0 || validVotes.length === 0) {
+    const pollOptions = await pollRepository.getOptionsByPollId(pollId);
+    if (pollOptions.length === 0) {
       return [];
     }
 
-    return buildMapMarkersFromVotes({
+    return buildPollMarkersFromAllVotes({
       markerScopeId: pollId,
+      pollId,
       areaLevel,
       input,
-      validVotes,
       scopedPollOptions: pollOptions,
       optionMetadataById: buildOptionMetadataById(pollOptions),
     });

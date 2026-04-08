@@ -110,6 +110,7 @@ const buildResults = (
   poll: PollDto,
   options: PollOptionDto[],
   validVotes: VoteRow[],
+  exactTotalVotes?: number,
 ): PollResultsSummaryDto => {
   const countsByOptionId = validVotes.reduce<Record<string, number>>((acc, vote) => {
     acc[vote.option_id] = (acc[vote.option_id] || 0) + 1;
@@ -117,7 +118,11 @@ const buildResults = (
   }, {});
 
   const orderedOptions = [...options].sort((left, right) => left.order - right.order);
-  const totalVotes = validVotes.length;
+  const sampledVoteCount = validVotes.length;
+  const totalVotes =
+    typeof exactTotalVotes === "number" && Number.isFinite(exactTotalVotes)
+      ? Math.max(0, Math.trunc(exactTotalVotes))
+      : sampledVoteCount;
 
   const optionResults = orderedOptions.map((option) => {
     const count = countsByOptionId[option.id] || 0;
@@ -125,12 +130,12 @@ const buildResults = (
       optionId: option.id,
       label: option.label,
       count,
-      percentage: totalVotes > 0 ? (count / totalVotes) * 100 : 0,
+      percentage: sampledVoteCount > 0 ? (count / sampledVoteCount) * 100 : 0,
     };
   });
 
   const winningOption =
-    totalVotes > 0
+    sampledVoteCount > 0
       ? optionResults.reduce<typeof optionResults[number] | null>((winner, candidate) => {
           if (!winner || candidate.count > winner.count) {
             return candidate;
@@ -229,10 +234,15 @@ export const pollVotingService = {
 
     const pollIds = polls.map((poll) => poll.id);
 
-    const [options, validVotes, viewerVotes] = await Promise.all([
+    const [options, viewerVotes, totalValidVotesByPoll] = await Promise.all([
       pollRepository.getOptionsByPollIds(pollIds),
-      voteRepository.getValidByPollIds(pollIds),
       voteRepository.getViewerVotesByPollIds(viewerUserId, pollIds),
+      Promise.all(
+        pollIds.map(
+          async (pollId) =>
+            [pollId, await voteRepository.countValidByPollId(pollId)] as const,
+        ),
+      ),
     ]);
 
     const optionCountByPollId = options.reduce<Record<string, number>>((acc, option) => {
@@ -240,10 +250,13 @@ export const pollVotingService = {
       return acc;
     }, {});
 
-    const voteCountByPollId = validVotes.reduce<Record<string, number>>((acc, vote) => {
-      acc[vote.poll_id] = (acc[vote.poll_id] || 0) + 1;
-      return acc;
-    }, {});
+    const voteCountByPollId = totalValidVotesByPoll.reduce<Record<string, number>>(
+      (acc, [pollId, totalVotes]) => {
+        acc[pollId] = totalVotes;
+        return acc;
+      },
+      {},
+    );
 
     const viewerVotedPollIds = new Set(viewerVotes.map((vote) => vote.poll_id));
 
@@ -263,15 +276,16 @@ export const pollVotingService = {
       return null;
     }
 
-    const [optionRows, validVotes, viewerVote] = await Promise.all([
+    const [optionRows, validVotes, viewerVote, exactTotalVotes] = await Promise.all([
       pollRepository.getOptionsByPollId(pollId),
       voteRepository.getValidByPollId(pollId),
       voteRepository.getByUserIdAndPollId(viewerUserId, pollId),
+      voteRepository.countValidByPollId(pollId),
     ]);
 
     const poll = mapPoll(pollRow);
     const options = optionRows.map(mapOption);
-    const results = buildResults(poll, options, validVotes);
+    const results = buildResults(poll, options, validVotes, exactTotalVotes);
 
     return {
       poll,

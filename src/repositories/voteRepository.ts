@@ -58,6 +58,29 @@ export const voteRepository = {
     return (data || []) as VoteRow[];
   },
 
+  async getValidByPollIdPage(
+    pollId: string,
+    fromInclusive: number,
+    toInclusive: number,
+  ): Promise<VoteRow[]> {
+    const supabase = requireSupabaseAdminClient();
+
+    const { data, error } = await supabase
+      .from("votes")
+      .select(VOTE_COLUMNS)
+      .eq("poll_id", pollId)
+      .eq("is_valid", true)
+      .order("created_at", { ascending: true })
+      .order("id", { ascending: true })
+      .range(fromInclusive, toInclusive);
+
+    if (error) {
+      throw error;
+    }
+
+    return (data || []) as VoteRow[];
+  },
+
   async getByPollId(pollId: string): Promise<VoteRow[]> {
     const supabase = requireSupabaseAdminClient();
 
@@ -80,6 +103,22 @@ export const voteRepository = {
       .from("votes")
       .select("id", { head: true, count: "exact" })
       .eq("poll_id", pollId);
+
+    if (error) {
+      throw error;
+    }
+
+    return count || 0;
+  },
+
+  async countValidByPollId(pollId: string): Promise<number> {
+    const supabase = requireSupabaseAdminClient();
+
+    const { count, error } = await supabase
+      .from("votes")
+      .select("id", { head: true, count: "exact" })
+      .eq("poll_id", pollId)
+      .eq("is_valid", true);
 
     if (error) {
       throw error;

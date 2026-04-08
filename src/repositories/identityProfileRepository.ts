@@ -9,6 +9,28 @@ import type {
 const IDENTITY_PROFILE_COLUMNS =
   "id,user_id,passport_scan_completed,passport_nfc_completed,national_id_scan_completed,face_scan_completed,face_bound_to_identity,document_country_code,issuing_country_code,home_country_code,home_area_id,home_approx_latitude,home_approx_longitude,home_location_source,home_location_updated_at,created_at,updated_at";
 
+export const normalizeIdentityProfileRepositoryError = (
+  error: unknown,
+  contextMessage: string,
+): Error => {
+  if (error instanceof Error) {
+    return error;
+  }
+
+  if (
+    error &&
+    typeof error === "object" &&
+    "message" in error &&
+    typeof (error as { message?: unknown }).message === "string"
+  ) {
+    return new Error(
+      `${contextMessage}: ${(error as { message: string }).message}`,
+    );
+  }
+
+  return new Error(`${contextMessage}: ${String(error)}`);
+};
+
 export const identityProfileRepository = {
   async getByUserId(userId: string): Promise<IdentityProfileRow | null> {
     const supabase = requireSupabaseAdminClient();
@@ -124,7 +146,10 @@ export const identityProfileRepository = {
       .in("user_id", userIds);
 
     if (error) {
-      throw error;
+      throw normalizeIdentityProfileRepositoryError(
+        error,
+        "identity_profiles map seed lookup failed",
+      );
     }
 
     return (data || []) as IdentityProfileMapSeedRow[];
