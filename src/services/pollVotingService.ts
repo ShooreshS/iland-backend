@@ -13,7 +13,7 @@ import type {
   VoteSubmissionFailureDto,
   VoteSubmissionResultDto,
 } from "../types/contracts";
-import type { PollOptionRow, PollRow, UserRow, VoteRow } from "../types/db";
+import type { PollOptionRow, PollRow, UserRow } from "../types/db";
 
 const POLL_STATUS_SORT_ORDER: Record<PollDto["status"], number> = {
   active: 0,
@@ -110,20 +110,18 @@ const sortSummaries = (summaries: PollSummaryDto[]): PollSummaryDto[] =>
 const buildResults = (
   poll: PollDto,
   options: PollOptionDto[],
-  validVotes: VoteRow[],
-  exactTotalVotes?: number,
+  params: {
+    countsByOptionId: Record<string, number>;
+    totalVotes: number;
+    latestSubmittedAt: string | null;
+  },
 ): PollResultsSummaryDto => {
-  const countsByOptionId = validVotes.reduce<Record<string, number>>((acc, vote) => {
-    acc[vote.option_id] = (acc[vote.option_id] || 0) + 1;
-    return acc;
-  }, {});
+  const { countsByOptionId, totalVotes, latestSubmittedAt } = params;
 
   const orderedOptions = [...options].sort((left, right) => left.order - right.order);
-  const sampledVoteCount = validVotes.length;
-  const totalVotes =
-    typeof exactTotalVotes === "number" && Number.isFinite(exactTotalVotes)
-      ? Math.max(0, Math.trunc(exactTotalVotes))
-      : sampledVoteCount;
+  const normalizedTotalVotes = Number.isFinite(totalVotes)
+    ? Math.max(0, Math.trunc(totalVotes))
+    : 0;
 
   const optionResults = orderedOptions.map((option) => {
     const count = countsByOptionId[option.id] || 0;
@@ -131,12 +129,12 @@ const buildResults = (
       optionId: option.id,
       label: option.label,
       count,
-      percentage: sampledVoteCount > 0 ? (count / sampledVoteCount) * 100 : 0,
+      percentage: normalizedTotalVotes > 0 ? (count / normalizedTotalVotes) * 100 : 0,
     };
   });
 
   const winningOption =
-    sampledVoteCount > 0
+    normalizedTotalVotes > 0
       ? optionResults.reduce<typeof optionResults[number] | null>((winner, candidate) => {
           if (!winner || candidate.count > winner.count) {
             return candidate;
@@ -146,22 +144,13 @@ const buildResults = (
         }, null)
       : null;
 
-  const latestSubmittedAt =
-    validVotes.reduce<string | null>((latest, vote) => {
-      if (!latest || vote.submitted_at > latest) {
-        return vote.submitted_at;
-      }
-
-      return latest;
-    }, null) || poll.updatedAt;
-
   return {
     pollId: poll.id,
-    totalVotes,
+    totalVotes: normalizedTotalVotes,
     optionResults,
     winningOptionId: winningOption?.optionId ?? null,
     winningOptionLabel: winningOption?.label ?? null,
-    updatedAt: latestSubmittedAt,
+    updatedAt: latestSubmittedAt || poll.updatedAt,
   };
 };
 
@@ -347,16 +336,34 @@ export const pollVotingService = {
       return null;
     }
 
-    const [optionRows, validVotes, viewerVote, exactTotalVotes] = await Promise.all([
+    const [optionRows, viewerVote, exactTotalVotes, latestSubmittedAt] = await Promise.all([
       pollRepository.getOptionsByPollId(pollId),
-      voteRepository.getValidByPollId(pollId),
       voteRepository.getByUserIdAndPollId(viewerUserId, pollId),
       voteRepository.countValidByPollId(pollId),
+      voteRepository.getLatestValidSubmittedAtByPollId(pollId),
     ]);
+
+    const optionCountEntries = await Promise.all(
+      optionRows.map(async (option) => [
+        option.id,
+        await voteRepository.countValidByPollIdAndOptionId(pollId, option.id),
+      ] as const),
+    );
+    const countsByOptionId = optionCountEntries.reduce<Record<string, number>>(
+      (acc, [optionId, count]) => {
+        acc[optionId] = count;
+        return acc;
+      },
+      {},
+    );
 
     const poll = mapPoll(pollRow);
     const options = optionRows.map(mapOption);
-    const results = buildResults(poll, options, validVotes, exactTotalVotes);
+    const results = buildResults(poll, options, {
+      countsByOptionId,
+      totalVotes: exactTotalVotes,
+      latestSubmittedAt,
+    });
 
     return {
       poll,

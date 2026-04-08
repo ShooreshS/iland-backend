@@ -32,6 +32,7 @@ const pollMapRefreshWorker = createPollMapRefreshWorker({
   pendingVoteThreshold: env.pollMapRefreshWorker.pendingVoteThreshold,
   maxQueueAgeMs: env.pollMapRefreshWorker.maxDelayMs,
   maxPollsPerCycle: env.pollMapRefreshWorker.maxPollsPerCycle,
+  failureRetryCooldownMs: env.pollMapRefreshWorker.failureCooldownMs,
 });
 
 if (env.pollMapRefreshWorker.enabled) {

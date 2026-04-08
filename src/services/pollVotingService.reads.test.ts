@@ -78,31 +78,20 @@ describe("pollVotingService read paths", () => {
     const poll = createPoll();
     const optionA = createOption({ id: "option-a", label: "Option A", display_order: 0 });
     const optionB = createOption({ id: "option-b", label: "Option B", display_order: 1 });
-    const sampledVotes = [
-      ...Array.from({ length: 700 }, (_, index) =>
-        createVote({
-          id: `vote-a-${index}`,
-          user_id: `user-a-${index}`,
-          option_id: optionA.id,
-          submitted_at: `2026-04-08T12:${String(index % 60).padStart(2, "0")}:00.000Z`,
-        }),
-      ),
-      ...Array.from({ length: 300 }, (_, index) =>
-        createVote({
-          id: `vote-b-${index}`,
-          user_id: `user-b-${index}`,
-          option_id: optionB.id,
-          submitted_at: `2026-04-08T13:${String(index % 60).padStart(2, "0")}:00.000Z`,
-        }),
-      ),
-    ];
 
     const restoreFns = [
       patchMethod(pollRepository, "getById", async () => poll),
       patchMethod(pollRepository, "getOptionsByPollId", async () => [optionA, optionB]),
-      patchMethod(voteRepository, "getValidByPollId", async () => sampledVotes),
       patchMethod(voteRepository, "getByUserIdAndPollId", async () => null),
       patchMethod(voteRepository, "countValidByPollId", async () => 1_000_000),
+      patchMethod(voteRepository, "countValidByPollIdAndOptionId", async (_pollId, optionId) =>
+        optionId === optionA.id ? 700_000 : 300_000,
+      ),
+      patchMethod(
+        voteRepository,
+        "getLatestValidSubmittedAtByPollId",
+        async () => "2026-04-08T13:59:00.000Z",
+      ),
     ];
 
     try {
@@ -112,11 +101,71 @@ describe("pollVotingService read paths", () => {
       expect(details?.totalVotes).toBe(1_000_000);
       expect(details?.results.totalVotes).toBe(1_000_000);
       expect(details?.results.optionResults.find((entry) => entry.optionId === optionA.id)?.count).toBe(
-        700,
+        700_000,
       );
       expect(details?.results.optionResults.find((entry) => entry.optionId === optionB.id)?.count).toBe(
-        300,
+        300_000,
       );
+      expect(
+        details?.results.optionResults.reduce((sum, entry) => sum + entry.count, 0),
+      ).toBe(1_000_000);
+      expect(details?.results.updatedAt).toBe("2026-04-08T13:59:00.000Z");
+    } finally {
+      restoreFns.reverse().forEach((restore) => restore());
+    }
+  });
+
+  it("does not derive poll details option counts from capped getValidByPollId arrays", async () => {
+    const poll = createPoll();
+    const optionA = createOption({ id: "option-a", label: "Option A", display_order: 0 });
+    const optionB = createOption({ id: "option-b", label: "Option B", display_order: 1 });
+    const cappedSampleRows = [
+      ...Array.from({ length: 700 }, (_, index) =>
+        createVote({
+          id: `vote-a-${index}`,
+          user_id: `user-a-${index}`,
+          option_id: optionA.id,
+        }),
+      ),
+      ...Array.from({ length: 300 }, (_, index) =>
+        createVote({
+          id: `vote-b-${index}`,
+          user_id: `user-b-${index}`,
+          option_id: optionB.id,
+        }),
+      ),
+    ];
+
+    const restoreFns = [
+      patchMethod(pollRepository, "getById", async () => poll),
+      patchMethod(pollRepository, "getOptionsByPollId", async () => [optionA, optionB]),
+      patchMethod(voteRepository, "getValidByPollId", async () => cappedSampleRows),
+      patchMethod(voteRepository, "getByUserIdAndPollId", async () => null),
+      patchMethod(voteRepository, "countValidByPollId", async () => 1_000_000),
+      patchMethod(voteRepository, "countValidByPollIdAndOptionId", async (_pollId, optionId) =>
+        optionId === optionA.id ? 900_000 : 100_000,
+      ),
+      patchMethod(
+        voteRepository,
+        "getLatestValidSubmittedAtByPollId",
+        async () => "2026-04-08T14:00:00.000Z",
+      ),
+    ];
+
+    try {
+      const details = await pollVotingService.getPollDetails(poll.id, "viewer-user-1");
+
+      expect(details).not.toBeNull();
+      expect(details?.results.totalVotes).toBe(1_000_000);
+      expect(details?.results.optionResults.find((entry) => entry.optionId === optionA.id)?.count).toBe(
+        900_000,
+      );
+      expect(details?.results.optionResults.find((entry) => entry.optionId === optionB.id)?.count).toBe(
+        100_000,
+      );
+      expect(
+        details?.results.optionResults.reduce((sum, entry) => sum + entry.count, 0),
+      ).toBe(1_000_000);
     } finally {
       restoreFns.reverse().forEach((restore) => restore());
     }

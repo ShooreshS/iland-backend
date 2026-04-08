@@ -32,6 +32,7 @@ const parsed = z
     POLL_MAP_REFRESH_PENDING_THRESHOLD: z.coerce.number().int().min(1).optional(),
     POLL_MAP_REFRESH_MAX_DELAY_MS: z.coerce.number().int().min(0).optional(),
     POLL_MAP_REFRESH_MAX_POLLS_PER_CYCLE: z.coerce.number().int().min(1).optional(),
+    POLL_MAP_REFRESH_FAILURE_COOLDOWN_MS: z.coerce.number().int().min(0).optional(),
     MAP_ENABLE_ALL_POLLS_DEBUG: z.string().optional(),
   })
   .superRefine((input, context) => {
@@ -76,6 +77,9 @@ const parsed = z
     POLL_MAP_REFRESH_MAX_POLLS_PER_CYCLE: emptyToUndefined(
       process.env.POLL_MAP_REFRESH_MAX_POLLS_PER_CYCLE,
     ),
+    POLL_MAP_REFRESH_FAILURE_COOLDOWN_MS: emptyToUndefined(
+      process.env.POLL_MAP_REFRESH_FAILURE_COOLDOWN_MS,
+    ),
     MAP_ENABLE_ALL_POLLS_DEBUG: emptyToUndefined(
       process.env.MAP_ENABLE_ALL_POLLS_DEBUG,
     ),
@@ -108,6 +112,8 @@ const pollMapRefreshPendingThreshold =
 const pollMapRefreshMaxDelayMs = parsed.POLL_MAP_REFRESH_MAX_DELAY_MS || 60_000;
 const pollMapRefreshMaxPollsPerCycle =
   parsed.POLL_MAP_REFRESH_MAX_POLLS_PER_CYCLE || 20;
+const pollMapRefreshFailureCooldownMs =
+  parsed.POLL_MAP_REFRESH_FAILURE_COOLDOWN_MS || 120_000;
 const mapEnableAllPollsDebug =
   parsed.MAP_ENABLE_ALL_POLLS_DEBUG !== undefined
     ? toBoolean(parsed.MAP_ENABLE_ALL_POLLS_DEBUG)
@@ -140,6 +146,7 @@ export const env = Object.freeze({
     pendingVoteThreshold: pollMapRefreshPendingThreshold,
     maxDelayMs: pollMapRefreshMaxDelayMs,
     maxPollsPerCycle: pollMapRefreshMaxPollsPerCycle,
+    failureCooldownMs: pollMapRefreshFailureCooldownMs,
   }),
   map: Object.freeze({
     enableAllPollsDebug: mapEnableAllPollsDebug,

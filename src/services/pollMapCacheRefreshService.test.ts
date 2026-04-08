@@ -1,5 +1,8 @@
 import { describe, expect, it } from "bun:test";
-import { createPollMapCacheRefreshService } from "./pollMapCacheRefreshService";
+import {
+  PollMapCacheRefreshError,
+  createPollMapCacheRefreshService,
+} from "./pollMapCacheRefreshService";
 import type {
   NewPollMapMarkerCacheRow,
   PollMapMarkerCacheRow,
@@ -105,9 +108,15 @@ const createService = (params: {
       getOptionsByPollId: async () => params.options,
     },
     voteRepositoryLike: {
-      countValidByPollId: async () => params.votes.length,
-      getValidByPollIdPage: async (_pollId, fromInclusive, toInclusive) =>
-        params.votes.slice(fromInclusive, toInclusive + 1),
+      getValidWithSnapshotByPollIdKeysetPage: async (_pollId, afterVoteId, limit) =>
+        params.votes
+          .filter(
+            (vote) =>
+              vote.vote_latitude_l0 !== null && vote.vote_longitude_l0 !== null,
+          )
+          .sort((left, right) => left.id.localeCompare(right.id))
+          .filter((vote) => !afterVoteId || vote.id > afterVoteId)
+          .slice(0, limit),
     },
     pollMapMarkerCacheRepositoryLike: cacheDouble.repository,
     nowIsoFn: () => FIXED_TIME,
@@ -121,7 +130,7 @@ const createService = (params: {
 };
 
 describe("pollMapCacheRefreshService.rebuildPollMapCache", () => {
-  it("writes empty payload when poll has votes but none have snapshot coordinates", async () => {
+  it("writes empty payload without scanning pages when poll votes have no snapshot coordinates", async () => {
     const poll = createPoll();
     const option = createOption();
     const votes = [
@@ -146,9 +155,9 @@ describe("pollMapCacheRefreshService.rebuildPollMapCache", () => {
     const result = await service.rebuildPollMapCache(poll.id);
 
     expect(result.pollFound).toBe(true);
-    expect(result.scannedVotes).toBe(2);
+    expect(result.scannedVotes).toBe(0);
     expect(result.includedVotes).toBe(0);
-    expect(result.ignoredVotesMissingSnapshot).toBe(2);
+    expect(result.ignoredVotesMissingSnapshot).toBe(0);
     expect(result.markerCount).toBe(0);
     expect(result.totalVotes).toBe(0);
     expect(result.lastVoteSubmittedAt).toBeNull();
@@ -281,6 +290,58 @@ describe("pollMapCacheRefreshService.rebuildPollMapCache", () => {
     ]);
   });
 
+  it("continues paging by returned batch size when DB returns fewer rows than requested", async () => {
+    const poll = createPoll();
+    const option = createOption();
+    const votes = [
+      createVote({ id: "vote-1", option_id: option.id, vote_latitude_l0: 35.71, vote_longitude_l0: 51.42 }),
+      createVote({ id: "vote-2", option_id: option.id, vote_latitude_l0: 35.72, vote_longitude_l0: 51.43 }),
+      createVote({ id: "vote-3", option_id: option.id, vote_latitude_l0: 35.73, vote_longitude_l0: 51.44 }),
+      createVote({ id: "vote-4", option_id: option.id, vote_latitude_l0: 35.74, vote_longitude_l0: 51.45 }),
+      createVote({ id: "vote-5", option_id: option.id, vote_latitude_l0: 35.75, vote_longitude_l0: 51.46 }),
+      createVote({ id: "vote-6", option_id: option.id, vote_latitude_l0: 35.76, vote_longitude_l0: 51.47 }),
+    ];
+
+    const pageCallCursors: Array<string | null> = [];
+    const service = createPollMapCacheRefreshService({
+      pollRepositoryLike: {
+        getById: async () => poll,
+        getOptionsByPollId: async () => [option],
+      },
+      voteRepositoryLike: {
+        getValidWithSnapshotByPollIdKeysetPage: async (_pollId, afterVoteId) => {
+          pageCallCursors.push(afterVoteId);
+          return votes.filter((vote) => !afterVoteId || vote.id > afterVoteId).slice(0, 2);
+        },
+      },
+      pollMapMarkerCacheRepositoryLike: {
+        async upsertCacheRow(input) {
+          return {
+            poll_id: input.poll_id,
+            markers_level1_json:
+              (input.markers_level1_json as Record<string, unknown>[]) || [],
+            schema_version: input.schema_version ?? 1,
+            marker_count: input.marker_count ?? 0,
+            total_votes: input.total_votes ?? 0,
+            last_vote_submitted_at: input.last_vote_submitted_at ?? null,
+            refreshed_at: input.refreshed_at || FIXED_TIME,
+            created_at: FIXED_TIME,
+            updated_at: FIXED_TIME,
+          };
+        },
+      },
+      nowIsoFn: () => FIXED_TIME,
+      votePageSize: 5,
+    });
+
+    const result = await service.rebuildPollMapCache(poll.id);
+
+    expect(result.scannedVotes).toBe(6);
+    expect(result.includedVotes).toBe(6);
+    expect(result.totalVotes).toBe(6);
+    expect(pageCallCursors).toEqual([null, "vote-2", "vote-4", "vote-6"]);
+  });
+
   it("uses floor-based negative bucketing consistently for level-1 and parent buckets", async () => {
     const poll = createPoll();
     const option = createOption();
@@ -324,5 +385,54 @@ describe("pollMapCacheRefreshService.rebuildPollMapCache", () => {
     expect(minusOneMarker?.parentBucketId).toBe("l2:-2:-2");
     expect(minusOneMarker?.parentLatInt).toBe(-2);
     expect(minusOneMarker?.parentLngInt).toBe(-2);
+  });
+
+  it("wraps vote page load failures with poll and page context", async () => {
+    const poll = createPoll();
+    const option = createOption();
+
+    const service = createPollMapCacheRefreshService({
+      pollRepositoryLike: {
+        getById: async () => poll,
+        getOptionsByPollId: async () => [option],
+      },
+      voteRepositoryLike: {
+        getValidWithSnapshotByPollIdKeysetPage: async (_pollId, afterVoteId, limit) => {
+          throw {
+            code: "57014",
+            message: "canceling statement due to statement timeout",
+            details: `afterVoteId=${afterVoteId || "null"} limit=${limit}`,
+          };
+        },
+      },
+      pollMapMarkerCacheRepositoryLike: {
+        async upsertCacheRow() {
+          throw new Error("upsert should not be called when page load fails");
+        },
+      },
+      nowIsoFn: () => FIXED_TIME,
+      votePageSize: 5000,
+    });
+
+    try {
+      await service.rebuildPollMapCache(poll.id);
+      throw new Error("Expected rebuildPollMapCache to throw");
+    } catch (error) {
+      expect(error instanceof PollMapCacheRefreshError).toBe(true);
+      const rebuildError = error as PollMapCacheRefreshError;
+      expect(rebuildError.message).toContain("stage=load_vote_page");
+      expect(rebuildError.message).toContain(`pollId=${poll.id}`);
+      expect(rebuildError.message).toContain("page=0-4999");
+      expect(rebuildError.message).toContain("[57014]");
+      expect(rebuildError.context).toMatchObject({
+        pollId: poll.id,
+        stage: "load_vote_page",
+        pageFrom: 0,
+        pageTo: 4999,
+        pageAfterVoteId: null,
+        votePageSize: 5000,
+      });
+      expect((rebuildError.rawError as { code?: string }).code).toBe("57014");
+    }
   });
 });

@@ -120,6 +120,7 @@ export const createPollMapRefreshQueueRepository = (
         .from("poll_map_refresh_queue")
         .update({
           last_error: errorMessage,
+          last_processed_at: new Date().toISOString(),
         })
         .eq("poll_id", pollId)
         .select(POLL_MAP_REFRESH_QUEUE_COLUMNS)

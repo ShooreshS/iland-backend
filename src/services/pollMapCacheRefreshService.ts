@@ -1,7 +1,8 @@
 import pollMapMarkerCacheRepository from "../repositories/pollMapMarkerCacheRepository";
 import pollRepository from "../repositories/pollRepository";
 import voteRepository from "../repositories/voteRepository";
-import type { NewPollMapMarkerCacheRow, PollOptionRow, VoteRow } from "../types/db";
+import type { PollMapRebuildVoteRow } from "../repositories/voteRepository";
+import type { NewPollMapMarkerCacheRow, PollOptionRow } from "../types/db";
 
 const POLL_MAP_CACHE_SCHEMA_VERSION = 1;
 const DEFAULT_VOTE_PAGE_SIZE = 5000;
@@ -10,7 +11,7 @@ type PollMapCacheRefreshDependencies = {
   pollRepositoryLike?: Pick<typeof pollRepository, "getById" | "getOptionsByPollId">;
   voteRepositoryLike?: Pick<
     typeof voteRepository,
-    "countValidByPollId" | "getValidByPollIdPage"
+    "getValidWithSnapshotByPollIdKeysetPage"
   >;
   pollMapMarkerCacheRepositoryLike?: Pick<
     typeof pollMapMarkerCacheRepository,
@@ -69,6 +70,48 @@ type BucketAccumulator = {
   countsByOptionId: Record<string, number>;
   updatedAt: string | null;
 };
+
+type PollMapCacheRefreshErrorStage =
+  | "load_poll"
+  | "load_poll_options"
+  | "load_vote_page"
+  | "upsert_cache_row";
+
+type PollMapCacheRefreshErrorContext = {
+  pollId: string;
+  stage: PollMapCacheRefreshErrorStage;
+  votePageSize: number;
+  pageFrom?: number;
+  pageTo?: number;
+  pageAfterVoteId?: string | null;
+  scannedVotes: number;
+  includedVotes: number;
+  ignoredVotesMissingSnapshot: number;
+  markerCount?: number;
+};
+
+type ErrorLike = {
+  code?: unknown;
+  message?: unknown;
+  details?: unknown;
+  hint?: unknown;
+};
+
+export class PollMapCacheRefreshError extends Error {
+  readonly context: PollMapCacheRefreshErrorContext;
+  readonly rawError: unknown;
+
+  constructor(params: {
+    message: string;
+    context: PollMapCacheRefreshErrorContext;
+    rawError: unknown;
+  }) {
+    super(params.message);
+    this.name = "PollMapCacheRefreshError";
+    this.context = params.context;
+    this.rawError = params.rawError;
+  }
+}
 
 const canonicalizeNegativeZero = (value: number): number =>
   Object.is(value, -0) ? 0 : value;
@@ -169,6 +212,111 @@ const createEmptyResult = (pollId: string, refreshedAt: string): PollMapCacheReb
   markers: [],
 });
 
+const normalizeText = (value: unknown): string | null => {
+  if (typeof value !== "string") {
+    return null;
+  }
+
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : null;
+};
+
+const extractErrorMessage = (error: unknown): string => {
+  if (error instanceof Error) {
+    return normalizeText(error.message) || error.name;
+  }
+
+  if (error && typeof error === "object") {
+    const errorLike = error as ErrorLike;
+    const code = normalizeText(errorLike.code);
+    const message = normalizeText(errorLike.message);
+    const details = normalizeText(errorLike.details);
+    const hint = normalizeText(errorLike.hint);
+
+    const parts = [
+      code ? `[${code}]` : null,
+      message,
+      details ? `details=${details}` : null,
+      hint ? `hint=${hint}` : null,
+    ].filter(Boolean);
+
+    if (parts.length > 0) {
+      return parts.join(" ");
+    }
+
+    try {
+      return JSON.stringify(error);
+    } catch {
+      return String(error);
+    }
+  }
+
+  return String(error);
+};
+
+const createPollMapCacheRefreshError = (params: {
+  pollId: string;
+  stage: PollMapCacheRefreshErrorStage;
+  votePageSize: number;
+  scannedVotes: number;
+  includedVotes: number;
+  ignoredVotesMissingSnapshot: number;
+  pageFrom?: number;
+  pageTo?: number;
+  pageAfterVoteId?: string | null;
+  markerCount?: number;
+  rawError: unknown;
+}): PollMapCacheRefreshError => {
+  const {
+    pollId,
+    stage,
+    votePageSize,
+    scannedVotes,
+    includedVotes,
+    ignoredVotesMissingSnapshot,
+    pageFrom,
+    pageTo,
+    pageAfterVoteId,
+    markerCount,
+    rawError,
+  } = params;
+
+  const context: PollMapCacheRefreshErrorContext = {
+    pollId,
+    stage,
+    votePageSize,
+    scannedVotes,
+    includedVotes,
+    ignoredVotesMissingSnapshot,
+    ...(pageFrom !== undefined ? { pageFrom } : null),
+    ...(pageTo !== undefined ? { pageTo } : null),
+    ...(pageAfterVoteId !== undefined ? { pageAfterVoteId } : null),
+    ...(markerCount !== undefined ? { markerCount } : null),
+  };
+
+  const batchContext =
+    pageFrom !== undefined && pageTo !== undefined
+      ? ` page=${pageFrom}-${pageTo}`
+      : "";
+  const cursorContext =
+    pageAfterVoteId !== undefined
+      ? ` afterVoteId=${pageAfterVoteId || "null"}`
+      : "";
+  const message = `[pollMapCacheRefreshService] rebuild failed stage=${stage} pollId=${pollId}${batchContext}${cursorContext}: ${extractErrorMessage(rawError)}`;
+
+  const wrapped = new PollMapCacheRefreshError({
+    message,
+    context,
+    rawError,
+  });
+
+  if (rawError instanceof Error && rawError.stack) {
+    wrapped.stack = `${wrapped.name}: ${wrapped.message}\nCaused by: ${rawError.stack}`;
+  }
+
+  return wrapped;
+};
+
 export const createPollMapCacheRefreshService = (
   dependencies: PollMapCacheRefreshDependencies = {},
 ) => {
@@ -194,7 +342,21 @@ export const createPollMapCacheRefreshService = (
         };
       }
 
-      const poll = await pollRepositoryLike.getById(normalizedPollId);
+      let poll: Awaited<ReturnType<typeof pollRepositoryLike.getById>>;
+      try {
+        poll = await pollRepositoryLike.getById(normalizedPollId);
+      } catch (error) {
+        throw createPollMapCacheRefreshError({
+          pollId: normalizedPollId,
+          stage: "load_poll",
+          votePageSize,
+          scannedVotes: 0,
+          includedVotes: 0,
+          ignoredVotesMissingSnapshot: 0,
+          rawError: error,
+        });
+      }
+
       if (!poll) {
         return {
           ...createEmptyResult(normalizedPollId, refreshedAt),
@@ -202,23 +364,69 @@ export const createPollMapCacheRefreshService = (
         };
       }
 
-      const [pollOptions, totalValidVotes] = await Promise.all([
-        pollRepositoryLike.getOptionsByPollId(normalizedPollId),
-        voteRepositoryLike.countValidByPollId(normalizedPollId),
-      ]);
-
       const bucketsById = new Map<string, BucketAccumulator>();
       let scannedVotes = 0;
       let includedVotes = 0;
       let ignoredVotesMissingSnapshot = 0;
       let lastVoteSubmittedAt: string | null = null;
+      let pollOptions: PollOptionRow[] = [];
 
-      for (let offset = 0; offset < totalValidVotes; offset += votePageSize) {
-        const votes = await voteRepositoryLike.getValidByPollIdPage(
-          normalizedPollId,
-          offset,
-          offset + votePageSize - 1,
-        );
+      try {
+        pollOptions = await pollRepositoryLike.getOptionsByPollId(normalizedPollId);
+      } catch (error) {
+        throw createPollMapCacheRefreshError({
+          pollId: normalizedPollId,
+          stage: "load_poll_options",
+          votePageSize,
+          scannedVotes,
+          includedVotes,
+          ignoredVotesMissingSnapshot,
+          rawError: error,
+        });
+      }
+
+      console.info("[pollMapCacheRefreshService] starting vote page scan", {
+        pollId: normalizedPollId,
+        pageSize: votePageSize,
+        pagination: "keyset",
+        orderBy: "id asc",
+        cursorField: "id",
+        selectedColumns: [
+          "id",
+          "option_id",
+          "submitted_at",
+          "vote_latitude_l0",
+          "vote_longitude_l0",
+        ],
+        usesCountQuery: false,
+      });
+
+      let pageFrom = 0;
+      let afterVoteId: string | null = null;
+
+      for (;;) {
+        const pageTo = pageFrom + votePageSize - 1;
+        let votes: PollMapRebuildVoteRow[];
+        try {
+          votes = await voteRepositoryLike.getValidWithSnapshotByPollIdKeysetPage(
+            normalizedPollId,
+            afterVoteId,
+            votePageSize,
+          );
+        } catch (error) {
+          throw createPollMapCacheRefreshError({
+            pollId: normalizedPollId,
+            stage: "load_vote_page",
+            votePageSize,
+            scannedVotes,
+            includedVotes,
+            ignoredVotesMissingSnapshot,
+            pageFrom,
+            pageTo,
+            pageAfterVoteId: afterVoteId,
+            rawError: error,
+          });
+        }
 
         if (votes.length === 0) {
           break;
@@ -276,6 +484,9 @@ export const createPollMapCacheRefreshService = (
             lastVoteSubmittedAt = vote.submitted_at;
           }
         }
+
+        pageFrom += votes.length;
+        afterVoteId = votes[votes.length - 1]?.id || afterVoteId;
       }
 
       const markers = Array.from(bucketsById.values())
@@ -318,7 +529,20 @@ export const createPollMapCacheRefreshService = (
         last_vote_submitted_at: lastVoteSubmittedAt,
         refreshed_at: refreshedAt,
       };
-      await pollMapMarkerCacheRepositoryLike.upsertCacheRow(cachePayload);
+      try {
+        await pollMapMarkerCacheRepositoryLike.upsertCacheRow(cachePayload);
+      } catch (error) {
+        throw createPollMapCacheRefreshError({
+          pollId: normalizedPollId,
+          stage: "upsert_cache_row",
+          votePageSize,
+          scannedVotes,
+          includedVotes,
+          ignoredVotesMissingSnapshot,
+          markerCount: markers.length,
+          rawError: error,
+        });
+      }
 
       return {
         pollId: normalizedPollId,
