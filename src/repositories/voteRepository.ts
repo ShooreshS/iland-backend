@@ -1,8 +1,72 @@
 import { requireSupabaseAdminClient } from "../db/supabaseClient";
 import type { NewVoteRow, VoteRow } from "../types/db";
 
-const VOTE_COLUMNS =
-  "id,poll_id,option_id,user_id,verified_identity_id,vote_latitude_l0,vote_longitude_l0,vote_location_snapshot_at,vote_location_snapshot_version,submitted_at,is_valid,invalid_reason,created_at,updated_at";
+const BASE_VOTE_COLUMNS =
+  "id,poll_id,option_id,user_id,verified_identity_id,submitted_at,is_valid,invalid_reason,created_at,updated_at";
+const SNAPSHOT_VOTE_COLUMNS =
+  "vote_latitude_l0,vote_longitude_l0,vote_location_snapshot_at,vote_location_snapshot_version";
+const VOTE_COLUMNS_WITH_SNAPSHOT = `${BASE_VOTE_COLUMNS},${SNAPSHOT_VOTE_COLUMNS}`;
+const SNAPSHOT_VOTE_COLUMN_NAMES = [
+  "vote_latitude_l0",
+  "vote_longitude_l0",
+  "vote_location_snapshot_at",
+  "vote_location_snapshot_version",
+] as const;
+
+type PartialVoteRow = Omit<
+  VoteRow,
+  | "vote_latitude_l0"
+  | "vote_longitude_l0"
+  | "vote_location_snapshot_at"
+  | "vote_location_snapshot_version"
+> &
+  Partial<
+    Pick<
+      VoteRow,
+      | "vote_latitude_l0"
+      | "vote_longitude_l0"
+      | "vote_location_snapshot_at"
+      | "vote_location_snapshot_version"
+    >
+  >;
+
+const withSnapshotDefaults = (row: PartialVoteRow): VoteRow => ({
+  ...row,
+  vote_latitude_l0: row.vote_latitude_l0 ?? null,
+  vote_longitude_l0: row.vote_longitude_l0 ?? null,
+  vote_location_snapshot_at: row.vote_location_snapshot_at ?? null,
+  vote_location_snapshot_version: row.vote_location_snapshot_version ?? 1,
+});
+
+const isMissingSnapshotVoteColumnError = (error: unknown): boolean => {
+  if (!error || typeof error !== "object") {
+    return false;
+  }
+
+  const code = (error as { code?: unknown }).code;
+  if (typeof code !== "string") {
+    return false;
+  }
+
+  const normalizedCode = code.trim().toUpperCase();
+  if (
+    normalizedCode !== "42703" &&
+    normalizedCode !== "PGRST204" &&
+    normalizedCode !== "PGRST205"
+  ) {
+    return false;
+  }
+
+  const message = (error as { message?: unknown }).message;
+  if (typeof message !== "string") {
+    return false;
+  }
+
+  const normalized = message.toLowerCase();
+  return SNAPSHOT_VOTE_COLUMN_NAMES.some((columnName) =>
+    normalized.includes(columnName),
+  );
+};
 
 export const voteRepository = {
   async getByUserIdAndPollId(userId: string, pollId: string): Promise<VoteRow | null> {
@@ -10,16 +74,16 @@ export const voteRepository = {
 
     const { data, error } = await supabase
       .from("votes")
-      .select(VOTE_COLUMNS)
+      .select(BASE_VOTE_COLUMNS)
       .eq("user_id", userId)
       .eq("poll_id", pollId)
-      .maybeSingle<VoteRow>();
+      .maybeSingle<PartialVoteRow>();
 
     if (error) {
       throw error;
     }
 
-    return data || null;
+    return data ? withSnapshotDefaults(data) : null;
   },
 
   async getByVerifiedIdentityIdAndPollId(
@@ -30,16 +94,16 @@ export const voteRepository = {
 
     const { data, error } = await supabase
       .from("votes")
-      .select(VOTE_COLUMNS)
+      .select(BASE_VOTE_COLUMNS)
       .eq("verified_identity_id", verifiedIdentityId)
       .eq("poll_id", pollId)
-      .maybeSingle<VoteRow>();
+      .maybeSingle<PartialVoteRow>();
 
     if (error) {
       throw error;
     }
 
-    return data || null;
+    return data ? withSnapshotDefaults(data) : null;
   },
 
   async getValidByPollId(pollId: string): Promise<VoteRow[]> {
@@ -47,7 +111,7 @@ export const voteRepository = {
 
     const { data, error } = await supabase
       .from("votes")
-      .select(VOTE_COLUMNS)
+      .select(BASE_VOTE_COLUMNS)
       .eq("poll_id", pollId)
       .eq("is_valid", true);
 
@@ -55,7 +119,7 @@ export const voteRepository = {
       throw error;
     }
 
-    return (data || []) as VoteRow[];
+    return ((data || []) as PartialVoteRow[]).map(withSnapshotDefaults);
   },
 
   async getValidByPollIdPage(
@@ -67,7 +131,7 @@ export const voteRepository = {
 
     const { data, error } = await supabase
       .from("votes")
-      .select(VOTE_COLUMNS)
+      .select(VOTE_COLUMNS_WITH_SNAPSHOT)
       .eq("poll_id", pollId)
       .eq("is_valid", true)
       .order("created_at", { ascending: true })
@@ -86,14 +150,14 @@ export const voteRepository = {
 
     const { data, error } = await supabase
       .from("votes")
-      .select(VOTE_COLUMNS)
+      .select(BASE_VOTE_COLUMNS)
       .eq("poll_id", pollId);
 
     if (error) {
       throw error;
     }
 
-    return (data || []) as VoteRow[];
+    return ((data || []) as PartialVoteRow[]).map(withSnapshotDefaults);
   },
 
   async countByPollId(pollId: string): Promise<number> {
@@ -136,7 +200,7 @@ export const voteRepository = {
 
     const { data, error } = await supabase
       .from("votes")
-      .select(VOTE_COLUMNS)
+      .select(BASE_VOTE_COLUMNS)
       .in("poll_id", pollIds)
       .eq("is_valid", true);
 
@@ -144,7 +208,7 @@ export const voteRepository = {
       throw error;
     }
 
-    return (data || []) as VoteRow[];
+    return ((data || []) as PartialVoteRow[]).map(withSnapshotDefaults);
   },
 
   async getViewerVotesByPollIds(userId: string, pollIds: string[]): Promise<VoteRow[]> {
@@ -156,7 +220,7 @@ export const voteRepository = {
 
     const { data, error } = await supabase
       .from("votes")
-      .select(VOTE_COLUMNS)
+      .select(BASE_VOTE_COLUMNS)
       .eq("user_id", userId)
       .in("poll_id", pollIds);
 
@@ -164,35 +228,64 @@ export const voteRepository = {
       throw error;
     }
 
-    return (data || []) as VoteRow[];
+    return ((data || []) as PartialVoteRow[]).map(withSnapshotDefaults);
   },
 
   async insert(input: NewVoteRow): Promise<VoteRow> {
     const supabase = requireSupabaseAdminClient();
 
+    const baseInsertPayload = {
+      poll_id: input.poll_id,
+      option_id: input.option_id,
+      user_id: input.user_id,
+      verified_identity_id: input.verified_identity_id ?? null,
+      submitted_at: input.submitted_at,
+      is_valid: input.is_valid ?? true,
+      invalid_reason: input.invalid_reason ?? null,
+    };
+
+    const snapshotInsertPayload = {
+      ...baseInsertPayload,
+      vote_latitude_l0: input.vote_latitude_l0 ?? null,
+      vote_longitude_l0: input.vote_longitude_l0 ?? null,
+      vote_location_snapshot_at: input.vote_location_snapshot_at ?? null,
+      vote_location_snapshot_version: input.vote_location_snapshot_version ?? 1,
+    };
+
     const { data, error } = await supabase
       .from("votes")
-      .insert({
-        poll_id: input.poll_id,
-        option_id: input.option_id,
-        user_id: input.user_id,
-        verified_identity_id: input.verified_identity_id ?? null,
-        vote_latitude_l0: input.vote_latitude_l0 ?? null,
-        vote_longitude_l0: input.vote_longitude_l0 ?? null,
-        vote_location_snapshot_at: input.vote_location_snapshot_at ?? null,
-        vote_location_snapshot_version: input.vote_location_snapshot_version ?? 1,
-        submitted_at: input.submitted_at,
-        is_valid: input.is_valid ?? true,
-        invalid_reason: input.invalid_reason ?? null,
-      })
-      .select(VOTE_COLUMNS)
+      .insert(snapshotInsertPayload)
+      .select(VOTE_COLUMNS_WITH_SNAPSHOT)
       .single<VoteRow>();
 
-    if (error) {
+    if (!error) {
+      return data;
+    }
+
+    if (!isMissingSnapshotVoteColumnError(error)) {
       throw error;
     }
 
-    return data;
+    console.warn(
+      "[voteRepository] vote snapshot columns missing; retrying insert without snapshot fields",
+      {
+        pollId: input.poll_id,
+        userId: input.user_id,
+        error,
+      },
+    );
+
+    const fallbackInsert = await supabase
+      .from("votes")
+      .insert(baseInsertPayload)
+      .select(BASE_VOTE_COLUMNS)
+      .single<PartialVoteRow>();
+
+    if (fallbackInsert.error) {
+      throw fallbackInsert.error;
+    }
+
+    return withSnapshotDefaults(fallbackInsert.data);
   },
 };
 

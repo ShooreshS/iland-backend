@@ -89,6 +89,31 @@ const normalizeText = (value: unknown): string | null => {
   return trimmed.length > 0 ? trimmed : null;
 };
 
+const isMissingTableSchemaCacheError = (
+  error: unknown,
+  tableName: string,
+): boolean => {
+  if (!error || typeof error !== "object") {
+    return false;
+  }
+
+  const code = (error as { code?: unknown }).code;
+  if (typeof code === "string" && code.trim().toUpperCase() === "PGRST205") {
+    return true;
+  }
+
+  const message = normalizeText((error as { message?: unknown }).message);
+  if (!message) {
+    return false;
+  }
+
+  const normalizedMessage = message.toLowerCase();
+  return (
+    normalizedMessage.includes("could not find the table") &&
+    normalizedMessage.includes(tableName.toLowerCase())
+  );
+};
+
 const normalizeCountryCode = (value: unknown): string | null => {
   const normalized = normalizeText(value);
   return normalized ? normalized.toUpperCase() : null;
@@ -1098,6 +1123,32 @@ const buildPollMarkersFromAllVotes = async (params: {
   return applyMapFilters(markers, input, areasById);
 };
 
+const buildSinglePollMarkersFromLegacyVotes = async (params: {
+  pollId: string;
+  areaLevel: MapAreaLevel;
+  input: GetPollVoteMapMarkersRequestDto;
+}): Promise<VoteMapMarkerDto[]> => {
+  const { pollId, areaLevel, input } = params;
+  const scopedPollOptions = await pollRepository.getOptionsByPollId(pollId);
+  if (scopedPollOptions.length === 0) {
+    return [];
+  }
+
+  const validVotes = await voteRepository.getValidByPollId(pollId);
+  if (validVotes.length === 0) {
+    return [];
+  }
+
+  return buildMapMarkersFromVotes({
+    markerScopeId: pollId,
+    areaLevel,
+    input,
+    validVotes,
+    scopedPollOptions,
+    optionMetadataById: buildOptionMetadataById(scopedPollOptions),
+  });
+};
+
 export const mapMarkerService = {
   async getPollVoteMarkers(
     input: GetPollVoteMapMarkersRequestDto,
@@ -1152,7 +1203,36 @@ export const mapMarkerService = {
       return [];
     }
 
-    const cacheRow = await pollMapMarkerCacheRepository.getByPollId(pollId);
+    let cacheRow: Awaited<
+      ReturnType<typeof pollMapMarkerCacheRepository.getByPollId>
+    >;
+    try {
+      cacheRow = await pollMapMarkerCacheRepository.getByPollId(pollId);
+    } catch (error) {
+      if (
+        isMissingTableSchemaCacheError(
+          error,
+          "public.poll_map_marker_cache",
+        )
+      ) {
+        console.warn(
+          "[mapMarkerService] cache table missing; falling back to legacy raw vote aggregation for single-poll read",
+          {
+            pollId,
+            areaLevel,
+            error,
+          },
+        );
+        return buildSinglePollMarkersFromLegacyVotes({
+          pollId,
+          areaLevel,
+          input,
+        });
+      }
+
+      throw error;
+    }
+
     if (!cacheRow) {
       console.info("[mapMarkerService] single-poll cache miss", {
         pollId,

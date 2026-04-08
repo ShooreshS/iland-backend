@@ -212,6 +212,129 @@ describe("mapMarkerService", () => {
     }
   });
 
+  it("falls back to legacy raw vote aggregation when cache table is missing in schema cache", async () => {
+    const poll = createPoll();
+
+    const restoreFns = [
+      patchMethod(pollRepository, "getById", async () => poll),
+      patchMethod(pollMapMarkerCacheRepository, "getByPollId", async () => {
+        throw {
+          code: "PGRST205",
+          message:
+            "Could not find the table 'public.poll_map_marker_cache' in the schema cache",
+        };
+      }),
+      patchMethod(pollRepository, "getOptionsByPollId", async () => [
+        {
+          id: "option-a",
+          poll_id: poll.id,
+          label: "Option A",
+          description: null,
+          color: "#22c55e",
+          display_order: 1,
+          is_active: true,
+          created_at: FIXED_TIME,
+          updated_at: FIXED_TIME,
+        },
+      ]),
+      patchMethod(voteRepository, "getValidByPollId", async () => [
+        {
+          id: "vote-1",
+          poll_id: poll.id,
+          option_id: "option-a",
+          user_id: "user-1",
+          verified_identity_id: null,
+          vote_latitude_l0: null,
+          vote_longitude_l0: null,
+          vote_location_snapshot_at: null,
+          vote_location_snapshot_version: 1,
+          submitted_at: FIXED_TIME,
+          is_valid: true,
+          invalid_reason: null,
+          created_at: FIXED_TIME,
+          updated_at: FIXED_TIME,
+        },
+        {
+          id: "vote-2",
+          poll_id: poll.id,
+          option_id: "option-a",
+          user_id: "user-2",
+          verified_identity_id: null,
+          vote_latitude_l0: null,
+          vote_longitude_l0: null,
+          vote_location_snapshot_at: null,
+          vote_location_snapshot_version: 1,
+          submitted_at: FIXED_TIME,
+          is_valid: true,
+          invalid_reason: null,
+          created_at: FIXED_TIME,
+          updated_at: FIXED_TIME,
+        },
+        {
+          id: "vote-3",
+          poll_id: poll.id,
+          option_id: "option-a",
+          user_id: "user-3",
+          verified_identity_id: null,
+          vote_latitude_l0: null,
+          vote_longitude_l0: null,
+          vote_location_snapshot_at: null,
+          vote_location_snapshot_version: 1,
+          submitted_at: FIXED_TIME,
+          is_valid: true,
+          invalid_reason: null,
+          created_at: FIXED_TIME,
+          updated_at: FIXED_TIME,
+        },
+      ]),
+      patchMethod(identityProfileRepository, "listMapSeedByUserIds", async () => [
+        {
+          user_id: "user-1",
+          home_area_id: "geo_city_ir_tehran",
+          home_country_code: "IR",
+          home_approx_latitude: 35.6892,
+          home_approx_longitude: 51.389,
+        },
+        {
+          user_id: "user-2",
+          home_area_id: "geo_city_ir_tehran",
+          home_country_code: "IR",
+          home_approx_latitude: 35.6892,
+          home_approx_longitude: 51.389,
+        },
+        {
+          user_id: "user-3",
+          home_area_id: "geo_city_ir_tehran",
+          home_country_code: "IR",
+          home_approx_latitude: 35.6892,
+          home_approx_longitude: 51.389,
+        },
+      ]),
+      patchMethod(voteRepository, "countValidByPollId", async () => {
+        throw new Error("legacy fallback should not require countValidByPollId");
+      }),
+      patchMethod(voteRepository, "getValidByPollIdPage", async () => {
+        throw new Error("legacy fallback should not require paged vote reads");
+      }),
+    ];
+
+    try {
+      const markers = await mapMarkerService.getPollVoteMarkers({
+        pollId: poll.id,
+        areaLevel: "city",
+      });
+
+      expect(markers.length).toBeGreaterThan(0);
+      expect(markers[0]).toMatchObject({
+        pollId: poll.id,
+        areaLevel: "city",
+        totalVotes: 3,
+      });
+    } finally {
+      restoreFns.reverse().forEach((restore) => restore());
+    }
+  });
+
   it("derives areaLevel=country markers from cached level-1 markers for poll-map compatibility", async () => {
     const poll = createPoll();
     const cacheRow = createCacheRow({

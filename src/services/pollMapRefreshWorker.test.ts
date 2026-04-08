@@ -194,4 +194,54 @@ describe("pollMapRefreshWorker", () => {
     expect(failRecords[0]?.pollId).toBe("poll-fail");
     expect(failRecords[0]?.message).toContain("refresh exploded");
   });
+
+  it("gracefully skips cycles when queue table is missing from schema cache", async () => {
+    let listCandidatesCalls = 0;
+
+    const worker = createPollMapRefreshWorker(
+      {
+        intervalMs: 1000,
+        pendingVoteThreshold: 1,
+        maxQueueAgeMs: 60_000,
+        maxPollsPerCycle: 10,
+      },
+      {
+        queueRepositoryLike: {
+          async listCandidates() {
+            listCandidatesCalls += 1;
+            throw {
+              code: "PGRST205",
+              message:
+                "Could not find the table 'public.poll_map_refresh_queue' in the schema cache",
+            };
+          },
+          async ackPoll() {
+            return createQueueRow({ pending_vote_events: 0 });
+          },
+          async failPoll() {
+            return createQueueRow({ last_error: "x" });
+          },
+        },
+        cacheRefreshServiceLike: {
+          async rebuildPollMapCache() {
+            throw new Error("should not rebuild without queue table");
+          },
+        },
+      },
+    );
+
+    const firstRun = await worker.runCycle();
+    const secondRun = await worker.runCycle();
+
+    expect(firstRun.skippedDueToOverlap).toBe(false);
+    expect(firstRun.listedCandidateCount).toBe(0);
+    expect(firstRun.eligibleCandidateCount).toBe(0);
+    expect(firstRun.processedCount).toBe(0);
+    expect(firstRun.ackedCount).toBe(0);
+    expect(firstRun.failedCount).toBe(0);
+
+    expect(secondRun.skippedDueToOverlap).toBe(false);
+    expect(secondRun.processedCount).toBe(0);
+    expect(listCandidatesCalls).toBe(1);
+  });
 });

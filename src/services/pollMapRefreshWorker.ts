@@ -95,6 +95,40 @@ const toErrorMessage = (error: unknown): string => {
   return String(error);
 };
 
+const normalizeText = (value: unknown): string | null => {
+  if (typeof value !== "string") {
+    return null;
+  }
+
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : null;
+};
+
+const isMissingTableSchemaCacheError = (
+  error: unknown,
+  tableName: string,
+): boolean => {
+  if (!error || typeof error !== "object") {
+    return false;
+  }
+
+  const code = (error as { code?: unknown }).code;
+  if (typeof code === "string" && code.trim().toUpperCase() === "PGRST205") {
+    return true;
+  }
+
+  const message = normalizeText((error as { message?: unknown }).message);
+  if (!message) {
+    return false;
+  }
+
+  const normalizedMessage = message.toLowerCase();
+  return (
+    normalizedMessage.includes("could not find the table") &&
+    normalizedMessage.includes(tableName.toLowerCase())
+  );
+};
+
 export const createPollMapRefreshWorker = (
   configInput?: Partial<PollMapRefreshWorkerConfig>,
   dependencies: PollMapRefreshWorkerDependencies = {},
@@ -108,6 +142,8 @@ export const createPollMapRefreshWorker = (
 
   let activeCyclePromise: Promise<PollMapRefreshWorkerCycleResult> | null = null;
   let intervalId: ReturnType<typeof setInterval> | null = null;
+  let queueSchemaUnavailable = false;
+  let queueSchemaUnavailableLogged = false;
 
   const runCycle = async (): Promise<PollMapRefreshWorkerCycleResult> => {
     if (activeCyclePromise) {
@@ -121,14 +157,57 @@ export const createPollMapRefreshWorker = (
       };
     }
 
+    if (queueSchemaUnavailable) {
+      return {
+        skippedDueToOverlap: false,
+        listedCandidateCount: 0,
+        eligibleCandidateCount: 0,
+        processedCount: 0,
+        ackedCount: 0,
+        failedCount: 0,
+      };
+    }
+
     activeCyclePromise = (async () => {
       const nowMs = nowMsFn();
       console.info("[pollMapRefreshWorker] cycle started");
 
-      const candidates = await queueRepositoryLike.listCandidates({
-        minPendingVoteEvents: 1,
-        limit: config.maxPollsPerCycle,
-      });
+      let candidates: PollMapRefreshQueueRow[];
+      try {
+        candidates = await queueRepositoryLike.listCandidates({
+          minPendingVoteEvents: 1,
+          limit: config.maxPollsPerCycle,
+        });
+      } catch (error) {
+        if (
+          isMissingTableSchemaCacheError(
+            error,
+            "public.poll_map_refresh_queue",
+          )
+        ) {
+          queueSchemaUnavailable = true;
+          if (!queueSchemaUnavailableLogged) {
+            queueSchemaUnavailableLogged = true;
+            console.warn(
+              "[pollMapRefreshWorker] poll_map_refresh_queue table missing; skipping refresh cycles until restart",
+              {
+                error,
+              },
+            );
+          }
+
+          return {
+            skippedDueToOverlap: false,
+            listedCandidateCount: 0,
+            eligibleCandidateCount: 0,
+            processedCount: 0,
+            ackedCount: 0,
+            failedCount: 0,
+          };
+        }
+
+        throw error;
+      }
       const eligibleCandidates = candidates.filter((row) =>
         isEligibleCandidate(row, nowMs, config),
       );
@@ -195,16 +274,24 @@ export const createPollMapRefreshWorker = (
     }
   };
 
+  const runCycleSafe = async (): Promise<void> => {
+    try {
+      await runCycle();
+    } catch (error) {
+      console.error("[pollMapRefreshWorker] cycle crashed", { error });
+    }
+  };
+
   const start = (): void => {
     if (intervalId) {
       return;
     }
 
     console.info("[pollMapRefreshWorker] starting", config);
-    void runCycle();
     intervalId = setInterval(() => {
-      void runCycle();
+      void runCycleSafe();
     }, config.intervalMs);
+    void runCycleSafe();
   };
 
   const stop = (): void => {
