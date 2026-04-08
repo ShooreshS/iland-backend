@@ -1,11 +1,13 @@
 import { describe, expect, it } from "bun:test";
 import identityProfileRepository from "../repositories/identityProfileRepository";
+import pollMapRefreshQueueRepository from "../repositories/pollMapRefreshQueueRepository";
 import pollRepository from "../repositories/pollRepository";
 import verifiedIdentityRepository from "../repositories/verifiedIdentityRepository";
 import voteRepository from "../repositories/voteRepository";
 import { pollVotingService } from "./pollVotingService";
 import type {
   IdentityProfileRow,
+  PollMapRefreshQueueRow,
   PollOptionRow,
   PollRow,
   UserRow,
@@ -109,9 +111,27 @@ const createVote = (overrides: Partial<VoteRow> = {}): VoteRow => ({
   option_id: "option-1",
   user_id: "viewer-user-1",
   verified_identity_id: null,
+  vote_latitude_l0: null,
+  vote_longitude_l0: null,
+  vote_location_snapshot_at: null,
+  vote_location_snapshot_version: 1,
   submitted_at: FIXED_TIME,
   is_valid: true,
   invalid_reason: null,
+  created_at: FIXED_TIME,
+  updated_at: FIXED_TIME,
+  ...overrides,
+});
+
+const createQueueRow = (
+  overrides: Partial<PollMapRefreshQueueRow> = {},
+): PollMapRefreshQueueRow => ({
+  poll_id: "poll-1",
+  pending_vote_events: 1,
+  first_enqueued_at: FIXED_TIME,
+  last_enqueued_at: FIXED_TIME,
+  last_processed_at: null,
+  last_error: null,
   created_at: FIXED_TIME,
   updated_at: FIXED_TIME,
   ...overrides,
@@ -159,14 +179,18 @@ describe("pollVotingService.submitVote", () => {
     }
   });
 
-  it("accepts first verified vote and persists verified_identity_id", async () => {
+  it("accepts first verified vote, persists rounded snapshot coordinates, and enqueues refresh", async () => {
     const viewer = createViewer();
     const poll = createPoll({ requires_verified_identity: true });
     const option = createOption();
     const verifiedIdentity = createVerifiedIdentity();
-    const identityProfile = createIdentityProfile();
+    const identityProfile = createIdentityProfile({
+      home_approx_latitude: 35.756,
+      home_approx_longitude: 51.444,
+    });
 
     let insertedPayload: unknown = null;
+    let enqueueCalls = 0;
 
     const restoreFns = [
       patchMethod(pollRepository, "getById", async () => poll),
@@ -182,6 +206,17 @@ describe("pollVotingService.submitVote", () => {
         async () => null,
       ),
       patchMethod(identityProfileRepository, "getByUserId", async () => identityProfile),
+      patchMethod(
+        pollMapRefreshQueueRepository,
+        "enqueuePoll",
+        async (pollId: string) => {
+          enqueueCalls += 1;
+          return createQueueRow({
+            poll_id: pollId,
+            pending_vote_events: enqueueCalls,
+          });
+        },
+      ),
       patchMethod(voteRepository, "insert", async (input) => {
         insertedPayload = input;
         return createVote({
@@ -207,7 +242,18 @@ describe("pollVotingService.submitVote", () => {
         option_id: option.id,
         user_id: viewer.id,
         verified_identity_id: verifiedIdentity.id,
+        vote_latitude_l0: 35.76,
+        vote_longitude_l0: 51.44,
+        vote_location_snapshot_version: 1,
       });
+      expect(
+        (
+          insertedPayload as {
+            vote_location_snapshot_at?: string | null;
+          }
+        ).vote_location_snapshot_at,
+      ).toBeTruthy();
+      expect(enqueueCalls).toBe(1);
     } finally {
       restoreFns.reverse().forEach((restore) => restore());
     }
@@ -303,12 +349,24 @@ describe("pollVotingService.submitVote", () => {
     const option = createOption();
 
     let insertedPayload: unknown = null;
+    let enqueueCalls = 0;
 
     const restoreFns = [
       patchMethod(pollRepository, "getById", async () => poll),
       patchMethod(pollRepository, "getOptionByIdForPoll", async () => option),
       patchMethod(voteRepository, "getByUserIdAndPollId", async () => null),
       patchMethod(identityProfileRepository, "getByUserId", async () => null),
+      patchMethod(
+        pollMapRefreshQueueRepository,
+        "enqueuePoll",
+        async (pollId: string) => {
+          enqueueCalls += 1;
+          return createQueueRow({
+            poll_id: pollId,
+            pending_vote_events: enqueueCalls,
+          });
+        },
+      ),
       patchMethod(voteRepository, "insert", async (input) => {
         insertedPayload = input;
         return createVote({
@@ -335,6 +393,76 @@ describe("pollVotingService.submitVote", () => {
         user_id: viewer.id,
         verified_identity_id: null,
       });
+      expect(enqueueCalls).toBe(1);
+    } finally {
+      restoreFns.reverse().forEach((restore) => restore());
+    }
+  });
+
+  it("keeps snapshot fields null when profile coordinates are invalid", async () => {
+    const viewer = createViewer({
+      verification_level: "anonymous",
+    });
+    const poll = createPoll({ requires_verified_identity: false });
+    const option = createOption();
+    const identityProfile = createIdentityProfile({
+      home_approx_latitude: 120,
+      home_approx_longitude: -222,
+    });
+
+    let insertedPayload: unknown = null;
+    let enqueueCalls = 0;
+
+    const restoreFns = [
+      patchMethod(pollRepository, "getById", async () => poll),
+      patchMethod(pollRepository, "getOptionByIdForPoll", async () => option),
+      patchMethod(voteRepository, "getByUserIdAndPollId", async () => null),
+      patchMethod(identityProfileRepository, "getByUserId", async () => identityProfile),
+      patchMethod(
+        pollMapRefreshQueueRepository,
+        "enqueuePoll",
+        async (pollId: string) => {
+          enqueueCalls += 1;
+          return createQueueRow({
+            poll_id: pollId,
+            pending_vote_events: enqueueCalls,
+          });
+        },
+      ),
+      patchMethod(voteRepository, "insert", async (input) => {
+        insertedPayload = input;
+        return createVote({
+          poll_id: input.poll_id,
+          option_id: input.option_id,
+          user_id: input.user_id,
+          verified_identity_id: input.verified_identity_id ?? null,
+          vote_latitude_l0: input.vote_latitude_l0 ?? null,
+          vote_longitude_l0: input.vote_longitude_l0 ?? null,
+          vote_location_snapshot_at: input.vote_location_snapshot_at ?? null,
+          vote_location_snapshot_version: input.vote_location_snapshot_version ?? 1,
+          submitted_at: input.submitted_at,
+        });
+      }),
+    ];
+
+    try {
+      const result = await pollVotingService.submitVote({
+        pollId: poll.id,
+        optionId: option.id,
+        viewer,
+      });
+
+      expect(result.success).toBe(true);
+      expect(insertedPayload).toMatchObject({
+        poll_id: poll.id,
+        option_id: option.id,
+        user_id: viewer.id,
+        vote_latitude_l0: null,
+        vote_longitude_l0: null,
+        vote_location_snapshot_at: null,
+        vote_location_snapshot_version: 1,
+      });
+      expect(enqueueCalls).toBe(1);
     } finally {
       restoreFns.reverse().forEach((restore) => restore());
     }
@@ -346,6 +474,7 @@ describe("pollVotingService.submitVote", () => {
     const option = createOption();
     const verifiedIdentity = createVerifiedIdentity();
     const identityProfile = createIdentityProfile();
+    let enqueueCalls = 0;
 
     const restoreFns = [
       patchMethod(pollRepository, "getById", async () => poll),
@@ -357,6 +486,17 @@ describe("pollVotingService.submitVote", () => {
       ),
       patchMethod(voteRepository, "getByVerifiedIdentityIdAndPollId", async () => null),
       patchMethod(identityProfileRepository, "getByUserId", async () => identityProfile),
+      patchMethod(
+        pollMapRefreshQueueRepository,
+        "enqueuePoll",
+        async (pollId: string) => {
+          enqueueCalls += 1;
+          return createQueueRow({
+            poll_id: pollId,
+            pending_vote_events: enqueueCalls,
+          });
+        },
+      ),
       patchMethod(voteRepository, "insert", async () => {
         throw Object.assign(new Error("duplicate key"), {
           code: "23505",
@@ -376,6 +516,7 @@ describe("pollVotingService.submitVote", () => {
         expect(result.errorCode).toBe("ALREADY_VOTED");
         expect(result.message).toContain("verified identity");
       }
+      expect(enqueueCalls).toBe(0);
     } finally {
       restoreFns.reverse().forEach((restore) => restore());
     }

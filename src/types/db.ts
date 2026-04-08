@@ -218,6 +218,10 @@ export type VoteRow = {
   option_id: string;
   user_id: string;
   verified_identity_id: string | null;
+  vote_latitude_l0: number | null;
+  vote_longitude_l0: number | null;
+  vote_location_snapshot_at: string | null;
+  vote_location_snapshot_version: number;
   submitted_at: string;
   is_valid: boolean;
   invalid_reason: string | null;
@@ -230,7 +234,69 @@ export type NewVoteRow = {
   option_id: string;
   user_id: string;
   verified_identity_id?: string | null;
+  vote_latitude_l0?: number | null;
+  vote_longitude_l0?: number | null;
+  vote_location_snapshot_at?: string | null;
+  vote_location_snapshot_version?: number;
   submitted_at: string;
   is_valid?: boolean;
   invalid_reason?: string | null;
 };
+
+export type PollMapMarkerCacheMarkerJson = Record<string, unknown>;
+
+export type PollMapMarkerCacheRow = {
+  poll_id: string;
+  markers_level1_json: PollMapMarkerCacheMarkerJson[];
+  schema_version: number;
+  marker_count: number;
+  total_votes: number;
+  last_vote_submitted_at: string | null;
+  refreshed_at: string;
+  created_at: string;
+  updated_at: string;
+};
+
+export type NewPollMapMarkerCacheRow = {
+  poll_id: string;
+  markers_level1_json?: PollMapMarkerCacheMarkerJson[];
+  schema_version?: number;
+  marker_count?: number;
+  total_votes?: number;
+  last_vote_submitted_at?: string | null;
+  refreshed_at?: string;
+};
+
+export type UpdatePollMapMarkerCacheRow = Partial<
+  Omit<
+    PollMapMarkerCacheRow,
+    "poll_id" | "created_at" | "updated_at"
+  >
+>;
+
+export type PollMapRefreshQueueRow = {
+  poll_id: string;
+  pending_vote_events: number;
+  first_enqueued_at: string;
+  last_enqueued_at: string;
+  last_processed_at: string | null;
+  last_error: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type NewPollMapRefreshQueueRow = {
+  poll_id: string;
+  pending_vote_events?: number;
+  first_enqueued_at?: string;
+  last_enqueued_at?: string;
+  last_processed_at?: string | null;
+  last_error?: string | null;
+};
+
+export type UpdatePollMapRefreshQueueRow = Partial<
+  Omit<
+    PollMapRefreshQueueRow,
+    "poll_id" | "created_at" | "updated_at"
+  >
+>;

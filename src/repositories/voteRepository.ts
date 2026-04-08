@@ -2,7 +2,7 @@ import { requireSupabaseAdminClient } from "../db/supabaseClient";
 import type { NewVoteRow, VoteRow } from "../types/db";
 
 const VOTE_COLUMNS =
-  "id,poll_id,option_id,user_id,verified_identity_id,submitted_at,is_valid,invalid_reason,created_at,updated_at";
+  "id,poll_id,option_id,user_id,verified_identity_id,vote_latitude_l0,vote_longitude_l0,vote_location_snapshot_at,vote_location_snapshot_version,submitted_at,is_valid,invalid_reason,created_at,updated_at";
 
 export const voteRepository = {
   async getByUserIdAndPollId(userId: string, pollId: string): Promise<VoteRow | null> {
@@ -136,7 +136,7 @@ export const voteRepository = {
 
     const { data, error } = await supabase
       .from("votes")
-      .select("poll_id,option_id,user_id,verified_identity_id,submitted_at,is_valid")
+      .select(VOTE_COLUMNS)
       .in("poll_id", pollIds)
       .eq("is_valid", true);
 
@@ -156,7 +156,7 @@ export const voteRepository = {
 
     const { data, error } = await supabase
       .from("votes")
-      .select("poll_id,option_id,user_id,verified_identity_id,submitted_at")
+      .select(VOTE_COLUMNS)
       .eq("user_id", userId)
       .in("poll_id", pollIds);
 
@@ -177,6 +177,10 @@ export const voteRepository = {
         option_id: input.option_id,
         user_id: input.user_id,
         verified_identity_id: input.verified_identity_id ?? null,
+        vote_latitude_l0: input.vote_latitude_l0 ?? null,
+        vote_longitude_l0: input.vote_longitude_l0 ?? null,
+        vote_location_snapshot_at: input.vote_location_snapshot_at ?? null,
+        vote_location_snapshot_version: input.vote_location_snapshot_version ?? 1,
         submitted_at: input.submitted_at,
         is_valid: input.is_valid ?? true,
         invalid_reason: input.invalid_reason ?? null,

@@ -27,6 +27,12 @@ const parsed = z
     WALLET_ISSUER_ID: z.string().min(1).optional(),
     WALLET_ISSUER_SIGNING_SECRET: z.string().min(1).optional(),
     VERIFIED_IDENTITY_PEPPER: z.string().min(1).optional(),
+    POLL_MAP_REFRESH_WORKER_ENABLED: z.string().optional(),
+    POLL_MAP_REFRESH_INTERVAL_MS: z.coerce.number().int().min(250).optional(),
+    POLL_MAP_REFRESH_PENDING_THRESHOLD: z.coerce.number().int().min(1).optional(),
+    POLL_MAP_REFRESH_MAX_DELAY_MS: z.coerce.number().int().min(0).optional(),
+    POLL_MAP_REFRESH_MAX_POLLS_PER_CYCLE: z.coerce.number().int().min(1).optional(),
+    MAP_ENABLE_ALL_POLLS_DEBUG: z.string().optional(),
   })
   .superRefine((input, context) => {
     const hasUrl = Boolean(input.SUPABASE_URL);
@@ -55,6 +61,24 @@ const parsed = z
       process.env.WALLET_ISSUER_SIGNING_SECRET,
     ),
     VERIFIED_IDENTITY_PEPPER: emptyToUndefined(process.env.VERIFIED_IDENTITY_PEPPER),
+    POLL_MAP_REFRESH_WORKER_ENABLED: emptyToUndefined(
+      process.env.POLL_MAP_REFRESH_WORKER_ENABLED,
+    ),
+    POLL_MAP_REFRESH_INTERVAL_MS: emptyToUndefined(
+      process.env.POLL_MAP_REFRESH_INTERVAL_MS,
+    ),
+    POLL_MAP_REFRESH_PENDING_THRESHOLD: emptyToUndefined(
+      process.env.POLL_MAP_REFRESH_PENDING_THRESHOLD,
+    ),
+    POLL_MAP_REFRESH_MAX_DELAY_MS: emptyToUndefined(
+      process.env.POLL_MAP_REFRESH_MAX_DELAY_MS,
+    ),
+    POLL_MAP_REFRESH_MAX_POLLS_PER_CYCLE: emptyToUndefined(
+      process.env.POLL_MAP_REFRESH_MAX_POLLS_PER_CYCLE,
+    ),
+    MAP_ENABLE_ALL_POLLS_DEBUG: emptyToUndefined(
+      process.env.MAP_ENABLE_ALL_POLLS_DEBUG,
+    ),
   });
 
 const enableDevViewerAuth =
@@ -73,13 +97,28 @@ const walletIssuerSigningSecret =
   parsed.WALLET_ISSUER_SIGNING_SECRET || "iland-backend-wallet-issuer-dev-secret";
 const verifiedIdentityPepper =
   parsed.VERIFIED_IDENTITY_PEPPER || "iland-backend-verified-identity-dev-pepper";
+const supabaseEnabled = Boolean(parsed.SUPABASE_URL && parsed.SUPABASE_SERVICE_ROLE_KEY);
+const pollMapRefreshWorkerEnabled =
+  (parsed.POLL_MAP_REFRESH_WORKER_ENABLED !== undefined
+    ? toBoolean(parsed.POLL_MAP_REFRESH_WORKER_ENABLED)
+    : true) && supabaseEnabled;
+const pollMapRefreshIntervalMs = parsed.POLL_MAP_REFRESH_INTERVAL_MS || 10_000;
+const pollMapRefreshPendingThreshold =
+  parsed.POLL_MAP_REFRESH_PENDING_THRESHOLD || 10;
+const pollMapRefreshMaxDelayMs = parsed.POLL_MAP_REFRESH_MAX_DELAY_MS || 60_000;
+const pollMapRefreshMaxPollsPerCycle =
+  parsed.POLL_MAP_REFRESH_MAX_POLLS_PER_CYCLE || 20;
+const mapEnableAllPollsDebug =
+  parsed.MAP_ENABLE_ALL_POLLS_DEBUG !== undefined
+    ? toBoolean(parsed.MAP_ENABLE_ALL_POLLS_DEBUG)
+    : false;
 
 export const env = Object.freeze({
   nodeEnv: parsed.NODE_ENV,
   host: parsed.HOST,
   port: parsed.PORT,
   supabase: Object.freeze({
-    enabled: Boolean(parsed.SUPABASE_URL && parsed.SUPABASE_SERVICE_ROLE_KEY),
+    enabled: supabaseEnabled,
     url: parsed.SUPABASE_URL ?? null,
     serviceRoleKey: parsed.SUPABASE_SERVICE_ROLE_KEY ?? null,
     projectRef: parsed.SUPABASE_PROJECT_REF ?? null,
@@ -94,6 +133,16 @@ export const env = Object.freeze({
   }),
   verifiedIdentity: Object.freeze({
     pepper: verifiedIdentityPepper,
+  }),
+  pollMapRefreshWorker: Object.freeze({
+    enabled: pollMapRefreshWorkerEnabled,
+    intervalMs: pollMapRefreshIntervalMs,
+    pendingVoteThreshold: pollMapRefreshPendingThreshold,
+    maxDelayMs: pollMapRefreshMaxDelayMs,
+    maxPollsPerCycle: pollMapRefreshMaxPollsPerCycle,
+  }),
+  map: Object.freeze({
+    enableAllPollsDebug: mapEnableAllPollsDebug,
   }),
 });
 

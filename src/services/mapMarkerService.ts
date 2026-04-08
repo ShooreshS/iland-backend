@@ -1,4 +1,6 @@
+import env from "../config/env";
 import identityProfileRepository from "../repositories/identityProfileRepository";
+import pollMapMarkerCacheRepository from "../repositories/pollMapMarkerCacheRepository";
 import pollRepository from "../repositories/pollRepository";
 import voteRepository from "../repositories/voteRepository";
 import { MAP_ALL_POLLS_SCOPE_ID } from "../types/contracts";
@@ -7,6 +9,7 @@ import type {
   MapAreaLevel,
   VoteMapMarkerDto,
 } from "../types/contracts";
+import type { PollMapMarkerCacheMarkerJson } from "../types/db";
 
 type SeedGroup = {
   originAreaId: string;
@@ -40,6 +43,29 @@ type AreaNode = {
 type OptionMetadata = {
   label: string;
   color: string | null;
+};
+
+type CachedLevel1OptionBreakdown = {
+  optionId: string;
+  label: string;
+  color: string | null;
+  count: number;
+  percentageWithinArea: number;
+};
+
+type CachedLevel1Marker = {
+  id: string;
+  bucketLat1: number;
+  bucketLng1: number;
+  parentBucketId: string;
+  parentLatInt: number;
+  parentLngInt: number;
+  latitude: number;
+  longitude: number;
+  totalVotes: number;
+  optionBreakdown: CachedLevel1OptionBreakdown[];
+  leadingOptionId: string | null;
+  updatedAt: string;
 };
 
 const DEFAULT_COUNTRY_CODE = "ZZ";
@@ -113,7 +139,7 @@ const resolveProfileCoordinates = (profile: {
 
   const latitude = resolveCoordinate(profile.home_approx_latitude, -85, 85);
   const longitude = resolveCoordinate(profile.home_approx_longitude, -180, 180);
-  if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) {
+  if (latitude === null || longitude === null) {
     return null;
   }
 
@@ -505,6 +531,355 @@ const buildMarkers = (
 const normalizeAreaLevel = (value: unknown): MapAreaLevel =>
   value === "country" ? "country" : "city";
 
+const toStringOrNull = (value: unknown): string | null =>
+  typeof value === "string" && value.trim().length > 0 ? value.trim() : null;
+
+const toFiniteNumberOrNull = (value: unknown): number | null => {
+  if (!Number.isFinite(value)) {
+    return null;
+  }
+
+  return Number(value);
+};
+
+const toNonNegativeInt = (value: unknown): number => {
+  const numeric = toFiniteNumberOrNull(value);
+  if (numeric === null) {
+    return 0;
+  }
+
+  return Math.max(0, Math.trunc(numeric));
+};
+
+const normalizeCachedOptionBreakdown = (
+  input: unknown,
+  totalVotes: number,
+): CachedLevel1OptionBreakdown[] => {
+  if (!Array.isArray(input)) {
+    return [];
+  }
+
+  return input
+    .map((entry) => {
+      if (!entry || typeof entry !== "object") {
+        return null;
+      }
+
+      const optionId = toStringOrNull((entry as { optionId?: unknown }).optionId);
+      if (!optionId) {
+        return null;
+      }
+
+      const label =
+        toStringOrNull((entry as { label?: unknown }).label) || optionId;
+      const color = toStringOrNull((entry as { color?: unknown }).color);
+      const count = toNonNegativeInt((entry as { count?: unknown }).count);
+      const percentageWithinArea =
+        totalVotes > 0 ? count / totalVotes : 0;
+
+      return {
+        optionId,
+        label,
+        color,
+        count,
+        percentageWithinArea,
+      } satisfies CachedLevel1OptionBreakdown;
+    })
+    .filter((entry): entry is CachedLevel1OptionBreakdown => Boolean(entry))
+    .sort((left, right) => {
+      if (right.count !== left.count) {
+        return right.count - left.count;
+      }
+
+      return left.optionId.localeCompare(right.optionId);
+    });
+};
+
+const normalizeCachedLevel1Markers = (
+  payload: PollMapMarkerCacheMarkerJson[],
+): CachedLevel1Marker[] =>
+  payload
+    .map((entry) => {
+      if (!entry || typeof entry !== "object") {
+        return null;
+      }
+
+      const id = toStringOrNull((entry as { id?: unknown }).id);
+      const bucketLat1 = toFiniteNumberOrNull(
+        (entry as { bucketLat1?: unknown }).bucketLat1,
+      );
+      const bucketLng1 = toFiniteNumberOrNull(
+        (entry as { bucketLng1?: unknown }).bucketLng1,
+      );
+      const parentBucketId = toStringOrNull(
+        (entry as { parentBucketId?: unknown }).parentBucketId,
+      );
+      const parentLatInt = toFiniteNumberOrNull(
+        (entry as { parentLatInt?: unknown }).parentLatInt,
+      );
+      const parentLngInt = toFiniteNumberOrNull(
+        (entry as { parentLngInt?: unknown }).parentLngInt,
+      );
+      const latitude = toFiniteNumberOrNull(
+        (entry as { latitude?: unknown }).latitude,
+      );
+      const longitude = toFiniteNumberOrNull(
+        (entry as { longitude?: unknown }).longitude,
+      );
+      const totalVotes = toNonNegativeInt(
+        (entry as { totalVotes?: unknown }).totalVotes,
+      );
+      const updatedAt =
+        toStringOrNull((entry as { updatedAt?: unknown }).updatedAt) ||
+        new Date(0).toISOString();
+
+      if (
+        !id ||
+        bucketLat1 === null ||
+        bucketLng1 === null ||
+        !parentBucketId ||
+        parentLatInt === null ||
+        parentLngInt === null ||
+        latitude === null ||
+        longitude === null
+      ) {
+        return null;
+      }
+
+      return {
+        id,
+        bucketLat1,
+        bucketLng1,
+        parentBucketId,
+        parentLatInt: Math.trunc(parentLatInt),
+        parentLngInt: Math.trunc(parentLngInt),
+        latitude,
+        longitude,
+        totalVotes,
+        optionBreakdown: normalizeCachedOptionBreakdown(
+          (entry as { optionBreakdown?: unknown }).optionBreakdown,
+          totalVotes,
+        ),
+        leadingOptionId:
+          toStringOrNull((entry as { leadingOptionId?: unknown }).leadingOptionId) || null,
+        updatedAt,
+      } satisfies CachedLevel1Marker;
+    })
+    .filter((marker): marker is CachedLevel1Marker => Boolean(marker))
+    .sort((left, right) => {
+      if (right.totalVotes !== left.totalVotes) {
+        return right.totalVotes - left.totalVotes;
+      }
+
+      return left.id.localeCompare(right.id);
+    });
+
+const mapCachedLevel1ToCityMarkers = (
+  pollId: string,
+  cachedMarkers: CachedLevel1Marker[],
+): VoteMapMarkerDto[] =>
+  cachedMarkers.map((marker) => {
+    const leading =
+      marker.optionBreakdown.find((entry) => entry.optionId === marker.leadingOptionId) ||
+      marker.optionBreakdown.find((entry) => entry.count > 0) ||
+      null;
+
+    return {
+      id: `marker_${pollId}_${marker.id}`,
+      pollId,
+      areaId: marker.id,
+      areaLevel: "city",
+      parentAreaId: marker.parentBucketId,
+      latitude: marker.latitude,
+      longitude: marker.longitude,
+      totalVotes: marker.totalVotes,
+      optionBreakdown: marker.optionBreakdown.map((entry) => ({
+        optionId: entry.optionId,
+        label: entry.label,
+        count: entry.count,
+        color: entry.color,
+        percentageWithinArea: entry.percentageWithinArea,
+      })),
+      leadingOptionId: leading?.optionId || null,
+      leadingOptionLabel: leading?.label || null,
+      leadingOptionColor: leading?.color || null,
+      leadingOptionCount: leading?.count ?? null,
+      leadingOptionPercentage:
+        leading && marker.totalVotes > 0 ? leading.count / marker.totalVotes : null,
+      mergedAreaCount: 1,
+      privacy: {
+        thresholdK: 1,
+        mergeStrategy: PRIVACY_MERGE_STRATEGY,
+        mergedFromAreaIds: [marker.id],
+        mergedAreaCount: 1,
+        maxMergeDepth: 0,
+      },
+      updatedAt: marker.updatedAt,
+    } satisfies VoteMapMarkerDto;
+  });
+
+const mapCityMarkersToParentMarkers = (
+  pollId: string,
+  cityMarkers: VoteMapMarkerDto[],
+): VoteMapMarkerDto[] => {
+  type ParentBucketAccumulator = {
+    areaId: string;
+    sumLat: number;
+    sumLng: number;
+    childCount: number;
+    totalVotes: number;
+    countsByOptionId: Record<string, number>;
+    labelsByOptionId: Record<string, string>;
+    colorsByOptionId: Record<string, string | null>;
+    updatedAt: string;
+    mergedFromAreaIds: Set<string>;
+  };
+
+  const accumulators = new Map<string, ParentBucketAccumulator>();
+
+  for (const marker of cityMarkers) {
+    const parentAreaId = marker.parentAreaId || marker.areaId;
+    const existing = accumulators.get(parentAreaId);
+    if (!existing) {
+      const countsByOptionId: Record<string, number> = {};
+      const labelsByOptionId: Record<string, string> = {};
+      const colorsByOptionId: Record<string, string | null> = {};
+
+      marker.optionBreakdown.forEach((entry) => {
+        countsByOptionId[entry.optionId] = entry.count;
+        labelsByOptionId[entry.optionId] = entry.label;
+        colorsByOptionId[entry.optionId] = entry.color;
+      });
+
+      accumulators.set(parentAreaId, {
+        areaId: parentAreaId,
+        sumLat: marker.latitude,
+        sumLng: marker.longitude,
+        childCount: 1,
+        totalVotes: marker.totalVotes,
+        countsByOptionId,
+        labelsByOptionId,
+        colorsByOptionId,
+        updatedAt: marker.updatedAt,
+        mergedFromAreaIds: new Set([marker.areaId]),
+      });
+      continue;
+    }
+
+    existing.sumLat += marker.latitude;
+    existing.sumLng += marker.longitude;
+    existing.childCount += 1;
+    existing.totalVotes += marker.totalVotes;
+    marker.optionBreakdown.forEach((entry) => {
+      existing.countsByOptionId[entry.optionId] =
+        (existing.countsByOptionId[entry.optionId] || 0) + entry.count;
+      if (!existing.labelsByOptionId[entry.optionId]) {
+        existing.labelsByOptionId[entry.optionId] = entry.label;
+      }
+      if (!existing.colorsByOptionId[entry.optionId] && entry.color) {
+        existing.colorsByOptionId[entry.optionId] = entry.color;
+      }
+    });
+    if (marker.updatedAt > existing.updatedAt) {
+      existing.updatedAt = marker.updatedAt;
+    }
+    existing.mergedFromAreaIds.add(marker.areaId);
+  }
+
+  return Array.from(accumulators.values())
+    .map((accumulator) => {
+      const optionBreakdown = Object.entries(accumulator.countsByOptionId)
+        .map(([optionId, count]) => ({
+          optionId,
+          label: accumulator.labelsByOptionId[optionId] || optionId,
+          count,
+          color: accumulator.colorsByOptionId[optionId] ?? null,
+          percentageWithinArea:
+            accumulator.totalVotes > 0 ? count / accumulator.totalVotes : 0,
+        }))
+        .sort((left, right) => {
+          if (right.count !== left.count) {
+            return right.count - left.count;
+          }
+
+          return left.optionId.localeCompare(right.optionId);
+        });
+
+      const leading = optionBreakdown.find((entry) => entry.count > 0) || null;
+      const mergedFromAreaIds = Array.from(accumulator.mergedFromAreaIds).sort();
+
+      return {
+        id: `marker_${pollId}_${accumulator.areaId}`,
+        pollId,
+        areaId: accumulator.areaId,
+        areaLevel: "country",
+        parentAreaId: null,
+        // Level-2 display coordinates: arithmetic mean of child geoareas.
+        latitude: accumulator.sumLat / Math.max(accumulator.childCount, 1),
+        longitude: accumulator.sumLng / Math.max(accumulator.childCount, 1),
+        totalVotes: accumulator.totalVotes,
+        optionBreakdown,
+        leadingOptionId: leading?.optionId || null,
+        leadingOptionLabel: leading?.label || null,
+        leadingOptionColor: leading?.color || null,
+        leadingOptionCount: leading?.count ?? null,
+        leadingOptionPercentage:
+          leading && accumulator.totalVotes > 0
+            ? leading.count / accumulator.totalVotes
+            : null,
+        mergedAreaCount: mergedFromAreaIds.length,
+        privacy: {
+          thresholdK: 1,
+          mergeStrategy: PRIVACY_MERGE_STRATEGY,
+          mergedFromAreaIds,
+          mergedAreaCount: mergedFromAreaIds.length,
+          maxMergeDepth: 1,
+        },
+        updatedAt: accumulator.updatedAt,
+      } satisfies VoteMapMarkerDto;
+    })
+    .sort((left, right) => {
+      if (right.totalVotes !== left.totalVotes) {
+        return right.totalVotes - left.totalVotes;
+      }
+
+      return left.areaId.localeCompare(right.areaId);
+    });
+};
+
+const applyCachedMarkerFilters = (
+  markers: VoteMapMarkerDto[],
+  input: GetPollVoteMapMarkersRequestDto,
+  areaLevel: MapAreaLevel,
+): VoteMapMarkerDto[] => {
+  if (normalizeCountryCode(input.countryCode)) {
+    console.info(
+      "[mapMarkerService] single-poll cache path ignores countryCode filter (level-1 cache payload has no country metadata).",
+    );
+  }
+
+  if (input.includeEmptyAreas) {
+    console.info(
+      "[mapMarkerService] single-poll cache path ignores includeEmptyAreas filter.",
+    );
+  }
+
+  const normalizedParentAreaId = normalizeText(input.parentAreaId);
+  if (!normalizedParentAreaId) {
+    return markers;
+  }
+
+  if (areaLevel === "country") {
+    return markers.filter((marker) => marker.areaId === normalizedParentAreaId);
+  }
+
+  return markers.filter(
+    (marker) =>
+      marker.areaId === normalizedParentAreaId ||
+      marker.parentAreaId === normalizedParentAreaId,
+  );
+};
+
 const applyMapFilters = (
   markers: VoteMapMarkerDto[],
   input: GetPollVoteMapMarkersRequestDto,
@@ -729,12 +1104,21 @@ export const mapMarkerService = {
   ): Promise<VoteMapMarkerDto[]> {
     const pollId = normalizeText(input.pollId);
     if (!pollId) {
+      console.info("[mapMarkerService] no poll selected; returning empty marker list");
       return [];
     }
 
     const areaLevel = normalizeAreaLevel(input.areaLevel);
 
     if (pollId === MAP_ALL_POLLS_SCOPE_ID) {
+      if (!env.map.enableAllPollsDebug) {
+        console.info(
+          "[mapMarkerService] all_polls request ignored (debug-only path is disabled)",
+        );
+        return [];
+      }
+
+      console.info("[mapMarkerService] all_polls debug path enabled");
       const polls = await pollRepository.listAll();
       if (polls.length === 0) {
         return [];
@@ -762,22 +1146,46 @@ export const mapMarkerService = {
 
     const poll = await pollRepository.getById(pollId);
     if (!poll) {
+      console.info("[mapMarkerService] single-poll cache read skipped: poll not found", {
+        pollId,
+      });
       return [];
     }
 
-    const pollOptions = await pollRepository.getOptionsByPollId(pollId);
-    if (pollOptions.length === 0) {
+    const cacheRow = await pollMapMarkerCacheRepository.getByPollId(pollId);
+    if (!cacheRow) {
+      console.info("[mapMarkerService] single-poll cache miss", {
+        pollId,
+      });
       return [];
     }
 
-    return buildPollMarkersFromAllVotes({
-      markerScopeId: pollId,
-      pollId,
-      areaLevel,
-      input,
-      scopedPollOptions: pollOptions,
-      optionMetadataById: buildOptionMetadataById(pollOptions),
-    });
+    const cachedLevel1Markers = normalizeCachedLevel1Markers(
+      cacheRow.markers_level1_json,
+    );
+    const cityMarkers = mapCachedLevel1ToCityMarkers(pollId, cachedLevel1Markers);
+    const scopedMarkers =
+      areaLevel === "country"
+        ? mapCityMarkersToParentMarkers(pollId, cityMarkers)
+        : cityMarkers;
+
+    if (areaLevel === "country") {
+      console.info(
+        "[mapMarkerService] single-poll cache path served derived parent markers for areaLevel=country",
+        {
+          pollId,
+          cityMarkerCount: cityMarkers.length,
+          parentMarkerCount: scopedMarkers.length,
+        },
+      );
+    } else {
+      console.info("[mapMarkerService] single-poll cache hit", {
+        pollId,
+        markerCount: scopedMarkers.length,
+      });
+    }
+
+    return applyCachedMarkerFilters(scopedMarkers, input, areaLevel);
   },
 };
 

@@ -105,8 +105,8 @@ describe("GET /map/markers route", () => {
     expect(body).toEqual([sampleMarker]);
   });
 
-  it("rejects invalid requests when pollId is missing", async () => {
-    let called = false;
+  it("allows missing pollId and forwards empty poll scope to map service", async () => {
+    let receivedInput: unknown = null;
 
     const route = createGetMapMarkersRoute({
       requireViewerFn: async () => ({
@@ -117,8 +117,8 @@ describe("GET /map/markers route", () => {
         },
       }),
       mapMarkerServiceLike: {
-        getPollVoteMarkers: async () => {
-          called = true;
+        getPollVoteMarkers: async (input) => {
+          receivedInput = input;
           return [];
         },
       },
@@ -126,8 +126,33 @@ describe("GET /map/markers route", () => {
 
     const response = await invokeRoute(route, "areaLevel=city");
 
+    expect(response.status).toBe(200);
+    expect(receivedInput).toEqual({
+      pollId: "",
+      areaLevel: "city",
+      parentAreaId: undefined,
+      countryCode: undefined,
+      includeEmptyAreas: false,
+    });
+    expect(await response.json()).toEqual([]);
+  });
+
+  it("rejects invalid query payloads", async () => {
+    const route = createGetMapMarkersRoute({
+      requireViewerFn: async () => ({
+        ok: true,
+        viewer: {
+          userId: viewerUser.id,
+          user: viewerUser,
+        },
+      }),
+      mapMarkerServiceLike: {
+        getPollVoteMarkers: async () => [sampleMarker],
+      },
+    });
+
+    const response = await invokeRoute(route, "includeEmptyAreas=maybe");
     expect(response.status).toBe(400);
-    expect(called).toBe(false);
   });
 
   it("returns requireViewer failure unchanged", async () => {

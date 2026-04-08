@@ -6,7 +6,7 @@ import type { GetPollVoteMapMarkersResponseDto } from "../types/contracts";
 import type { RouteDefinition } from "../types/http";
 
 const mapMarkersQuerySchema = z.object({
-  pollId: z.string().trim().min(1),
+  pollId: z.string().trim().min(1).optional(),
   areaLevel: z.enum(["city", "country"]).optional(),
   parentAreaId: z.string().trim().min(1).optional(),
   countryCode: z.string().trim().min(1).optional(),
@@ -50,8 +50,7 @@ export const createGetMapMarkersRoute = (
         return json(
           {
             error: "invalid_request",
-            message:
-              "Map markers request is invalid. pollId is required (use all_polls for all-polls aggregate mode).",
+            message: "Map markers request is invalid.",
           },
           400,
         );
@@ -59,7 +58,7 @@ export const createGetMapMarkersRoute = (
 
       const markers: GetPollVoteMapMarkersResponseDto =
         await mapMarkerServiceLike.getPollVoteMarkers({
-          pollId: parsedQuery.data.pollId,
+          pollId: parsedQuery.data.pollId || "",
           areaLevel: parsedQuery.data.areaLevel,
           parentAreaId: parsedQuery.data.parentAreaId,
           countryCode: parsedQuery.data.countryCode,

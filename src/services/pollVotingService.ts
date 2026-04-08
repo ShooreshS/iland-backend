@@ -1,4 +1,5 @@
 import identityProfileRepository from "../repositories/identityProfileRepository";
+import pollMapRefreshQueueRepository from "../repositories/pollMapRefreshQueueRepository";
 import pollRepository from "../repositories/pollRepository";
 import verifiedIdentityRepository from "../repositories/verifiedIdentityRepository";
 import voteRepository from "../repositories/voteRepository";
@@ -225,6 +226,76 @@ const pollRequiresIdentityProfile = (poll: PollRow): boolean =>
 const pollRequiresHomeArea = (poll: PollRow): boolean =>
   toArray(poll.allowed_home_area_ids).length > 0;
 
+const canonicalizeNegativeZero = (value: number): number =>
+  Object.is(value, -0) ? 0 : value;
+
+const roundToTwoDecimals = (value: number): number =>
+  canonicalizeNegativeZero(Math.round(value * 100) / 100);
+
+const resolveSnapshotCoordinate = (
+  value: number | null,
+  bounds: { min: number; max: number },
+): number | null => {
+  if (!Number.isFinite(value)) {
+    return null;
+  }
+
+  const numericValue = Number(value);
+  if (numericValue < bounds.min || numericValue > bounds.max) {
+    return null;
+  }
+
+  return roundToTwoDecimals(numericValue);
+};
+
+const resolveVoteLocationSnapshot = (
+  identityProfile: {
+    home_approx_latitude: number | null;
+    home_approx_longitude: number | null;
+  } | null,
+  snapshotAt: string,
+):
+  | {
+      vote_latitude_l0: number;
+      vote_longitude_l0: number;
+      vote_location_snapshot_at: string;
+      vote_location_snapshot_version: number;
+    }
+  | {
+      vote_latitude_l0: null;
+      vote_longitude_l0: null;
+      vote_location_snapshot_at: null;
+      vote_location_snapshot_version: number;
+    } => {
+  const latitude = resolveSnapshotCoordinate(identityProfile?.home_approx_latitude ?? null, {
+    min: -90,
+    max: 90,
+  });
+  const longitude = resolveSnapshotCoordinate(
+    identityProfile?.home_approx_longitude ?? null,
+    {
+      min: -180,
+      max: 180,
+    },
+  );
+
+  if (latitude === null || longitude === null) {
+    return {
+      vote_latitude_l0: null,
+      vote_longitude_l0: null,
+      vote_location_snapshot_at: null,
+      vote_location_snapshot_version: 1,
+    };
+  }
+
+  return {
+    vote_latitude_l0: latitude,
+    vote_longitude_l0: longitude,
+    vote_location_snapshot_at: snapshotAt,
+    vote_location_snapshot_version: 1,
+  };
+};
+
 export const pollVotingService = {
   async getPollSummaries(viewerUserId: string): Promise<PollSummaryDto[]> {
     const polls = await pollRepository.listAll();
@@ -400,6 +471,15 @@ export const pollVotingService = {
     }
 
     const submittedAt = new Date().toISOString();
+    const locationSnapshot = resolveVoteLocationSnapshot(
+      identityProfile
+        ? {
+            home_approx_latitude: identityProfile.home_approx_latitude,
+            home_approx_longitude: identityProfile.home_approx_longitude,
+          }
+        : null,
+      submittedAt,
+    );
 
     try {
       const insertedVote = await voteRepository.insert({
@@ -407,10 +487,23 @@ export const pollVotingService = {
         option_id: optionId,
         user_id: viewer.id,
         verified_identity_id: verifiedIdentityId,
+        vote_latitude_l0: locationSnapshot.vote_latitude_l0,
+        vote_longitude_l0: locationSnapshot.vote_longitude_l0,
+        vote_location_snapshot_at: locationSnapshot.vote_location_snapshot_at,
+        vote_location_snapshot_version: locationSnapshot.vote_location_snapshot_version,
         submitted_at: submittedAt,
         is_valid: true,
         invalid_reason: null,
       });
+
+      try {
+        await pollMapRefreshQueueRepository.enqueuePoll(pollId);
+      } catch (enqueueError) {
+        console.error("[pollVotingService] failed to enqueue poll map refresh", {
+          pollId,
+          error: enqueueError,
+        });
+      }
 
       return {
         success: true,

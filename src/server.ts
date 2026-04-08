@@ -3,6 +3,7 @@ import { withErrorHandling } from "./middleware/errorHandler";
 import { json } from "./middleware/json";
 import { withRequestLogging } from "./middleware/requestLogger";
 import { resolveRoute } from "./routes";
+import { createPollMapRefreshWorker } from "./services/pollMapRefreshWorker";
 import type { RouteHandler } from "./types/http";
 
 const baseHandler: RouteHandler = async (context) => {
@@ -25,6 +26,19 @@ const baseHandler: RouteHandler = async (context) => {
 };
 
 const fetchHandler = withErrorHandling(withRequestLogging(baseHandler));
+
+const pollMapRefreshWorker = createPollMapRefreshWorker({
+  intervalMs: env.pollMapRefreshWorker.intervalMs,
+  pendingVoteThreshold: env.pollMapRefreshWorker.pendingVoteThreshold,
+  maxQueueAgeMs: env.pollMapRefreshWorker.maxDelayMs,
+  maxPollsPerCycle: env.pollMapRefreshWorker.maxPollsPerCycle,
+});
+
+if (env.pollMapRefreshWorker.enabled) {
+  pollMapRefreshWorker.start();
+} else {
+  console.info("[pollMapRefreshWorker] disabled");
+}
 
 const server = Bun.serve({
   hostname: env.host,
