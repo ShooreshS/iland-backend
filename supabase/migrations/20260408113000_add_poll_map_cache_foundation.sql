@@ -92,7 +92,12 @@ begin
 end;
 $$;
 
-create or replace function public.enqueue_poll_map_refresh(p_poll_id uuid)
+-- PostgreSQL cannot CREATE OR REPLACE a function when its return type changes.
+-- Older manual setup SQL created this function as returns void; drop the
+-- one-argument signature before recreating the current queue-row-returning API.
+drop function if exists public.enqueue_poll_map_refresh(uuid);
+
+create function public.enqueue_poll_map_refresh(p_poll_id uuid)
 returns public.poll_map_refresh_queue
 language plpgsql
 as $$
