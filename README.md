@@ -103,17 +103,19 @@ Notes:
 - This bridge is intentionally temporary until real auth/session is attached.
 - New `/auth/*` routes are now partially wired for the transition:
   - challenge issuance for register/login;
+  - canonical challenge payload generation for device signing;
   - registration completion with canonical-identity binding;
+  - P-256 device-key signature verification for registration and login;
   - login completion that creates first-party bearer sessions;
   - bearer-session viewer resolution in `requireViewer`;
   - rotating refresh-token families;
   - logout and per-session revocation;
   - auth audit events.
 - Current deliberate limitation:
-  - full production cryptographic verification of device-key signatures and app
-    attestation assertions is still behind the transitional bypass seam in
-    non-production environments;
-  - production must disable that bypass before release.
+  - full production cryptographic verification of app attestation assertions is
+    still behind the transitional bypass seam in non-production environments;
+  - P-256 challenge signatures are now verified server-side;
+  - production must disable the attestation bypass before release.
 
 ## 6. Minimal Test Data Path
 

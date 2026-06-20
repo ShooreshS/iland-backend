@@ -1,3 +1,6 @@
+import appAttestationVerifier from "../auth/appAttestation";
+import buildCanonicalAuthChallengePayload from "../auth/challengePayload";
+import verifyCredentialSignature from "../auth/credentialSignature";
 import authAccountBindingService from "./authAccountBindingService";
 import authPolicy from "../auth/policy";
 import {
@@ -59,6 +62,24 @@ const invalidChallengeResponse = (message: string) => ({
   message,
 });
 
+const invalidSignatureResponse = (
+  errorCode: "INVALID_PUBLIC_KEY" | "INVALID_SIGNATURE_ENCODING" | "INVALID_SIGNATURE",
+  message: string,
+) => ({
+  success: false as const,
+  errorCode,
+  message,
+});
+
+const attestationRejectedResponse = (
+  errorCode: "ATTESTATION_INVALID" | "NOT_IMPLEMENTED",
+  message: string,
+) => ({
+  success: false as const,
+  errorCode,
+  message,
+});
+
 const disabledAccountResponse = {
   success: false as const,
   errorCode: "ACCOUNT_DISABLED",
@@ -95,19 +116,6 @@ const verifyStoredChallenge = async (
   return {
     success: true as const,
     challenge: stored,
-  };
-};
-
-const verifyTransitionalCryptoGate = (operation: string) => {
-  if (authPolicy.enableTransitionalCryptoBypass) {
-    return {
-      success: true as const,
-      transitionalCryptoBypassUsed: true,
-    };
-  }
-
-  return {
-    ...notImplementedErrorResponse(operation),
   };
 };
 
@@ -152,6 +160,12 @@ export const authService = {
       success: true as const,
       challengeId: challengeRow.id,
       challenge,
+      signaturePayload: buildCanonicalAuthChallengePayload({
+        challengeId: challengeRow.id,
+        challenge,
+        purpose: input.purpose,
+        platform: input.platform,
+      }),
       purpose: input.purpose,
       platform: input.platform,
       issuer: authPolicy.issuer,
@@ -169,9 +183,19 @@ export const authService = {
       return challengeResult;
     }
 
-    const cryptoGate = verifyTransitionalCryptoGate("Registration completion");
-    if (!cryptoGate.success) {
-      return cryptoGate;
+    const signatureResult = verifyCredentialSignature({
+      publicKeyPem: input.publicKeyPem,
+      challengeId: input.challengeId,
+      challenge: input.challenge,
+      purpose: "register",
+      platform: input.platform,
+      signature: input.signature,
+    });
+    if (!signatureResult.success) {
+      return invalidSignatureResponse(
+        signatureResult.errorCode,
+        signatureResult.message,
+      );
     }
 
     const user =
@@ -192,6 +216,31 @@ export const authService = {
         message:
           "The supplied authentication credential is already bound to a different user.",
       };
+    }
+
+    if (
+      existingCredential &&
+      existingCredential.public_key_pem.trim() !== input.publicKeyPem.trim()
+    ) {
+      return {
+        success: false as const,
+        errorCode: "CREDENTIAL_KEY_MISMATCH",
+        message:
+          "The supplied credential id is already enrolled with a different public key.",
+      };
+    }
+
+    const appAttestationResult =
+      appAttestationVerifier.verifyRegistrationAttestation({
+        platform: input.platform,
+        appAttestation: input.appAttestation,
+        challenge: input.challenge,
+      });
+    if (!appAttestationResult.success) {
+      return attestationRejectedResponse(
+        appAttestationResult.errorCode,
+        appAttestationResult.message,
+      );
     }
 
     const authCredential =
@@ -215,13 +264,12 @@ export const authService = {
         user_id: user.id,
         auth_credential_id: authCredential.id,
         platform: input.platform,
-        attestation_provider:
-          input.platform === "ios"
-            ? "ios_app_attest"
-            : "android_play_integrity",
-        environment: authPolicy.enableTransitionalCryptoBypass
-          ? "development"
-          : "production",
+        attestation_provider: appAttestationResult.provider,
+        environment: appAttestationResult.environment,
+        attestation_key_id: appAttestationResult.attestationKeyId,
+        app_identifier: appAttestationResult.appIdentifier,
+        package_name: appAttestationResult.packageName,
+        signing_cert_digest: appAttestationResult.signingCertDigest,
         status: "verified",
       }));
 
@@ -235,7 +283,10 @@ export const authService = {
       metadata: {
         challengeId: input.challengeId,
         canonicalIdentityKeyBound: true,
-        transitionalCryptoBypassUsed: cryptoGate.transitionalCryptoBypassUsed,
+        signatureEncoding: signatureResult.signatureEncoding,
+        signaturePayloadVersion: "iland-auth-v1",
+        transitionalCryptoBypassUsed:
+          appAttestationResult.transitionalCryptoBypassUsed,
         appAttestationCredentialId: appAttestationCredential.id,
       },
     });
@@ -258,7 +309,8 @@ export const authService = {
         provider: appAttestationCredential.attestation_provider,
         status: appAttestationCredential.status,
       },
-      transitionalCryptoBypassUsed: cryptoGate.transitionalCryptoBypassUsed,
+      transitionalCryptoBypassUsed:
+        appAttestationResult.transitionalCryptoBypassUsed,
     };
   },
 
@@ -270,11 +322,6 @@ export const authService = {
     );
     if (!challengeResult.success) {
       return challengeResult;
-    }
-
-    const cryptoGate = verifyTransitionalCryptoGate("Login completion");
-    if (!cryptoGate.success) {
-      return cryptoGate;
     }
 
     const authCredential = await authCredentialRepository.getByCredentialId(
@@ -315,6 +362,34 @@ export const authService = {
       };
     }
 
+    const signatureResult = verifyCredentialSignature({
+      publicKeyPem: authCredential.public_key_pem,
+      challengeId: input.challengeId,
+      challenge: input.challenge,
+      purpose: "login",
+      platform: authCredential.platform,
+      signature: input.signature,
+    });
+    if (!signatureResult.success) {
+      return invalidSignatureResponse(
+        signatureResult.errorCode,
+        signatureResult.message,
+      );
+    }
+
+    const loginAssertionResult = appAttestationVerifier.verifyLoginAssertion({
+      platform: authCredential.platform,
+      appAssertion: input.appAssertion,
+      challenge: input.challenge,
+      storedCredential: appAttestationCredential,
+    });
+    if (!loginAssertionResult.success) {
+      return attestationRejectedResponse(
+        loginAssertionResult.errorCode,
+        loginAssertionResult.message,
+      );
+    }
+
     const existingSessions = await authSessionRepository.listByUserId(user.id);
     const activeSessionCount = existingSessions.filter(
       (session) => session.status === "active",
@@ -345,6 +420,11 @@ export const authService = {
       expires_at: accessExpiresAt,
     });
 
+    await authCredentialRepository.touchLastAuthenticated(authCredential.id);
+    await appAttestationCredentialRepository.recordAssertion(authCredential.id, {
+      lastAssertionNonceHash: loginAssertionResult.lastAssertionNonceHash,
+    });
+
     await refreshTokenFamilyRepository.insert({
       session_id: session.id,
       user_id: user.id,
@@ -361,7 +441,10 @@ export const authService = {
       platform: authCredential.platform,
       metadata: {
         challengeId: input.challengeId,
-        transitionalCryptoBypassUsed: cryptoGate.transitionalCryptoBypassUsed,
+        signatureEncoding: signatureResult.signatureEncoding,
+        signaturePayloadVersion: "iland-auth-v1",
+        transitionalCryptoBypassUsed:
+          loginAssertionResult.transitionalCryptoBypassUsed,
       },
     });
 
@@ -377,7 +460,8 @@ export const authService = {
         userId: session.user_id,
         authGeneration: session.auth_generation,
       },
-      transitionalCryptoBypassUsed: cryptoGate.transitionalCryptoBypassUsed,
+      transitionalCryptoBypassUsed:
+        loginAssertionResult.transitionalCryptoBypassUsed,
     };
   },
 

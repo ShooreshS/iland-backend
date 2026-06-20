@@ -63,6 +63,27 @@ export const authCredentialRepository = {
 
     return data || [];
   },
+
+  async touchLastAuthenticated(
+    authCredentialId: string,
+  ): Promise<AuthCredentialRow | null> {
+    const supabase = requireSupabaseAdminClient();
+
+    const { data, error } = await supabase
+      .from("auth_credentials")
+      .update({
+        last_authenticated_at: new Date().toISOString(),
+      })
+      .eq("id", authCredentialId)
+      .select(AUTH_CREDENTIAL_COLUMNS)
+      .maybeSingle<AuthCredentialRow>();
+
+    if (error) {
+      throw error;
+    }
+
+    return data || null;
+  },
 };
 
 export default authCredentialRepository;

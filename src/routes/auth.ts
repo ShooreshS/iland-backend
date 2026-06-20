@@ -110,6 +110,16 @@ const registerCompleteRoute: RouteDefinition = {
         ? 201
         : result.errorCode === "INVALID_CHALLENGE"
           ? 400
+          : result.errorCode === "INVALID_PUBLIC_KEY"
+            ? 400
+            : result.errorCode === "INVALID_SIGNATURE_ENCODING"
+              ? 400
+              : result.errorCode === "INVALID_SIGNATURE"
+                ? 401
+                : result.errorCode === "ATTESTATION_INVALID"
+                  ? 400
+                  : result.errorCode === "CREDENTIAL_KEY_MISMATCH"
+                    ? 409
           : result.errorCode === "ACCOUNT_DISABLED"
             ? 403
             : result.errorCode === "CREDENTIAL_ALREADY_BOUND"
@@ -170,6 +180,12 @@ const loginCompleteRoute: RouteDefinition = {
         ? 200
         : result.errorCode === "INVALID_CHALLENGE"
           ? 400
+          : result.errorCode === "INVALID_SIGNATURE_ENCODING"
+            ? 400
+            : result.errorCode === "INVALID_SIGNATURE"
+              ? 401
+              : result.errorCode === "ATTESTATION_INVALID"
+                ? 400
           : result.errorCode === "CREDENTIAL_NOT_FOUND"
             ? 404
             : result.errorCode === "USER_NOT_FOUND"

@@ -54,6 +54,33 @@ export const appAttestationCredentialRepository = {
 
     return data || null;
   },
+
+  async recordAssertion(
+    authCredentialId: string,
+    input: {
+      lastAssertionNonceHash: string | null;
+      lastCounter?: number | null;
+    },
+  ): Promise<AppAttestationCredentialRow | null> {
+    const supabase = requireSupabaseAdminClient();
+
+    const { data, error } = await supabase
+      .from("app_attestation_credentials")
+      .update({
+        last_asserted_at: new Date().toISOString(),
+        last_assertion_nonce_hash: input.lastAssertionNonceHash,
+        last_counter: input.lastCounter ?? null,
+      })
+      .eq("auth_credential_id", authCredentialId)
+      .select(APP_ATTESTATION_CREDENTIAL_COLUMNS)
+      .maybeSingle<AppAttestationCredentialRow>();
+
+    if (error) {
+      throw error;
+    }
+
+    return data || null;
+  },
 };
 
 export default appAttestationCredentialRepository;
