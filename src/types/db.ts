@@ -181,6 +181,29 @@ export type NewAuthAuditEventRow = {
   occurred_at?: string;
 };
 
+export type AuthChallengePurpose = "register" | "login" | "recover";
+
+export type AuthChallengeRow = {
+  id: string;
+  purpose: AuthChallengePurpose;
+  platform: AuthCredentialPlatform;
+  challenge_hash: string;
+  credential_id_hint: string | null;
+  expires_at: string;
+  consumed_at: string | null;
+  metadata: Record<string, unknown>;
+  created_at: string;
+};
+
+export type NewAuthChallengeRow = {
+  purpose: AuthChallengePurpose;
+  platform: AuthCredentialPlatform;
+  challenge_hash: string;
+  credential_id_hint?: string | null;
+  expires_at: string;
+  metadata?: Record<string, unknown>;
+};
+
 export type IdentityProfileRow = {
   id: string;
   user_id: string;

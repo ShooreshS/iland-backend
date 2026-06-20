@@ -6,6 +6,7 @@ Minimal Bun + TypeScript backend for current 0.0.86 slices:
 - Vote submission
 - Draft poll create/edit/publish
 - Provisional user bootstrap
+- Auth foundation scaffolding for future first-party sessions / SSO
 
 ## 1. Local Run (Hosted Supabase)
 
@@ -61,6 +62,14 @@ curl -X POST http://127.0.0.1:3001/users/bootstrap
 - `GET /health`
 - `GET /health/db`
 - `POST /users/bootstrap`
+- `POST /auth/register/challenge`
+- `POST /auth/register/complete`
+- `POST /auth/login/challenge`
+- `POST /auth/login/complete`
+- `POST /auth/refresh`
+- `POST /auth/logout`
+- `GET /auth/sessions`
+- `POST /auth/sessions/:id/revoke`
 - `GET /me/profile`
 - `POST /me/wallet/issue`
 - `GET /polls`
@@ -92,6 +101,8 @@ Notes:
 - Viewer-scoped backend requests use that stored id in the temporary dev header (`x-dev-viewer-id` by default).
 - No client `userId` is sent in request payloads.
 - This bridge is intentionally temporary until real auth/session is attached.
+- New `/auth/*` routes now define the future backend auth contract, but cryptographic
+  registration/login completion and bearer-session enforcement are not fully wired yet.
 
 ## 6. Minimal Test Data Path
 
