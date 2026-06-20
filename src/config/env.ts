@@ -24,6 +24,11 @@ const parsed = z
     SUPABASE_PROJECT_REF: z.string().min(1).optional(),
     ENABLE_DEV_VIEWER_AUTH: z.string().optional(),
     DEV_VIEWER_ID_HEADER: z.string().min(1).optional(),
+    AUTH_ISSUER: z.string().url().optional(),
+    AUTH_ACCESS_TOKEN_TTL_SECONDS: z.coerce.number().int().min(60).optional(),
+    AUTH_REFRESH_TOKEN_TTL_DAYS: z.coerce.number().int().min(1).optional(),
+    AUTH_MAX_ACTIVE_SESSIONS_PER_USER: z.coerce.number().int().min(1).optional(),
+    AUTH_REQUIRE_ATTESTED_SESSIONS_FOR_PROTECTED_ROUTES: z.string().optional(),
     WALLET_ISSUER_ID: z.string().min(1).optional(),
     WALLET_ISSUER_SIGNING_SECRET: z.string().min(1).optional(),
     VERIFIED_IDENTITY_PEPPER: z.string().min(1).optional(),
@@ -57,6 +62,19 @@ const parsed = z
     SUPABASE_PROJECT_REF: emptyToUndefined(process.env.SUPABASE_PROJECT_REF),
     ENABLE_DEV_VIEWER_AUTH: emptyToUndefined(process.env.ENABLE_DEV_VIEWER_AUTH),
     DEV_VIEWER_ID_HEADER: emptyToUndefined(process.env.DEV_VIEWER_ID_HEADER),
+    AUTH_ISSUER: emptyToUndefined(process.env.AUTH_ISSUER),
+    AUTH_ACCESS_TOKEN_TTL_SECONDS: emptyToUndefined(
+      process.env.AUTH_ACCESS_TOKEN_TTL_SECONDS,
+    ),
+    AUTH_REFRESH_TOKEN_TTL_DAYS: emptyToUndefined(
+      process.env.AUTH_REFRESH_TOKEN_TTL_DAYS,
+    ),
+    AUTH_MAX_ACTIVE_SESSIONS_PER_USER: emptyToUndefined(
+      process.env.AUTH_MAX_ACTIVE_SESSIONS_PER_USER,
+    ),
+    AUTH_REQUIRE_ATTESTED_SESSIONS_FOR_PROTECTED_ROUTES: emptyToUndefined(
+      process.env.AUTH_REQUIRE_ATTESTED_SESSIONS_FOR_PROTECTED_ROUTES,
+    ),
     WALLET_ISSUER_ID: emptyToUndefined(process.env.WALLET_ISSUER_ID),
     WALLET_ISSUER_SIGNING_SECRET: emptyToUndefined(
       process.env.WALLET_ISSUER_SIGNING_SECRET,
@@ -93,6 +111,16 @@ const enableDevViewerAuth =
 const devViewerIdHeader = (parsed.DEV_VIEWER_ID_HEADER || "x-dev-viewer-id")
   .trim()
   .toLowerCase();
+const authIssuer =
+  parsed.AUTH_ISSUER || "https://iland-backend-production.up.railway.app/idp";
+const authAccessTokenTtlSeconds = parsed.AUTH_ACCESS_TOKEN_TTL_SECONDS || 15 * 60;
+const authRefreshTokenTtlDays = parsed.AUTH_REFRESH_TOKEN_TTL_DAYS || 30;
+const authMaxActiveSessionsPerUser =
+  parsed.AUTH_MAX_ACTIVE_SESSIONS_PER_USER || 3;
+const authRequireAttestedSessionsForProtectedRoutes =
+  parsed.AUTH_REQUIRE_ATTESTED_SESSIONS_FOR_PROTECTED_ROUTES !== undefined
+    ? toBoolean(parsed.AUTH_REQUIRE_ATTESTED_SESSIONS_FOR_PROTECTED_ROUTES)
+    : true;
 
 const walletIssuerId =
   parsed.WALLET_ISSUER_ID || "did:iland:backend:issuer:v0.0.86";
@@ -132,6 +160,12 @@ export const env = Object.freeze({
   auth: Object.freeze({
     enableDevViewerAuth,
     devViewerIdHeader,
+    issuer: authIssuer,
+    accessTokenTtlSeconds: authAccessTokenTtlSeconds,
+    refreshTokenTtlDays: authRefreshTokenTtlDays,
+    maxActiveSessionsPerUser: authMaxActiveSessionsPerUser,
+    requireAttestedSessionsForProtectedRoutes:
+      authRequireAttestedSessionsForProtectedRoutes,
   }),
   wallet: Object.freeze({
     issuerId: walletIssuerId,

@@ -25,6 +25,162 @@ export type NewUserRow = {
   preferred_language: string | null;
 };
 
+export type AuthCredentialPlatform = "ios" | "android";
+export type AuthCredentialAlgorithm = "p256";
+export type AuthCredentialStatus = "active" | "revoked" | "superseded";
+
+export type AuthCredentialRow = {
+  id: string;
+  user_id: string;
+  platform: AuthCredentialPlatform;
+  algorithm: AuthCredentialAlgorithm;
+  credential_id: string;
+  public_key_pem: string;
+  status: AuthCredentialStatus;
+  device_label: string | null;
+  last_authenticated_at: string | null;
+  superseded_by_auth_credential_id: string | null;
+  revoked_at: string | null;
+  revocation_reason: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type NewAuthCredentialRow = {
+  user_id: string;
+  platform: AuthCredentialPlatform;
+  algorithm: AuthCredentialAlgorithm;
+  credential_id: string;
+  public_key_pem: string;
+  device_label?: string | null;
+};
+
+export type AppAttestationProvider =
+  | "ios_app_attest"
+  | "android_play_integrity";
+export type AppAttestationEnvironment = "development" | "production";
+export type AppAttestationCredentialStatus =
+  | "pending"
+  | "verified"
+  | "revoked"
+  | "superseded";
+
+export type AppAttestationCredentialRow = {
+  id: string;
+  user_id: string;
+  auth_credential_id: string;
+  platform: AuthCredentialPlatform;
+  attestation_provider: AppAttestationProvider;
+  environment: AppAttestationEnvironment;
+  attestation_key_id: string | null;
+  app_identifier: string | null;
+  package_name: string | null;
+  signing_cert_digest: string | null;
+  status: AppAttestationCredentialStatus;
+  last_counter: number | null;
+  last_asserted_at: string | null;
+  last_assertion_nonce_hash: string | null;
+  revoked_at: string | null;
+  revocation_reason: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type NewAppAttestationCredentialRow = {
+  user_id: string;
+  auth_credential_id: string;
+  platform: AuthCredentialPlatform;
+  attestation_provider: AppAttestationProvider;
+  environment: AppAttestationEnvironment;
+  attestation_key_id?: string | null;
+  app_identifier?: string | null;
+  package_name?: string | null;
+  signing_cert_digest?: string | null;
+  status?: AppAttestationCredentialStatus;
+};
+
+export type AuthSessionStatus = "active" | "revoked" | "expired" | "superseded";
+
+export type AuthSessionRow = {
+  id: string;
+  user_id: string;
+  auth_credential_id: string;
+  status: AuthSessionStatus;
+  auth_generation: number;
+  attestation_verified_at: string;
+  last_seen_at: string;
+  expires_at: string;
+  revoked_at: string | null;
+  revocation_reason: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type NewAuthSessionRow = {
+  user_id: string;
+  auth_credential_id: string;
+  status?: AuthSessionStatus;
+  auth_generation: number;
+  attestation_verified_at: string;
+  last_seen_at?: string;
+  expires_at: string;
+};
+
+export type RefreshTokenFamilyStatus =
+  | "active"
+  | "revoked"
+  | "reused"
+  | "expired";
+
+export type RefreshTokenFamilyRow = {
+  id: string;
+  session_id: string;
+  user_id: string;
+  status: RefreshTokenFamilyStatus;
+  current_token_hash: string;
+  previous_token_hash: string | null;
+  rotation_counter: number;
+  last_rotated_at: string;
+  last_used_at: string | null;
+  expires_at: string;
+  revoked_at: string | null;
+  revocation_reason: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type NewRefreshTokenFamilyRow = {
+  session_id: string;
+  user_id: string;
+  status?: RefreshTokenFamilyStatus;
+  current_token_hash: string;
+  previous_token_hash?: string | null;
+  rotation_counter?: number;
+  last_rotated_at?: string;
+  expires_at: string;
+};
+
+export type AuthAuditEventRow = {
+  id: string;
+  user_id: string | null;
+  auth_credential_id: string | null;
+  session_id: string | null;
+  event_type: string;
+  platform: AuthCredentialPlatform | null;
+  metadata: Record<string, unknown>;
+  occurred_at: string;
+};
+
+export type NewAuthAuditEventRow = {
+  user_id?: string | null;
+  auth_credential_id?: string | null;
+  session_id?: string | null;
+  event_type: string;
+  platform?: AuthCredentialPlatform | null;
+  metadata?: Record<string, unknown>;
+  occurred_at?: string;
+};
+
 export type IdentityProfileRow = {
   id: string;
   user_id: string;

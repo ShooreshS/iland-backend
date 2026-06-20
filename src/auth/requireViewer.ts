@@ -2,6 +2,7 @@ import env from "../config/env";
 import { json } from "../middleware/json";
 import userRepository from "../repositories/userRepository";
 import type { ViewerContext } from "../types/auth";
+import authPolicy from "./policy";
 
 type RequireViewerSuccess = {
   ok: true;
@@ -26,7 +27,27 @@ const buildFailure = (
 
 // Temporary local/dev auth seam for 0.0.86 backend bootstrap.
 // Replace this resolver with real request auth/session handling.
+//
+// Enforced policy intention:
+// - production protected routes must eventually resolve the viewer from a
+//   server-side session that originated from both a valid device auth
+//   credential and a verified app attestation;
+// - caller-supplied identity headers are a migration seam only, not a valid
+//   long-term trust boundary.
 export const requireViewer = async (request: Request): Promise<RequireViewerResult> => {
+  const authorizationHeader = request.headers.get("authorization")?.trim() || null;
+  if (authorizationHeader) {
+    // Future path: bearer-token session validation belongs here. Until that is
+    // implemented, reject explicitly instead of silently falling back to the
+    // legacy bootstrap header. That makes the migration boundary visible and
+    // avoids ambiguous mixed-auth behavior.
+    return buildFailure(
+      503,
+      "session_auth_not_implemented",
+      `Bearer-token viewer resolution is not implemented yet. Planned issuer: ${authPolicy.issuer}`,
+    );
+  }
+
   if (!env.auth.enableDevViewerAuth) {
     return buildFailure(
       503,
