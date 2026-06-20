@@ -1,6 +1,8 @@
+import env from "../config/env";
 import identityProfileRepository from "../repositories/identityProfileRepository";
 import userRepository from "../repositories/userRepository";
 import verifiedIdentityRepository from "../repositories/verifiedIdentityRepository";
+import { deriveCanonicalIdentityKey } from "./verifiedIdentityDerivationService";
 import type { UserRow } from "../types/db";
 
 const createIdentityProfile = async (userId: string) =>
@@ -22,7 +24,11 @@ const createIdentityProfile = async (userId: string) =>
   });
 
 const createVerifiedUser = async (
-  canonicalIdentityKey: string,
+  params: {
+    canonicalIdentityKey: string;
+    normalizationVersion: number;
+    verificationMethod: "passport_nfc";
+  },
 ): Promise<UserRow> => {
   const user = await userRepository.insert({
     username: null,
@@ -40,9 +46,9 @@ const createVerifiedUser = async (
   await createIdentityProfile(user.id);
   await verifiedIdentityRepository.insert({
     user_id: user.id,
-    canonical_identity_key: canonicalIdentityKey,
-    normalization_version: 1,
-    verification_method: "passport_nfc",
+    canonical_identity_key: params.canonicalIdentityKey,
+    normalization_version: params.normalizationVersion,
+    verification_method: params.verificationMethod,
     verified_at: new Date().toISOString(),
   });
 
@@ -50,12 +56,33 @@ const createVerifiedUser = async (
 };
 
 export const authAccountBindingService = {
+  async resolveOrCreateUserByVerifiedIdentity(input: {
+    nidnh: string;
+    normalizationVersion: number;
+    verificationMethod: "passport_nfc";
+  }): Promise<UserRow> {
+    const canonicalIdentityKey = deriveCanonicalIdentityKey({
+      nidnh: input.nidnh,
+      pepper: env.verifiedIdentity.pepper,
+    });
+
+    return this.resolveOrCreateUserByCanonicalIdentityKey({
+      canonicalIdentityKey,
+      normalizationVersion: input.normalizationVersion,
+      verificationMethod: input.verificationMethod,
+    });
+  },
+
   async resolveOrCreateUserByCanonicalIdentityKey(
-    canonicalIdentityKey: string,
+    input: {
+      canonicalIdentityKey: string;
+      normalizationVersion: number;
+      verificationMethod: "passport_nfc";
+    },
   ): Promise<UserRow> {
     const existingVerifiedIdentity =
       await verifiedIdentityRepository.getByCanonicalIdentityKey(
-        canonicalIdentityKey,
+        input.canonicalIdentityKey,
       );
 
     if (existingVerifiedIdentity) {
@@ -76,7 +103,7 @@ export const authAccountBindingService = {
     // backend identity is anchored by canonical_identity_key, not by device. If
     // no verified user exists yet for the canonical key, registration creates
     // the authoritative backend user and identity profile once.
-    return createVerifiedUser(canonicalIdentityKey);
+    return createVerifiedUser(input);
   },
 };
 

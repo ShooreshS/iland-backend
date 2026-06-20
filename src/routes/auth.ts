@@ -22,7 +22,9 @@ const registrationCompleteSchema = z
     publicKeyPem: z.string().trim().min(1),
     signature: z.string().trim().min(1),
     appAttestation: z.record(z.unknown()),
-    canonicalIdentityKey: z.string().trim().min(1),
+    nidnh: z.string().trim().min(1),
+    normalizationVersion: z.number().int(),
+    verificationMethod: z.enum(["passport_nfc"]).default("passport_nfc"),
   })
   .strict();
 

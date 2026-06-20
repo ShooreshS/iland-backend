@@ -113,6 +113,9 @@ Notes:
   - rotating refresh-token families;
   - logout and per-session revocation;
   - auth audit events.
+- Registration completion now binds server-side verified identity input
+  (`nidnh`, `normalizationVersion`, `verificationMethod`) rather than trusting a
+  client-supplied canonical identity key.
 - Current deliberate limitation:
   - full production cryptographic verification of app attestation assertions is
     still behind the transitional bypass seam in non-production environments;

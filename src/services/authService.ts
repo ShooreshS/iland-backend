@@ -32,7 +32,9 @@ type RegistrationCompletionInput = {
   publicKeyPem: string;
   signature: string;
   appAttestation: Record<string, unknown>;
-  canonicalIdentityKey: string;
+  nidnh: string;
+  normalizationVersion: number;
+  verificationMethod: "passport_nfc";
   platform: AuthCredentialPlatform;
 };
 
@@ -199,9 +201,11 @@ export const authService = {
     }
 
     const user =
-      await authAccountBindingService.resolveOrCreateUserByCanonicalIdentityKey(
-        input.canonicalIdentityKey,
-      );
+      await authAccountBindingService.resolveOrCreateUserByVerifiedIdentity({
+        nidnh: input.nidnh,
+        normalizationVersion: input.normalizationVersion,
+        verificationMethod: input.verificationMethod,
+      });
 
     if (user.account_status !== "active") {
       return disabledAccountResponse;
@@ -282,7 +286,7 @@ export const authService = {
       platform: input.platform,
       metadata: {
         challengeId: input.challengeId,
-        canonicalIdentityKeyBound: true,
+        verifiedIdentityBound: true,
         signatureEncoding: signatureResult.signatureEncoding,
         signaturePayloadVersion: "iland-auth-v1",
         transitionalCryptoBypassUsed:
