@@ -106,6 +106,8 @@ Notes:
   - canonical challenge payload generation for device signing;
   - registration completion with canonical-identity binding;
   - P-256 device-key signature verification for registration and login;
+  - app-identity contract enforcement against the configured iOS bundle id and
+    Android package name;
   - login completion that creates first-party bearer sessions;
   - bearer-session viewer resolution in `requireViewer`;
   - rotating refresh-token families;
@@ -116,6 +118,9 @@ Notes:
     still behind the transitional bypass seam in non-production environments;
   - P-256 challenge signatures are now verified server-side;
   - production must disable the attestation bypass before release.
+  - production startup now fails closed if either:
+    - `AUTH_ENABLE_TRANSITIONAL_CRYPTO_BYPASS=true`, or
+    - `ENABLE_DEV_VIEWER_AUTH=true`.
 
 ## 6. Minimal Test Data Path
 

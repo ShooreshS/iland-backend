@@ -30,6 +30,12 @@ const parsed = z
     AUTH_MAX_ACTIVE_SESSIONS_PER_USER: z.coerce.number().int().min(1).optional(),
     AUTH_REQUIRE_ATTESTED_SESSIONS_FOR_PROTECTED_ROUTES: z.string().optional(),
     AUTH_ENABLE_TRANSITIONAL_CRYPTO_BYPASS: z.string().optional(),
+    AUTH_IOS_BUNDLE_ID: z.string().min(1).optional(),
+    AUTH_ANDROID_PACKAGE_NAME: z.string().min(1).optional(),
+    AUTH_IOS_APP_ATTEST_ENVIRONMENT: z
+      .enum(["development", "production"])
+      .optional(),
+    AUTH_ANDROID_ALLOWED_SIGNING_CERT_DIGESTS: z.string().optional(),
     WALLET_ISSUER_ID: z.string().min(1).optional(),
     WALLET_ISSUER_SIGNING_SECRET: z.string().min(1).optional(),
     VERIFIED_IDENTITY_PEPPER: z.string().min(1).optional(),
@@ -51,6 +57,32 @@ const parsed = z
         message:
           "SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY must both be set together, or both omitted.",
         path: hasUrl ? ["SUPABASE_SERVICE_ROLE_KEY"] : ["SUPABASE_URL"],
+      });
+    }
+
+    const transitionalBypassEnabled =
+      input.AUTH_ENABLE_TRANSITIONAL_CRYPTO_BYPASS !== undefined
+        ? toBoolean(input.AUTH_ENABLE_TRANSITIONAL_CRYPTO_BYPASS)
+        : input.NODE_ENV !== "production";
+    const devViewerAuthEnabled =
+      input.ENABLE_DEV_VIEWER_AUTH !== undefined
+        ? toBoolean(input.ENABLE_DEV_VIEWER_AUTH)
+        : input.NODE_ENV !== "production";
+
+    if (input.NODE_ENV === "production" && transitionalBypassEnabled) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        message:
+          "AUTH_ENABLE_TRANSITIONAL_CRYPTO_BYPASS must be false in production.",
+        path: ["AUTH_ENABLE_TRANSITIONAL_CRYPTO_BYPASS"],
+      });
+    }
+
+    if (input.NODE_ENV === "production" && devViewerAuthEnabled) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "ENABLE_DEV_VIEWER_AUTH must be false in production.",
+        path: ["ENABLE_DEV_VIEWER_AUTH"],
       });
     }
   })
@@ -78,6 +110,16 @@ const parsed = z
     ),
     AUTH_ENABLE_TRANSITIONAL_CRYPTO_BYPASS: emptyToUndefined(
       process.env.AUTH_ENABLE_TRANSITIONAL_CRYPTO_BYPASS,
+    ),
+    AUTH_IOS_BUNDLE_ID: emptyToUndefined(process.env.AUTH_IOS_BUNDLE_ID),
+    AUTH_ANDROID_PACKAGE_NAME: emptyToUndefined(
+      process.env.AUTH_ANDROID_PACKAGE_NAME,
+    ),
+    AUTH_IOS_APP_ATTEST_ENVIRONMENT: emptyToUndefined(
+      process.env.AUTH_IOS_APP_ATTEST_ENVIRONMENT,
+    ) as "development" | "production" | undefined,
+    AUTH_ANDROID_ALLOWED_SIGNING_CERT_DIGESTS: emptyToUndefined(
+      process.env.AUTH_ANDROID_ALLOWED_SIGNING_CERT_DIGESTS,
     ),
     WALLET_ISSUER_ID: emptyToUndefined(process.env.WALLET_ISSUER_ID),
     WALLET_ISSUER_SIGNING_SECRET: emptyToUndefined(
@@ -129,6 +171,18 @@ const authEnableTransitionalCryptoBypass =
   parsed.AUTH_ENABLE_TRANSITIONAL_CRYPTO_BYPASS !== undefined
     ? toBoolean(parsed.AUTH_ENABLE_TRANSITIONAL_CRYPTO_BYPASS)
     : parsed.NODE_ENV !== "production";
+const authIosBundleId = parsed.AUTH_IOS_BUNDLE_ID || "com.shooresh.iland";
+const authAndroidPackageName =
+  parsed.AUTH_ANDROID_PACKAGE_NAME || "com.shooresh.iland";
+const authIosAppAttestEnvironment =
+  parsed.AUTH_IOS_APP_ATTEST_ENVIRONMENT ||
+  (parsed.NODE_ENV === "production" ? "production" : "development");
+const authAndroidAllowedSigningCertDigests = (
+  parsed.AUTH_ANDROID_ALLOWED_SIGNING_CERT_DIGESTS || ""
+)
+  .split(",")
+  .map((value) => value.trim())
+  .filter(Boolean);
 
 const walletIssuerId =
   parsed.WALLET_ISSUER_ID || "did:iland:backend:issuer:v0.0.86";
@@ -175,6 +229,10 @@ export const env = Object.freeze({
     requireAttestedSessionsForProtectedRoutes:
       authRequireAttestedSessionsForProtectedRoutes,
     enableTransitionalCryptoBypass: authEnableTransitionalCryptoBypass,
+    iosBundleId: authIosBundleId,
+    androidPackageName: authAndroidPackageName,
+    iosAppAttestEnvironment: authIosAppAttestEnvironment,
+    androidAllowedSigningCertDigests: authAndroidAllowedSigningCertDigests,
   }),
   wallet: Object.freeze({
     issuerId: walletIssuerId,

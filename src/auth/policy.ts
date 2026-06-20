@@ -25,6 +25,10 @@ export const authPolicy = Object.freeze({
   // integration can be built incrementally. This must remain disabled in
   // production.
   enableTransitionalCryptoBypass: env.auth.enableTransitionalCryptoBypass,
+  iosBundleId: env.auth.iosBundleId,
+  androidPackageName: env.auth.androidPackageName,
+  iosAppAttestEnvironment: env.auth.iosAppAttestEnvironment,
+  androidAllowedSigningCertDigests: env.auth.androidAllowedSigningCertDigests,
 });
 
 export default authPolicy;
