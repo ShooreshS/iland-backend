@@ -15,6 +15,8 @@ const createUser = (id: string): UserRow => ({
   wallet_credential_id: null,
   selected_land_id: null,
   preferred_language: null,
+  auth_generation: 1,
+  account_status: "active",
   created_at: "2026-04-06T00:00:00.000Z",
   updated_at: "2026-04-06T00:00:00.000Z",
 });

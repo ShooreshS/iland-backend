@@ -6,7 +6,7 @@ Minimal Bun + TypeScript backend for current 0.0.86 slices:
 - Vote submission
 - Draft poll create/edit/publish
 - Provisional user bootstrap
-- Auth foundation scaffolding for future first-party sessions / SSO
+- Auth foundation for first-party sessions / SSO transition
 
 ## 1. Local Run (Hosted Supabase)
 
@@ -101,8 +101,19 @@ Notes:
 - Viewer-scoped backend requests use that stored id in the temporary dev header (`x-dev-viewer-id` by default).
 - No client `userId` is sent in request payloads.
 - This bridge is intentionally temporary until real auth/session is attached.
-- New `/auth/*` routes now define the future backend auth contract, but cryptographic
-  registration/login completion and bearer-session enforcement are not fully wired yet.
+- New `/auth/*` routes are now partially wired for the transition:
+  - challenge issuance for register/login;
+  - registration completion with canonical-identity binding;
+  - login completion that creates first-party bearer sessions;
+  - bearer-session viewer resolution in `requireViewer`;
+  - rotating refresh-token families;
+  - logout and per-session revocation;
+  - auth audit events.
+- Current deliberate limitation:
+  - full production cryptographic verification of device-key signatures and app
+    attestation assertions is still behind the transitional bypass seam in
+    non-production environments;
+  - production must disable that bypass before release.
 
 ## 6. Minimal Test Data Path
 

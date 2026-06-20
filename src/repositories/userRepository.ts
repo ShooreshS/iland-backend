@@ -2,7 +2,7 @@ import { requireSupabaseAdminClient } from "../db/supabaseClient";
 import type { NewUserRow, UserRow } from "../types/db";
 
 const USER_COLUMNS =
-  "id,username,display_name,onboarding_status,verification_level,has_wallet,wallet_credential_id,selected_land_id,preferred_language,created_at,updated_at";
+  "id,username,display_name,onboarding_status,verification_level,has_wallet,wallet_credential_id,selected_land_id,preferred_language,auth_generation,account_status,created_at,updated_at";
 
 export const userRepository = {
   async getById(userId: string): Promise<UserRow | null> {
@@ -35,6 +35,8 @@ export const userRepository = {
         wallet_credential_id: input.wallet_credential_id,
         selected_land_id: input.selected_land_id,
         preferred_language: input.preferred_language,
+        auth_generation: input.auth_generation ?? 1,
+        account_status: input.account_status ?? "active",
       })
       .select(USER_COLUMNS)
       .single<UserRow>();
@@ -119,6 +121,30 @@ export const userRepository = {
     const { data, error } = await supabase
       .from("users")
       .update(updatePayload)
+      .eq("id", userId)
+      .select(USER_COLUMNS)
+      .maybeSingle<UserRow>();
+
+    if (error) {
+      throw error;
+    }
+
+    return data || null;
+  },
+
+  async incrementAuthGeneration(userId: string): Promise<UserRow | null> {
+    const current = await this.getById(userId);
+    if (!current) {
+      return null;
+    }
+
+    const supabase = requireSupabaseAdminClient();
+
+    const { data, error } = await supabase
+      .from("users")
+      .update({
+        auth_generation: current.auth_generation + 1,
+      })
       .eq("id", userId)
       .select(USER_COLUMNS)
       .maybeSingle<UserRow>();

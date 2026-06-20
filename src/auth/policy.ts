@@ -19,6 +19,12 @@ export const authPolicy = Object.freeze({
   // production launch.
   requireAttestedSessionsForProtectedRoutes:
     env.auth.requireAttestedSessionsForProtectedRoutes,
+  // Transitional implementation seam:
+  // non-production environments may temporarily bypass full device-key and app
+  // attestation cryptographic verification so the backend contract and mobile
+  // integration can be built incrementally. This must remain disabled in
+  // production.
+  enableTransitionalCryptoBypass: env.auth.enableTransitionalCryptoBypass,
 });
 
 export default authPolicy;

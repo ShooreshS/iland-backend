@@ -19,20 +19,30 @@ const VALID_ISSUANCE_INPUT = {
   walletPublicKey: "public-key-1",
 };
 
-const createUser = (overrides: Partial<UserRow> = {}): UserRow => ({
-  id: "user-1",
-  username: null,
-  display_name: null,
-  onboarding_status: "identity_pending",
-  verification_level: "nid_verified",
-  has_wallet: false,
-  wallet_credential_id: null,
-  selected_land_id: null,
-  preferred_language: null,
-  created_at: FIXED_TIME,
-  updated_at: FIXED_TIME,
-  ...overrides,
-});
+const createUser = (overrides: Partial<UserRow> = {}): UserRow => {
+  const next = {
+    id: "user-1",
+    username: null,
+    display_name: null,
+    onboarding_status: "identity_pending",
+    verification_level: "nid_verified",
+    has_wallet: false,
+    wallet_credential_id: null,
+    selected_land_id: null,
+    preferred_language: null,
+    auth_generation: 1,
+    account_status: "active" as const,
+    created_at: FIXED_TIME,
+    updated_at: FIXED_TIME,
+    ...overrides,
+  };
+
+  return {
+    ...next,
+    auth_generation: next.auth_generation ?? 1,
+    account_status: next.account_status ?? "active",
+  };
+};
 
 const createIdentityProfile = (
   overrides: Partial<IdentityProfileRow> = {},

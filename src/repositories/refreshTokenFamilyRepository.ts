@@ -48,6 +48,102 @@ export const refreshTokenFamilyRepository = {
 
     return data || null;
   },
+
+  async getByCurrentTokenHash(
+    tokenHash: string,
+  ): Promise<RefreshTokenFamilyRow | null> {
+    const supabase = requireSupabaseAdminClient();
+
+    const { data, error } = await supabase
+      .from("refresh_token_families")
+      .select(REFRESH_TOKEN_FAMILY_COLUMNS)
+      .eq("current_token_hash", tokenHash)
+      .maybeSingle<RefreshTokenFamilyRow>();
+
+    if (error) {
+      throw error;
+    }
+
+    return data || null;
+  },
+
+  async getByPreviousTokenHash(
+    tokenHash: string,
+  ): Promise<RefreshTokenFamilyRow | null> {
+    const supabase = requireSupabaseAdminClient();
+
+    const { data, error } = await supabase
+      .from("refresh_token_families")
+      .select(REFRESH_TOKEN_FAMILY_COLUMNS)
+      .eq("previous_token_hash", tokenHash)
+      .maybeSingle<RefreshTokenFamilyRow>();
+
+    if (error) {
+      throw error;
+    }
+
+    return data || null;
+  },
+
+  async rotateCurrentToken(
+    familyId: string,
+    input: {
+      previousTokenHash: string;
+      currentTokenHash: string;
+      expiresAt: string;
+      rotationCounter: number;
+    },
+  ): Promise<RefreshTokenFamilyRow | null> {
+    const supabase = requireSupabaseAdminClient();
+
+    const now = new Date().toISOString();
+    const { data, error } = await supabase
+      .from("refresh_token_families")
+      .update({
+        previous_token_hash: input.previousTokenHash,
+        current_token_hash: input.currentTokenHash,
+        expires_at: input.expiresAt,
+        rotation_counter: input.rotationCounter,
+        last_rotated_at: now,
+        last_used_at: now,
+      })
+      .eq("id", familyId)
+      .select(REFRESH_TOKEN_FAMILY_COLUMNS)
+      .maybeSingle<RefreshTokenFamilyRow>();
+
+    if (error) {
+      throw error;
+    }
+
+    return data || null;
+  },
+
+  async revokeById(
+    familyId: string,
+    input: {
+      status: "revoked" | "reused" | "expired";
+      revocationReason: string;
+    },
+  ): Promise<RefreshTokenFamilyRow | null> {
+    const supabase = requireSupabaseAdminClient();
+
+    const { data, error } = await supabase
+      .from("refresh_token_families")
+      .update({
+        status: input.status,
+        revoked_at: new Date().toISOString(),
+        revocation_reason: input.revocationReason,
+      })
+      .eq("id", familyId)
+      .select(REFRESH_TOKEN_FAMILY_COLUMNS)
+      .maybeSingle<RefreshTokenFamilyRow>();
+
+    if (error) {
+      throw error;
+    }
+
+    return data || null;
+  },
 };
 
 export default refreshTokenFamilyRepository;

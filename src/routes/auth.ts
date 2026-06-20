@@ -1,6 +1,8 @@
 import { z } from "zod";
+import { hashOpaqueBearerToken } from "../auth/tokens";
 import requireViewer from "../auth/requireViewer";
 import { json } from "../middleware/json";
+import authSessionRepository from "../repositories/authSessionRepository";
 import authService from "../services/authService";
 import type { RouteDefinition } from "../types/http";
 
@@ -15,6 +17,7 @@ const registrationCompleteSchema = z
   .object({
     challengeId: z.string().trim().min(1),
     challenge: z.string().trim().min(1),
+    platform: z.enum(["ios", "android"]),
     credentialId: z.string().trim().min(1),
     publicKeyPem: z.string().trim().min(1),
     signature: z.string().trim().min(1),
@@ -99,11 +102,23 @@ const registerCompleteRoute: RouteDefinition = {
       return invalidJsonResponse("Registration completion request body is invalid.");
     }
 
-    const result = await authService.completeRegistration();
+    const result = await authService.completeRegistration(parsed.data);
 
-    return json(result, result.success ? 201 : 501, {
-      "cache-control": "no-store",
-    });
+    return json(
+      result,
+      result.success
+        ? 201
+        : result.errorCode === "INVALID_CHALLENGE"
+          ? 400
+          : result.errorCode === "ACCOUNT_DISABLED"
+            ? 403
+            : result.errorCode === "CREDENTIAL_ALREADY_BOUND"
+              ? 409
+              : 501,
+      {
+        "cache-control": "no-store",
+      },
+    );
   },
 };
 
@@ -147,11 +162,29 @@ const loginCompleteRoute: RouteDefinition = {
       return invalidJsonResponse("Login completion request body is invalid.");
     }
 
-    const result = await authService.completeLogin();
+    const result = await authService.completeLogin(parsed.data);
 
-    return json(result, result.success ? 200 : 501, {
-      "cache-control": "no-store",
-    });
+    return json(
+      result,
+      result.success
+        ? 200
+        : result.errorCode === "INVALID_CHALLENGE"
+          ? 400
+          : result.errorCode === "CREDENTIAL_NOT_FOUND"
+            ? 404
+            : result.errorCode === "USER_NOT_FOUND"
+              ? 404
+              : result.errorCode === "ACCOUNT_DISABLED"
+                ? 403
+                : result.errorCode === "ATTESTATION_REQUIRED"
+                  ? 409
+                  : result.errorCode === "SESSION_LIMIT_REACHED"
+                    ? 409
+                    : 501,
+      {
+        "cache-control": "no-store",
+      },
+    );
   },
 };
 
@@ -169,21 +202,87 @@ const refreshRoute: RouteDefinition = {
       return invalidJsonResponse("Refresh request body is invalid.");
     }
 
-    const result = await authService.refreshSession();
+    const result = await authService.refreshSession(parsed.data);
 
-    return json(result, result.success ? 200 : 501, {
-      "cache-control": "no-store",
-    });
+    return json(
+      result,
+      result.success
+        ? 200
+        : result.errorCode === "REFRESH_TOKEN_NOT_FOUND"
+          ? 404
+          : result.errorCode === "REFRESH_TOKEN_NOT_ACTIVE"
+            ? 409
+            : result.errorCode === "REFRESH_TOKEN_EXPIRED"
+              ? 401
+              : result.errorCode === "ACCOUNT_DISABLED"
+                ? 403
+                : result.errorCode === "SESSION_SUPERSEDED"
+                  ? 409
+                  : result.errorCode === "SESSION_NOT_FOUND"
+                    ? 404
+                    : result.errorCode === "SESSION_NOT_ACTIVE"
+                      ? 409
+                      : result.errorCode === "USER_NOT_FOUND"
+                        ? 404
+                        : 501,
+      {
+        "cache-control": "no-store",
+      },
+    );
   },
 };
 
 const logoutRoute: RouteDefinition = {
   method: "POST",
   path: "/auth/logout",
-  handler: async () =>
-    json(await authService.logoutSession(), 501, {
-      "cache-control": "no-store",
-    }),
+  handler: async ({ request }) => {
+    const viewerResult = await requireViewer(request);
+    if (!viewerResult.ok) {
+      return viewerResult.response;
+    }
+
+    const authorizationHeader = request.headers.get("authorization")?.trim() || "";
+    const tokenMatch = /^Bearer\s+(.+)$/i.exec(authorizationHeader);
+    if (!tokenMatch?.[1]) {
+      return json(
+        {
+          success: false,
+          errorCode: "SESSION_CONTEXT_REQUIRED",
+          message:
+            "Logout requires an active bearer token.",
+        },
+        400,
+        {
+          "cache-control": "no-store",
+        },
+      );
+    }
+
+    const session = await authSessionRepository.getByAccessTokenHash(
+      hashOpaqueBearerToken(tokenMatch[1]),
+    );
+    if (!session || session.user_id !== viewerResult.viewer.userId) {
+      return json(
+        {
+          success: false,
+          errorCode: "SESSION_CONTEXT_REQUIRED",
+          message: "Logout session could not be resolved from the bearer token.",
+        },
+        400,
+        {
+          "cache-control": "no-store",
+        },
+      );
+    }
+
+    return json(
+      await authService.logoutSession(viewerResult.viewer.userId, session.id),
+      200,
+      {
+        "cache-control": "no-store",
+      },
+    );
+  },
 };
 
 const listSessionsRoute: RouteDefinition = {

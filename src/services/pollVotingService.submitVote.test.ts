@@ -17,20 +17,30 @@ import type {
 
 const FIXED_TIME = "2026-04-06T12:00:00.000Z";
 
-const createViewer = (overrides: Partial<UserRow> = {}): UserRow => ({
-  id: "viewer-user-1",
-  username: null,
-  display_name: null,
-  onboarding_status: "identity_pending",
-  verification_level: "nid_verified",
-  has_wallet: false,
-  wallet_credential_id: null,
-  selected_land_id: null,
-  preferred_language: null,
-  created_at: FIXED_TIME,
-  updated_at: FIXED_TIME,
-  ...overrides,
-});
+const createViewer = (overrides: Partial<UserRow> = {}): UserRow => {
+  const next = {
+    id: "viewer-user-1",
+    username: null,
+    display_name: null,
+    onboarding_status: "identity_pending",
+    verification_level: "nid_verified",
+    has_wallet: false,
+    wallet_credential_id: null,
+    selected_land_id: null,
+    preferred_language: null,
+    auth_generation: 1,
+    account_status: "active" as const,
+    created_at: FIXED_TIME,
+    updated_at: FIXED_TIME,
+    ...overrides,
+  };
+
+  return {
+    ...next,
+    auth_generation: next.auth_generation ?? 1,
+    account_status: next.account_status ?? "active",
+  };
+};
 
 const createPoll = (overrides: Partial<PollRow> = {}): PollRow => ({
   id: "poll-1",

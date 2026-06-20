@@ -29,6 +29,7 @@ const parsed = z
     AUTH_REFRESH_TOKEN_TTL_DAYS: z.coerce.number().int().min(1).optional(),
     AUTH_MAX_ACTIVE_SESSIONS_PER_USER: z.coerce.number().int().min(1).optional(),
     AUTH_REQUIRE_ATTESTED_SESSIONS_FOR_PROTECTED_ROUTES: z.string().optional(),
+    AUTH_ENABLE_TRANSITIONAL_CRYPTO_BYPASS: z.string().optional(),
     WALLET_ISSUER_ID: z.string().min(1).optional(),
     WALLET_ISSUER_SIGNING_SECRET: z.string().min(1).optional(),
     VERIFIED_IDENTITY_PEPPER: z.string().min(1).optional(),
@@ -74,6 +75,9 @@ const parsed = z
     ),
     AUTH_REQUIRE_ATTESTED_SESSIONS_FOR_PROTECTED_ROUTES: emptyToUndefined(
       process.env.AUTH_REQUIRE_ATTESTED_SESSIONS_FOR_PROTECTED_ROUTES,
+    ),
+    AUTH_ENABLE_TRANSITIONAL_CRYPTO_BYPASS: emptyToUndefined(
+      process.env.AUTH_ENABLE_TRANSITIONAL_CRYPTO_BYPASS,
     ),
     WALLET_ISSUER_ID: emptyToUndefined(process.env.WALLET_ISSUER_ID),
     WALLET_ISSUER_SIGNING_SECRET: emptyToUndefined(
@@ -121,6 +125,10 @@ const authRequireAttestedSessionsForProtectedRoutes =
   parsed.AUTH_REQUIRE_ATTESTED_SESSIONS_FOR_PROTECTED_ROUTES !== undefined
     ? toBoolean(parsed.AUTH_REQUIRE_ATTESTED_SESSIONS_FOR_PROTECTED_ROUTES)
     : true;
+const authEnableTransitionalCryptoBypass =
+  parsed.AUTH_ENABLE_TRANSITIONAL_CRYPTO_BYPASS !== undefined
+    ? toBoolean(parsed.AUTH_ENABLE_TRANSITIONAL_CRYPTO_BYPASS)
+    : parsed.NODE_ENV !== "production";
 
 const walletIssuerId =
   parsed.WALLET_ISSUER_ID || "did:iland:backend:issuer:v0.0.86";
@@ -166,6 +174,7 @@ export const env = Object.freeze({
     maxActiveSessionsPerUser: authMaxActiveSessionsPerUser,
     requireAttestedSessionsForProtectedRoutes:
       authRequireAttestedSessionsForProtectedRoutes,
+    enableTransitionalCryptoBypass: authEnableTransitionalCryptoBypass,
   }),
   wallet: Object.freeze({
     issuerId: walletIssuerId,

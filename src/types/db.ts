@@ -10,6 +10,8 @@ export type UserRow = {
   wallet_credential_id: string | null;
   selected_land_id: string | null;
   preferred_language: string | null;
+  auth_generation: number;
+  account_status: "active" | "disabled" | "banned";
   created_at: string;
   updated_at: string;
 };
@@ -23,6 +25,8 @@ export type NewUserRow = {
   wallet_credential_id: string | null;
   selected_land_id: string | null;
   preferred_language: string | null;
+  auth_generation?: number;
+  account_status?: "active" | "disabled" | "banned";
 };
 
 export type AuthCredentialPlatform = "ios" | "android";
@@ -107,6 +111,7 @@ export type AuthSessionRow = {
   auth_credential_id: string;
   status: AuthSessionStatus;
   auth_generation: number;
+  current_access_token_hash: string | null;
   attestation_verified_at: string;
   last_seen_at: string;
   expires_at: string;
@@ -121,6 +126,7 @@ export type NewAuthSessionRow = {
   auth_credential_id: string;
   status?: AuthSessionStatus;
   auth_generation: number;
+  current_access_token_hash: string;
   attestation_verified_at: string;
   last_seen_at?: string;
   expires_at: string;

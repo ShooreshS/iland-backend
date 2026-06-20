@@ -1,5 +1,7 @@
 import env from "../config/env";
+import { hashOpaqueBearerToken } from "./tokens";
 import { json } from "../middleware/json";
+import authSessionRepository from "../repositories/authSessionRepository";
 import userRepository from "../repositories/userRepository";
 import type { ViewerContext } from "../types/auth";
 import authPolicy from "./policy";
@@ -37,15 +39,72 @@ const buildFailure = (
 export const requireViewer = async (request: Request): Promise<RequireViewerResult> => {
   const authorizationHeader = request.headers.get("authorization")?.trim() || null;
   if (authorizationHeader) {
-    // Future path: bearer-token session validation belongs here. Until that is
-    // implemented, reject explicitly instead of silently falling back to the
-    // legacy bootstrap header. That makes the migration boundary visible and
-    // avoids ambiguous mixed-auth behavior.
-    return buildFailure(
-      503,
-      "session_auth_not_implemented",
-      `Bearer-token viewer resolution is not implemented yet. Planned issuer: ${authPolicy.issuer}`,
+    const tokenMatch = /^Bearer\s+(.+)$/i.exec(authorizationHeader);
+    if (!tokenMatch?.[1]) {
+      return buildFailure(
+        401,
+        "invalid_authorization_header",
+        "Authorization header must use Bearer token format.",
+      );
+    }
+
+    const session = await authSessionRepository.getByAccessTokenHash(
+      hashOpaqueBearerToken(tokenMatch[1]),
     );
+    if (!session || session.status !== "active") {
+      return buildFailure(
+        401,
+        "viewer_not_resolved",
+        `No active session found for bearer token under issuer ${authPolicy.issuer}.`,
+      );
+    }
+
+    if (new Date(session.expires_at).getTime() <= Date.now()) {
+      return buildFailure(
+        401,
+        "session_expired",
+        "Bearer session has expired.",
+      );
+    }
+
+    const user = await userRepository.getById(session.user_id);
+    if (!user) {
+      return buildFailure(
+        401,
+        "viewer_not_resolved",
+        "Session user could not be resolved.",
+      );
+    }
+
+    if (user.account_status !== "active") {
+      return buildFailure(
+        403,
+        "account_disabled",
+        "The current account is disabled or banned.",
+      );
+    }
+
+    if (user.auth_generation !== session.auth_generation) {
+      return buildFailure(
+        401,
+        "session_stale",
+        "Bearer session is no longer current for this user.",
+      );
+    }
+
+    // Enforced policy:
+    // protected production routes are expected to run on sessions that were
+    // created from a verified attested app context. Session creation captures
+    // that gate once so per-request viewer resolution can remain lightweight.
+    await authSessionRepository.touchLastSeen(session.id);
+
+    return {
+      ok: true,
+      viewer: {
+        userId: user.id,
+        user,
+      },
+    };
   }
 
   if (!env.auth.enableDevViewerAuth) {
