@@ -5,7 +5,7 @@ import type {
 } from "../types/db";
 
 const APP_ATTESTATION_CREDENTIAL_COLUMNS =
-  "id,user_id,auth_credential_id,platform,attestation_provider,environment,attestation_key_id,app_identifier,package_name,signing_cert_digest,status,last_counter,last_asserted_at,last_assertion_nonce_hash,revoked_at,revocation_reason,created_at,updated_at";
+  "id,user_id,auth_credential_id,platform,attestation_provider,environment,attestation_key_id,public_key_pem,app_identifier,package_name,signing_cert_digest,status,last_counter,last_asserted_at,last_assertion_nonce_hash,revoked_at,revocation_reason,created_at,updated_at";
 
 export const appAttestationCredentialRepository = {
   async insert(
@@ -22,6 +22,7 @@ export const appAttestationCredentialRepository = {
         attestation_provider: input.attestation_provider,
         environment: input.environment,
         attestation_key_id: input.attestation_key_id ?? null,
+        public_key_pem: input.public_key_pem ?? null,
         app_identifier: input.app_identifier ?? null,
         package_name: input.package_name ?? null,
         signing_cert_digest: input.signing_cert_digest ?? null,
@@ -46,6 +47,44 @@ export const appAttestationCredentialRepository = {
       .from("app_attestation_credentials")
       .select(APP_ATTESTATION_CREDENTIAL_COLUMNS)
       .eq("auth_credential_id", authCredentialId)
+      .maybeSingle<AppAttestationCredentialRow>();
+
+    if (error) {
+      throw error;
+    }
+
+    return data || null;
+  },
+
+  async updateByAuthCredentialId(
+    authCredentialId: string,
+    input: {
+      attestationProvider: AppAttestationCredentialRow["attestation_provider"];
+      environment: AppAttestationCredentialRow["environment"];
+      attestationKeyId: string | null;
+      publicKeyPem: string | null;
+      appIdentifier: string | null;
+      packageName: string | null;
+      signingCertDigest: string | null;
+      status: AppAttestationCredentialRow["status"];
+    },
+  ): Promise<AppAttestationCredentialRow | null> {
+    const supabase = requireSupabaseAdminClient();
+
+    const { data, error } = await supabase
+      .from("app_attestation_credentials")
+      .update({
+        attestation_provider: input.attestationProvider,
+        environment: input.environment,
+        attestation_key_id: input.attestationKeyId,
+        public_key_pem: input.publicKeyPem,
+        app_identifier: input.appIdentifier,
+        package_name: input.packageName,
+        signing_cert_digest: input.signingCertDigest,
+        status: input.status,
+      })
+      .eq("auth_credential_id", authCredentialId)
+      .select(APP_ATTESTATION_CREDENTIAL_COLUMNS)
       .maybeSingle<AppAttestationCredentialRow>();
 
     if (error) {

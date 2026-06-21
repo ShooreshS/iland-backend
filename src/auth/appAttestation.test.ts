@@ -1,8 +1,19 @@
 import { describe, expect, it } from "bun:test";
-import { appAttestationVerifier } from "./appAttestation";
+import { createHash, generateKeyPairSync, sign } from "node:crypto";
+
 import type { AppAttestationCredentialRow } from "../types/db";
 
-const storedIosCredential: AppAttestationCredentialRow = {
+process.env.AUTH_IOS_TEAM_ID = "DJWBN8658Q";
+process.env.AUTH_ENABLE_TRANSITIONAL_CRYPTO_BYPASS = "true";
+
+const { appAttestationVerifier } = await import("./appAttestation");
+
+const sha256 = (value: Buffer | string): Buffer =>
+  createHash("sha256").update(value).digest();
+
+const buildStoredIosCredential = (
+  overrides: Partial<AppAttestationCredentialRow> = {},
+): AppAttestationCredentialRow => ({
   id: "attestation-1",
   user_id: "user-1",
   auth_credential_id: "auth-1",
@@ -10,6 +21,7 @@ const storedIosCredential: AppAttestationCredentialRow = {
   attestation_provider: "ios_app_attest",
   environment: "development",
   attestation_key_id: "ios-key-1",
+  public_key_pem: null,
   app_identifier: "com.shooresh.iland",
   package_name: null,
   signing_cert_digest: null,
@@ -21,11 +33,26 @@ const storedIosCredential: AppAttestationCredentialRow = {
   revocation_reason: null,
   created_at: "2026-06-20T00:00:00.000Z",
   updated_at: "2026-06-20T00:00:00.000Z",
-};
+  ...overrides,
+});
 
 describe("appAttestationVerifier", () => {
-  it("accepts the transitional iOS registration contract when app identity matches", () => {
-    const result = appAttestationVerifier.verifyRegistrationAttestation({
+  it("accepts the transitional Android registration contract when app identity matches", async () => {
+    const result = await appAttestationVerifier.verifyRegistrationAttestation({
+      platform: "android",
+      challenge: "challenge-1",
+      appAttestation: {
+        provider: "android_play_integrity",
+        packageName: "com.shooresh.iland",
+        integrityToken: "android-integrity-token",
+      },
+    });
+
+    expect(result.success).toBe(true);
+  });
+
+  it("rejects iOS registration when clientDataHash does not match the challenge", async () => {
+    const result = await appAttestationVerifier.verifyRegistrationAttestation({
       platform: "ios",
       challenge: "challenge-1",
       appAttestation: {
@@ -33,21 +60,7 @@ describe("appAttestationVerifier", () => {
         keyId: "ios-key-1",
         appIdentifier: "com.shooresh.iland",
         attestationObject: "base64-attestation-object",
-      },
-    });
-
-    expect(result.success).toBe(true);
-  });
-
-  it("rejects iOS registration when the bundle identifier does not match", () => {
-    const result = appAttestationVerifier.verifyRegistrationAttestation({
-      platform: "ios",
-      challenge: "challenge-1",
-      appAttestation: {
-        provider: "ios_app_attest",
-        keyId: "ios-key-1",
-        appIdentifier: "com.example.otherapp",
-        attestationObject: "base64-attestation-object",
+        clientDataHash: sha256("different-challenge").toString("base64"),
       },
     });
 
@@ -57,8 +70,8 @@ describe("appAttestationVerifier", () => {
     });
   });
 
-  it("rejects Android registration when integrityToken is missing", () => {
-    const result = appAttestationVerifier.verifyRegistrationAttestation({
+  it("rejects Android registration when integrityToken is missing", async () => {
+    const result = await appAttestationVerifier.verifyRegistrationAttestation({
       platform: "android",
       challenge: "challenge-1",
       appAttestation: {
@@ -73,21 +86,69 @@ describe("appAttestationVerifier", () => {
     });
   });
 
-  it("rejects iOS login assertion when attestation key id does not match enrollment", () => {
-    const result = appAttestationVerifier.verifyLoginAssertion({
+  it("rejects iOS login assertion when attestation key id does not match enrollment", async () => {
+    const result = await appAttestationVerifier.verifyLoginAssertion({
       platform: "ios",
       challenge: "challenge-1",
-      storedCredential: storedIosCredential,
+      storedCredential: buildStoredIosCredential(),
       appAssertion: {
         keyId: "ios-key-2",
         appIdentifier: "com.shooresh.iland",
         assertion: "base64-assertion",
+        clientDataHash: sha256("challenge-1").toString("base64"),
       },
     });
 
     expect(result).toMatchObject({
       success: false,
       errorCode: "ATTESTATION_INVALID",
+    });
+  });
+
+  it("verifies a cryptographic iOS login assertion and returns the next counter", async () => {
+    const challenge = "challenge-1";
+    const clientDataHash = sha256(challenge);
+    const rpIdHash = sha256("DJWBN8658Q.com.shooresh.iland");
+    const { privateKey, publicKey } = generateKeyPairSync("ec", {
+      namedCurve: "prime256v1",
+    });
+    const spkiDer = publicKey.export({ format: "der", type: "spki" });
+    const keyId = sha256(Buffer.from(spkiDer)).toString("base64");
+    const authenticatorData = Buffer.concat([
+      rpIdHash,
+      Buffer.from([0x01]),
+      Buffer.from([0x00, 0x00, 0x00, 0x07]),
+    ]);
+    const signature = sign(
+      "sha256",
+      Buffer.concat([authenticatorData, clientDataHash]),
+      privateKey,
+    );
+    const assertion = Buffer.concat([authenticatorData, signature]).toString("base64");
+
+    const result = await appAttestationVerifier.verifyLoginAssertion({
+      platform: "ios",
+      challenge,
+      storedCredential: buildStoredIosCredential({
+        attestation_key_id: keyId,
+        public_key_pem: publicKey
+          .export({ format: "pem", type: "spki" })
+          .toString()
+          .trim(),
+        last_counter: 6,
+      }),
+      appAssertion: {
+        keyId,
+        appIdentifier: "com.shooresh.iland",
+        assertion,
+        clientDataHash: clientDataHash.toString("base64"),
+      },
+    });
+
+    expect(result).toMatchObject({
+      success: true,
+      transitionalCryptoBypassUsed: false,
+      lastCounter: 7,
     });
   });
 });

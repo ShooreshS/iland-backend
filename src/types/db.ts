@@ -77,6 +77,7 @@ export type AppAttestationCredentialRow = {
   attestation_provider: AppAttestationProvider;
   environment: AppAttestationEnvironment;
   attestation_key_id: string | null;
+  public_key_pem: string | null;
   app_identifier: string | null;
   package_name: string | null;
   signing_cert_digest: string | null;
@@ -97,6 +98,7 @@ export type NewAppAttestationCredentialRow = {
   attestation_provider: AppAttestationProvider;
   environment: AppAttestationEnvironment;
   attestation_key_id?: string | null;
+  public_key_pem?: string | null;
   app_identifier?: string | null;
   package_name?: string | null;
   signing_cert_digest?: string | null;

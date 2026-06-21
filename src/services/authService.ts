@@ -235,7 +235,7 @@ export const authService = {
     }
 
     const appAttestationResult =
-      appAttestationVerifier.verifyRegistrationAttestation({
+      await appAttestationVerifier.verifyRegistrationAttestation({
         platform: input.platform,
         appAttestation: input.appAttestation,
         challenge: input.challenge,
@@ -262,20 +262,33 @@ export const authService = {
         authCredential.id,
       );
 
-    const appAttestationCredential =
-      existingAttestation ||
-      (await appAttestationCredentialRepository.insert({
-        user_id: user.id,
-        auth_credential_id: authCredential.id,
-        platform: input.platform,
-        attestation_provider: appAttestationResult.provider,
-        environment: appAttestationResult.environment,
-        attestation_key_id: appAttestationResult.attestationKeyId,
-        app_identifier: appAttestationResult.appIdentifier,
-        package_name: appAttestationResult.packageName,
-        signing_cert_digest: appAttestationResult.signingCertDigest,
-        status: "verified",
-      }));
+    const appAttestationCredential = existingAttestation
+      ? (await appAttestationCredentialRepository.updateByAuthCredentialId(
+          authCredential.id,
+          {
+            attestationProvider: appAttestationResult.provider,
+            environment: appAttestationResult.environment,
+            attestationKeyId: appAttestationResult.attestationKeyId,
+            publicKeyPem: appAttestationResult.attestationPublicKeyPem,
+            appIdentifier: appAttestationResult.appIdentifier,
+            packageName: appAttestationResult.packageName,
+            signingCertDigest: appAttestationResult.signingCertDigest,
+            status: "verified",
+          },
+        )) || existingAttestation
+      : await appAttestationCredentialRepository.insert({
+          user_id: user.id,
+          auth_credential_id: authCredential.id,
+          platform: input.platform,
+          attestation_provider: appAttestationResult.provider,
+          environment: appAttestationResult.environment,
+          attestation_key_id: appAttestationResult.attestationKeyId,
+          public_key_pem: appAttestationResult.attestationPublicKeyPem,
+          app_identifier: appAttestationResult.appIdentifier,
+          package_name: appAttestationResult.packageName,
+          signing_cert_digest: appAttestationResult.signingCertDigest,
+          status: "verified",
+        });
 
     await authChallengeRepository.markConsumed(input.challengeId);
 
@@ -381,7 +394,7 @@ export const authService = {
       );
     }
 
-    const loginAssertionResult = appAttestationVerifier.verifyLoginAssertion({
+    const loginAssertionResult = await appAttestationVerifier.verifyLoginAssertion({
       platform: authCredential.platform,
       appAssertion: input.appAssertion,
       challenge: input.challenge,
@@ -427,6 +440,7 @@ export const authService = {
     await authCredentialRepository.touchLastAuthenticated(authCredential.id);
     await appAttestationCredentialRepository.recordAssertion(authCredential.id, {
       lastAssertionNonceHash: loginAssertionResult.lastAssertionNonceHash,
+      lastCounter: loginAssertionResult.lastCounter,
     });
 
     await refreshTokenFamilyRepository.insert({

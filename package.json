@@ -9,7 +9,10 @@
     "typecheck": "bunx tsc --noEmit"
   },
   "dependencies": {
+    "@peculiar/x509": "^2.0.0",
     "@supabase/supabase-js": "^2.57.4",
+    "cbor-x": "^1.6.4",
+    "reflect-metadata": "^0.2.2",
     "zod": "^3.25.76"
   },
   "devDependencies": {

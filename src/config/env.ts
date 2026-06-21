@@ -30,6 +30,7 @@ const parsed = z
     AUTH_MAX_ACTIVE_SESSIONS_PER_USER: z.coerce.number().int().min(1).optional(),
     AUTH_REQUIRE_ATTESTED_SESSIONS_FOR_PROTECTED_ROUTES: z.string().optional(),
     AUTH_ENABLE_TRANSITIONAL_CRYPTO_BYPASS: z.string().optional(),
+    AUTH_IOS_TEAM_ID: z.string().min(1).optional(),
     AUTH_IOS_BUNDLE_ID: z.string().min(1).optional(),
     AUTH_ANDROID_PACKAGE_NAME: z.string().min(1).optional(),
     AUTH_IOS_APP_ATTEST_ENVIRONMENT: z
@@ -85,6 +86,15 @@ const parsed = z
         path: ["ENABLE_DEV_VIEWER_AUTH"],
       });
     }
+
+    if (!transitionalBypassEnabled && !input.AUTH_IOS_TEAM_ID) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        message:
+          "AUTH_IOS_TEAM_ID is required when real App Attest verification is enabled.",
+        path: ["AUTH_IOS_TEAM_ID"],
+      });
+    }
   })
   .parse({
     NODE_ENV: process.env.NODE_ENV,
@@ -111,6 +121,7 @@ const parsed = z
     AUTH_ENABLE_TRANSITIONAL_CRYPTO_BYPASS: emptyToUndefined(
       process.env.AUTH_ENABLE_TRANSITIONAL_CRYPTO_BYPASS,
     ),
+    AUTH_IOS_TEAM_ID: emptyToUndefined(process.env.AUTH_IOS_TEAM_ID),
     AUTH_IOS_BUNDLE_ID: emptyToUndefined(process.env.AUTH_IOS_BUNDLE_ID),
     AUTH_ANDROID_PACKAGE_NAME: emptyToUndefined(
       process.env.AUTH_ANDROID_PACKAGE_NAME,
@@ -171,6 +182,7 @@ const authEnableTransitionalCryptoBypass =
   parsed.AUTH_ENABLE_TRANSITIONAL_CRYPTO_BYPASS !== undefined
     ? toBoolean(parsed.AUTH_ENABLE_TRANSITIONAL_CRYPTO_BYPASS)
     : parsed.NODE_ENV !== "production";
+const authIosTeamId = parsed.AUTH_IOS_TEAM_ID || null;
 const authIosBundleId = parsed.AUTH_IOS_BUNDLE_ID || "com.shooresh.iland";
 const authAndroidPackageName =
   parsed.AUTH_ANDROID_PACKAGE_NAME || "com.shooresh.iland";
@@ -229,6 +241,7 @@ export const env = Object.freeze({
     requireAttestedSessionsForProtectedRoutes:
       authRequireAttestedSessionsForProtectedRoutes,
     enableTransitionalCryptoBypass: authEnableTransitionalCryptoBypass,
+    iosTeamId: authIosTeamId,
     iosBundleId: authIosBundleId,
     androidPackageName: authAndroidPackageName,
     iosAppAttestEnvironment: authIosAppAttestEnvironment,
