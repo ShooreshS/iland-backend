@@ -343,12 +343,20 @@ const readDerLength = (
   bytes: Buffer,
   offset: number,
 ): { length: number; nextOffset: number } => {
+  if (offset >= bytes.length) {
+    throw new Error("DER length offset is out of bounds.");
+  }
+
   const first = bytes[offset];
   if ((first & 0x80) === 0) {
     return { length: first, nextOffset: offset + 1 };
   }
 
   const byteLength = first & 0x7f;
+  if (byteLength === 0 || offset + 1 + byteLength > bytes.length) {
+    throw new Error("DER length encoding is invalid.");
+  }
+
   let length = 0;
   for (let index = 0; index < byteLength; index += 1) {
     length = (length << 8) | bytes[offset + 1 + index];
@@ -368,10 +376,17 @@ const readDerElement = (
   value: Buffer;
   nextOffset: number;
 } => {
+  if (offset >= bytes.length) {
+    throw new Error("DER element offset is out of bounds.");
+  }
+
   const tag = bytes[offset];
   const { length, nextOffset } = readDerLength(bytes, offset + 1);
   const valueStart = nextOffset;
   const valueEnd = valueStart + length;
+  if (valueEnd > bytes.length) {
+    throw new Error("DER element length exceeds available bytes.");
+  }
 
   return {
     tag,
@@ -380,16 +395,43 @@ const readDerElement = (
   };
 };
 
+const findAppleNonceCandidate = (
+  bytes: Buffer,
+  depth = 0,
+): Buffer | null => {
+  if (depth > 8) {
+    return null;
+  }
+
+  let offset = 0;
+  while (offset < bytes.length) {
+    const element = readDerElement(bytes, offset);
+
+    if (element.tag === 0x04 && element.value.length === 32) {
+      return element.value;
+    }
+
+    const isSequence = element.tag === 0x30;
+    const isConstructedContextSpecific = (element.tag & 0xe0) === 0xa0;
+    if (isSequence || isConstructedContextSpecific) {
+      const nestedCandidate = findAppleNonceCandidate(element.value, depth + 1);
+      if (nestedCandidate) {
+        return nestedCandidate;
+      }
+    }
+
+    offset = element.nextOffset;
+  }
+
+  return null;
+};
+
 const extractAppleNonceExtensionValue = (
   extensionValue: Buffer,
 ): { success: true; value: Buffer } | RejectedAppAttestationResult => {
   try {
-    const outer = readDerElement(extensionValue, 0);
-    const inner = readDerElement(outer.value, 0);
-    const tagged = readDerElement(inner.value, 0);
-    const octetString = readDerElement(tagged.value, 0);
-
-    if (outer.tag !== 0x30 || inner.tag !== 0x30 || tagged.tag !== 0xa1 || octetString.tag !== 0x04) {
+    const nonceCandidate = findAppleNonceCandidate(extensionValue);
+    if (!nonceCandidate) {
       return reject(
         "ATTESTATION_INVALID",
         "Apple nonce extension is not in the expected ASN.1 shape.",
@@ -398,7 +440,7 @@ const extractAppleNonceExtensionValue = (
 
     return {
       success: true,
-      value: octetString.value,
+      value: nonceCandidate,
     };
   } catch {
     return reject(
@@ -1077,6 +1119,10 @@ const verifyStructuredLoginAssertion = async (
 export const appAttestationVerifier = {
   verifyRegistrationAttestation: verifyStructuredRegistrationAttestation,
   verifyLoginAssertion: verifyStructuredLoginAssertion,
+};
+
+export const __testOnly = {
+  extractAppleNonceExtensionValue,
 };
 
 export default appAttestationVerifier;

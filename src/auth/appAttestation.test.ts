@@ -6,10 +6,25 @@ import type { AppAttestationCredentialRow } from "../types/db";
 process.env.AUTH_IOS_TEAM_ID = "DJWBN8658Q";
 process.env.AUTH_ENABLE_TRANSITIONAL_CRYPTO_BYPASS = "true";
 
-const { appAttestationVerifier } = await import("./appAttestation");
+const { __testOnly, appAttestationVerifier } = await import("./appAttestation");
 
 const sha256 = (value: Buffer | string): Buffer =>
   createHash("sha256").update(value).digest();
+
+const derLength = (length: number): number[] => {
+  if (length < 0x80) {
+    return [length];
+  }
+
+  if (length <= 0xff) {
+    return [0x81, length];
+  }
+
+  return [0x82, (length >> 8) & 0xff, length & 0xff];
+};
+
+const derElement = (tag: number, value: Buffer): Buffer =>
+  Buffer.from([tag, ...derLength(value.length), ...value]);
 
 const buildStoredIosCredential = (
   overrides: Partial<AppAttestationCredentialRow> = {},
@@ -37,6 +52,45 @@ const buildStoredIosCredential = (
 });
 
 describe("appAttestationVerifier", () => {
+  it("extracts the Apple nonce from the nested SEQUENCE form", () => {
+    const nonce = Buffer.alloc(32, 0x42);
+    const extensionValue = derElement(
+      0x30,
+      derElement(
+        0x30,
+        derElement(
+          0xa1,
+          derElement(0x04, nonce),
+        ),
+      ),
+    );
+
+    const result = __testOnly.extractAppleNonceExtensionValue(extensionValue);
+
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.value.toString("base64")).toBe(nonce.toString("base64"));
+    }
+  });
+
+  it("extracts the Apple nonce from the single-SEQUENCE form", () => {
+    const nonce = Buffer.alloc(32, 0x24);
+    const extensionValue = derElement(
+      0x30,
+      derElement(
+        0xa1,
+        derElement(0x04, nonce),
+      ),
+    );
+
+    const result = __testOnly.extractAppleNonceExtensionValue(extensionValue);
+
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.value.toString("base64")).toBe(nonce.toString("base64"));
+    }
+  });
+
   it("accepts the transitional Android registration contract when app identity matches", async () => {
     const result = await appAttestationVerifier.verifyRegistrationAttestation({
       platform: "android",
