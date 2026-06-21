@@ -22,8 +22,6 @@ const parsed = z
     SUPABASE_URL: z.string().url().optional(),
     SUPABASE_SERVICE_ROLE_KEY: z.string().min(1).optional(),
     SUPABASE_PROJECT_REF: z.string().min(1).optional(),
-    ENABLE_DEV_VIEWER_AUTH: z.string().optional(),
-    DEV_VIEWER_ID_HEADER: z.string().min(1).optional(),
     AUTH_ISSUER: z.string().url().optional(),
     AUTH_ACCESS_TOKEN_TTL_SECONDS: z.coerce.number().int().min(60).optional(),
     AUTH_REFRESH_TOKEN_TTL_DAYS: z.coerce.number().int().min(1).optional(),
@@ -67,25 +65,12 @@ const parsed = z
       input.AUTH_ENABLE_TRANSITIONAL_CRYPTO_BYPASS !== undefined
         ? toBoolean(input.AUTH_ENABLE_TRANSITIONAL_CRYPTO_BYPASS)
         : input.NODE_ENV !== "production";
-    const devViewerAuthEnabled =
-      input.ENABLE_DEV_VIEWER_AUTH !== undefined
-        ? toBoolean(input.ENABLE_DEV_VIEWER_AUTH)
-        : input.NODE_ENV !== "production";
-
     if (input.NODE_ENV === "production" && transitionalBypassEnabled) {
       context.addIssue({
         code: z.ZodIssueCode.custom,
         message:
           "AUTH_ENABLE_TRANSITIONAL_CRYPTO_BYPASS must be false in production.",
         path: ["AUTH_ENABLE_TRANSITIONAL_CRYPTO_BYPASS"],
-      });
-    }
-
-    if (input.NODE_ENV === "production" && devViewerAuthEnabled) {
-      context.addIssue({
-        code: z.ZodIssueCode.custom,
-        message: "ENABLE_DEV_VIEWER_AUTH must be false in production.",
-        path: ["ENABLE_DEV_VIEWER_AUTH"],
       });
     }
 
@@ -105,8 +90,6 @@ const parsed = z
     SUPABASE_URL: emptyToUndefined(process.env.SUPABASE_URL),
     SUPABASE_SERVICE_ROLE_KEY: emptyToUndefined(process.env.SUPABASE_SERVICE_ROLE_KEY),
     SUPABASE_PROJECT_REF: emptyToUndefined(process.env.SUPABASE_PROJECT_REF),
-    ENABLE_DEV_VIEWER_AUTH: emptyToUndefined(process.env.ENABLE_DEV_VIEWER_AUTH),
-    DEV_VIEWER_ID_HEADER: emptyToUndefined(process.env.DEV_VIEWER_ID_HEADER),
     AUTH_ISSUER: emptyToUndefined(process.env.AUTH_ISSUER),
     AUTH_ACCESS_TOKEN_TTL_SECONDS: emptyToUndefined(
       process.env.AUTH_ACCESS_TOKEN_TTL_SECONDS,
@@ -168,14 +151,6 @@ const parsed = z
     ),
   });
 
-const enableDevViewerAuth =
-  parsed.ENABLE_DEV_VIEWER_AUTH !== undefined
-    ? toBoolean(parsed.ENABLE_DEV_VIEWER_AUTH)
-    : parsed.NODE_ENV !== "production";
-
-const devViewerIdHeader = (parsed.DEV_VIEWER_ID_HEADER || "x-dev-viewer-id")
-  .trim()
-  .toLowerCase();
 const authIssuer =
   parsed.AUTH_ISSUER || "https://iland-backend-production.up.railway.app/idp";
 const authAccessTokenTtlSeconds = parsed.AUTH_ACCESS_TOKEN_TTL_SECONDS || 15 * 60;
@@ -245,8 +220,6 @@ export const env = Object.freeze({
     projectRef: parsed.SUPABASE_PROJECT_REF ?? null,
   }),
   auth: Object.freeze({
-    enableDevViewerAuth,
-    devViewerIdHeader,
     issuer: authIssuer,
     accessTokenTtlSeconds: authAccessTokenTtlSeconds,
     refreshTokenTtlDays: authRefreshTokenTtlDays,

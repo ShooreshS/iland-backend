@@ -4,13 +4,11 @@ import { mapRoutes } from "./map";
 import { meRoutes } from "./me";
 import { pollRoutes } from "./polls";
 import { referenceRoutes } from "./reference";
-import { userRoutes } from "./users";
 import type { ResolvedRoute, RouteDefinition } from "../types/http";
 
 export const routes: RouteDefinition[] = [
   ...authRoutes,
   ...healthRoutes,
-  ...userRoutes,
   ...pollRoutes,
   ...meRoutes,
   ...mapRoutes,

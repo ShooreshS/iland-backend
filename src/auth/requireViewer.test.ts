@@ -40,6 +40,31 @@ const buildSession = (
 });
 
 describe("requireViewer", () => {
+  it("rejects protected requests without a bearer token", async () => {
+    const requireViewer = createRequireViewer({
+      authSessionRepositoryLike: {
+        getByAccessTokenHash: async () => null,
+        touchLastSeen: async () => {},
+        revokeById: async () => null,
+      },
+      userRepositoryLike: {
+        getById: async () => activeUser,
+      },
+    });
+
+    const response = await requireViewer(
+      new Request("http://127.0.0.1:3001/me/profile"),
+    );
+
+    expect(response.ok).toBe(false);
+    if (!response.ok) {
+      expect(response.response.status).toBe(401);
+      expect(await response.response.json()).toMatchObject({
+        error: "authorization_required",
+      });
+    }
+  });
+
   it("revokes expired bearer sessions on first contact", async () => {
     const accessToken = "access-token-1";
     const revoked: Array<{ sessionId: string; reason: string }> = [];

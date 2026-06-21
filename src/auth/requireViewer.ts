@@ -1,4 +1,3 @@
-import env from "../config/env";
 import { hashOpaqueBearerToken } from "./tokens";
 import { json } from "../middleware/json";
 import authSessionRepository from "../repositories/authSessionRepository";
@@ -47,148 +46,90 @@ const buildRequireViewer = (
   const userRepo = dependencies.userRepositoryLike || userRepository;
   const now = dependencies.nowFn || (() => Date.now());
 
-  // Temporary local/dev auth seam for 0.0.86 backend bootstrap.
-  // Replace this resolver with real request auth/session handling.
-  //
   // Enforced policy intention:
-  // - production protected routes must eventually resolve the viewer from a
+  // - protected routes resolve the viewer only from a
   //   server-side session that originated from both a valid device auth
   //   credential and a verified app attestation;
-  // - caller-supplied identity headers are a migration seam only, not a valid
-  //   long-term trust boundary.
+  // - caller-supplied identity headers are never part of the protected-route
+  //   trust boundary.
   return async (request: Request): Promise<RequireViewerResult> => {
     const authorizationHeader = request.headers.get("authorization")?.trim() || null;
-    if (authorizationHeader) {
-      const tokenMatch = /^Bearer\s+(.+)$/i.exec(authorizationHeader);
-      if (!tokenMatch?.[1]) {
-        return buildFailure(
-          401,
-          "invalid_authorization_header",
-          "Authorization header must use Bearer token format.",
-        );
-      }
-
-      const session = await authSessionRepo.getByAccessTokenHash(
-        hashOpaqueBearerToken(tokenMatch[1]),
+    if (!authorizationHeader) {
+      return buildFailure(
+        401,
+        "authorization_required",
+        `Protected routes require a bearer session issued by ${authPolicy.issuer}.`,
       );
-      if (!session || session.status !== "active") {
-        return buildFailure(
-          401,
-          "viewer_not_resolved",
-          `No active session found for bearer token under issuer ${authPolicy.issuer}.`,
-        );
-      }
+    }
 
-      if (new Date(session.expires_at).getTime() <= now()) {
-        // Enforced policy:
-        // if an expired bearer token still reaches a protected route, revoke the
-        // server-side session immediately so later inspection and cleanup see the
-        // row as dead rather than leaving it "active but expired".
-        await authSessionRepo.revokeById(session.id, "session_expired");
-        return buildFailure(
-          401,
-          "session_expired",
-          "Bearer session has expired.",
-        );
-      }
+    const tokenMatch = /^Bearer\s+(.+)$/i.exec(authorizationHeader);
+    if (!tokenMatch?.[1]) {
+      return buildFailure(
+        401,
+        "invalid_authorization_header",
+        "Authorization header must use Bearer token format.",
+      );
+    }
 
-      const user = await userRepo.getById(session.user_id);
-      if (!user) {
-        return buildFailure(
-          401,
-          "viewer_not_resolved",
-          "Session user could not be resolved.",
-        );
-      }
+    const session = await authSessionRepo.getByAccessTokenHash(
+      hashOpaqueBearerToken(tokenMatch[1]),
+    );
+    if (!session || session.status !== "active") {
+      return buildFailure(
+        401,
+        "viewer_not_resolved",
+        `No active session found for bearer token under issuer ${authPolicy.issuer}.`,
+      );
+    }
 
-      if (user.account_status !== "active") {
-        return buildFailure(
-          403,
-          "account_disabled",
-          "The current account is disabled or banned.",
-        );
-      }
-
-      if (user.auth_generation !== session.auth_generation) {
-        // Enforced policy:
-        // any auth-generation mismatch means recovery or a security action has
-        // superseded this bearer session. Revoke it on first contact so the
-        // stale row no longer appears active in session-management flows.
-        await authSessionRepo.revokeById(session.id, "auth_generation_mismatch");
-        return buildFailure(
-          401,
-          "session_stale",
-          "Bearer session is no longer current for this user.",
-        );
-      }
-
+    if (new Date(session.expires_at).getTime() <= now()) {
       // Enforced policy:
-      // protected production routes are expected to run on sessions that were
-      // created from a verified attested app context. Session creation captures
-      // that gate once so per-request viewer resolution can remain lightweight.
-      await authSessionRepo.touchLastSeen(session.id);
-
-      return {
-        ok: true,
-        viewer: {
-          userId: user.id,
-          user,
-        },
-      };
-    }
-
-    if (!env.auth.enableDevViewerAuth) {
-      return buildFailure(
-        503,
-        "viewer_resolution_disabled",
-        "Temporary dev viewer resolution is disabled. Configure real auth before using viewer-scoped endpoints.",
-      );
-    }
-
-    if (!env.supabase.enabled) {
-      return buildFailure(
-        503,
-        "database_not_configured",
-        "Supabase is not configured.",
-      );
-    }
-
-    const headerName = env.auth.devViewerIdHeader;
-    const viewerId = request.headers.get(headerName)?.trim() || null;
-    console.info("[viewer/auth] resolving viewer header", {
-      headerName,
-      viewerUserId: viewerId,
-      method: request.method,
-      path: new URL(request.url).pathname,
-    });
-
-    if (!viewerId) {
+      // if an expired bearer token still reaches a protected route, revoke the
+      // server-side session immediately so later inspection and cleanup see the
+      // row as dead rather than leaving it "active but expired".
+      await authSessionRepo.revokeById(session.id, "session_expired");
       return buildFailure(
         401,
-        "viewer_not_resolved",
-        `Missing required dev viewer header: ${headerName}`,
+        "session_expired",
+        "Bearer session has expired.",
       );
     }
 
-    const user = await userRepo.getById(viewerId);
+    const user = await userRepo.getById(session.user_id);
     if (!user) {
-      console.warn("[viewer/auth] viewer id not found", {
-        viewerUserId: viewerId,
-        method: request.method,
-        path: new URL(request.url).pathname,
-      });
       return buildFailure(
         401,
         "viewer_not_resolved",
-        `No user found for viewer id from header ${headerName}.`,
+        "Session user could not be resolved.",
       );
     }
 
-    console.info("[viewer/auth] viewer resolved", {
-      viewerUserId: user.id,
-      method: request.method,
-      path: new URL(request.url).pathname,
-    });
+    if (user.account_status !== "active") {
+      return buildFailure(
+        403,
+        "account_disabled",
+        "The current account is disabled or banned.",
+      );
+    }
+
+    if (user.auth_generation !== session.auth_generation) {
+      // Enforced policy:
+      // any auth-generation mismatch means recovery or a security action has
+      // superseded this bearer session. Revoke it on first contact so the
+      // stale row no longer appears active in session-management flows.
+      await authSessionRepo.revokeById(session.id, "auth_generation_mismatch");
+      return buildFailure(
+        401,
+        "session_stale",
+        "Bearer session is no longer current for this user.",
+      );
+    }
+
+    // Enforced policy:
+    // protected production routes are expected to run on sessions that were
+    // created from a verified attested app context. Session creation captures
+    // that gate once so per-request viewer resolution can remain lightweight.
+    await authSessionRepo.touchLastSeen(session.id);
 
     return {
       ok: true,

@@ -14,9 +14,7 @@ export const authPolicy = Object.freeze({
   refreshTokenTtlDays: env.auth.refreshTokenTtlDays,
   maxActiveSessionsPerUser: env.auth.maxActiveSessionsPerUser,
   // Production policy: every protected route must be backed by an attested app
-  // session. During the current migration, the app still uses the temporary
-  // bootstrap header path; that compatibility seam must be removed before
-  // production launch.
+  // session.
   requireAttestedSessionsForProtectedRoutes:
     env.auth.requireAttestedSessionsForProtectedRoutes,
   // Transitional implementation seam:
