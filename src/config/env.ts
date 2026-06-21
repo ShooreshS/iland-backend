@@ -14,6 +14,15 @@ const toBoolean = (value: string): boolean => {
   return normalized === "1" || normalized === "true" || normalized === "yes";
 };
 
+const normalizeAndroidCertDigest = (value: string): string => {
+  const trimmed = value.trim();
+  if (/^[a-f0-9:]+$/i.test(trimmed)) {
+    return trimmed.replace(/:/g, "").toLowerCase();
+  }
+
+  return trimmed.toLowerCase();
+};
+
 const parsed = z
   .object({
     NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
@@ -80,6 +89,28 @@ const parsed = z
         message:
           "AUTH_IOS_TEAM_ID is required when real App Attest verification is enabled.",
         path: ["AUTH_IOS_TEAM_ID"],
+      });
+    }
+
+    if (!transitionalBypassEnabled && !input.AUTH_ANDROID_GOOGLE_API_KEY) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        message:
+          "AUTH_ANDROID_GOOGLE_API_KEY is required when real Play Integrity verification is enabled.",
+        path: ["AUTH_ANDROID_GOOGLE_API_KEY"],
+      });
+    }
+
+    const allowedAndroidSigningDigests = (input.AUTH_ANDROID_ALLOWED_SIGNING_CERT_DIGESTS || "")
+      .split(",")
+      .map((value) => value.trim())
+      .filter(Boolean);
+    if (!transitionalBypassEnabled && allowedAndroidSigningDigests.length === 0) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        message:
+          "AUTH_ANDROID_ALLOWED_SIGNING_CERT_DIGESTS is required when real Play Integrity verification is enabled.",
+        path: ["AUTH_ANDROID_ALLOWED_SIGNING_CERT_DIGESTS"],
       });
     }
   })
@@ -176,7 +207,7 @@ const authAndroidAllowedSigningCertDigests = (
   parsed.AUTH_ANDROID_ALLOWED_SIGNING_CERT_DIGESTS || ""
 )
   .split(",")
-  .map((value) => value.trim())
+  .map((value) => normalizeAndroidCertDigest(value))
   .filter(Boolean);
 const authAndroidGoogleApiKey = parsed.AUTH_ANDROID_GOOGLE_API_KEY || null;
 const authAndroidRequireStrongIntegrity =

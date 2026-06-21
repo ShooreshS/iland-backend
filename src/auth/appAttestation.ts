@@ -121,6 +121,18 @@ const asTrimmedString = (value: unknown): string | null => {
   return trimmed.length > 0 ? trimmed : null;
 };
 
+const normalizeAndroidCertDigest = (value: string | null): string | null => {
+  if (!value) {
+    return null;
+  }
+
+  if (/^[a-f0-9:]+$/i.test(value)) {
+    return value.replace(/:/g, "").toLowerCase();
+  }
+
+  return value.toLowerCase();
+};
+
 const defaultProviderForPlatform = (
   platform: AuthCredentialPlatform,
 ): AppAttestationProvider =>
@@ -567,10 +579,25 @@ const decodeAndroidPlayIntegrityVerdict = async (
   integrityToken: string,
   challenge: string,
 ): Promise<DecodedAndroidIntegrityVerdict | RejectedAppAttestationResult> => {
+  // Production policy:
+  // Android attestation is only considered real when the backend can both call
+  // the Google decode API and pin the verdict to an explicit allow-list of
+  // release signing certificate digests. Do not silently accept an unpinned
+  // certificate in strict mode.
   if (!authPolicy.androidGoogleApiKey) {
     return reject(
       "NOT_IMPLEMENTED",
       "AUTH_ANDROID_GOOGLE_API_KEY is required for real Android Play Integrity verification.",
+    );
+  }
+
+  if (
+    !authPolicy.enableTransitionalCryptoBypass &&
+    authPolicy.androidAllowedSigningCertDigests.length === 0
+  ) {
+    return reject(
+      "NOT_IMPLEMENTED",
+      "AUTH_ANDROID_ALLOWED_SIGNING_CERT_DIGESTS is required for strict Android Play Integrity verification.",
     );
   }
 
@@ -644,6 +671,7 @@ const decodeAndroidPlayIntegrityVerdict = async (
   const certificateSha256Digests = Array.isArray(appIntegrity?.certificateSha256Digest)
     ? appIntegrity.certificateSha256Digest
         .map((value) => asTrimmedString(value))
+        .map((value) => normalizeAndroidCertDigest(value))
         .filter((value): value is string => Boolean(value))
     : [];
   const deviceRecognitionVerdicts = Array.isArray(deviceIntegrity?.deviceRecognitionVerdict)
@@ -942,10 +970,11 @@ const validateRegistrationContract = (
   }
 
   const signingCertDigest = asTrimmedString(input.appAttestation.signingCertDigest);
+  const normalizedSigningCertDigest = normalizeAndroidCertDigest(signingCertDigest);
   if (
     authPolicy.androidAllowedSigningCertDigests.length > 0 &&
-    (!signingCertDigest ||
-      !authPolicy.androidAllowedSigningCertDigests.includes(signingCertDigest))
+    (!normalizedSigningCertDigest ||
+      !authPolicy.androidAllowedSigningCertDigests.includes(normalizedSigningCertDigest))
   ) {
     return reject(
       "ATTESTATION_INVALID",
@@ -959,7 +988,7 @@ const validateRegistrationContract = (
     attestationKeyId: null,
     appIdentifier: null,
     packageName: packageName.value,
-    signingCertDigest,
+    signingCertDigest: normalizedSigningCertDigest,
   };
 };
 
@@ -1072,10 +1101,11 @@ const validateLoginAssertionContract = (
   }
 
   const signingCertDigest = asTrimmedString(input.appAssertion.signingCertDigest);
+  const normalizedSigningCertDigest = normalizeAndroidCertDigest(signingCertDigest);
   if (
     authPolicy.androidAllowedSigningCertDigests.length > 0 &&
-    (!signingCertDigest ||
-      !authPolicy.androidAllowedSigningCertDigests.includes(signingCertDigest))
+    (!normalizedSigningCertDigest ||
+      !authPolicy.androidAllowedSigningCertDigests.includes(normalizedSigningCertDigest))
   ) {
     return reject(
       "ATTESTATION_INVALID",
@@ -1556,17 +1586,17 @@ const verifyStructuredLoginAssertion = async (
       input.storedCredential.package_name &&
       input.storedCredential.package_name !== decodedVerdict.packageName
     ) {
-      return reject(
-        "ATTESTATION_INVALID",
-        "Google Play Integrity packageName does not match the enrolled app credential.",
-      );
-    }
+    return reject(
+      "ATTESTATION_INVALID",
+      "Google Play Integrity packageName does not match the enrolled app credential.",
+    );
+  }
 
-    if (
-      input.storedCredential.signing_cert_digest &&
+  if (
+      normalizeAndroidCertDigest(input.storedCredential.signing_cert_digest) &&
       decodedVerdict.matchedSigningCertDigest &&
-      input.storedCredential.signing_cert_digest.toLowerCase() !==
-        decodedVerdict.matchedSigningCertDigest.toLowerCase()
+      normalizeAndroidCertDigest(input.storedCredential.signing_cert_digest) !==
+        normalizeAndroidCertDigest(decodedVerdict.matchedSigningCertDigest)
     ) {
       return reject(
         "ATTESTATION_INVALID",
