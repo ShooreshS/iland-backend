@@ -404,6 +404,22 @@ const exportSpkiDerFromCertificatePublicKey = (
   return Buffer.from(publicKey.export({ format: "der", type: "spki" }));
 };
 
+const exportSpkiPemFromCertificatePublicKey = (
+  certificate: X509Certificate,
+): string => {
+  const publicKeyPem = certificate.publicKey.toString("pem");
+  const publicKey = createPublicKey(publicKeyPem);
+  return publicKey.export({ format: "pem", type: "spki" }).toString().trim();
+};
+
+const hashSpkiDerFromPublicKeyPem = (
+  publicKeyPem: string,
+): Buffer => {
+  const publicKey = createPublicKey(publicKeyPem);
+  const spkiDer = Buffer.from(publicKey.export({ format: "der", type: "spki" }));
+  return sha256(spkiDer);
+};
+
 const readDerLength = (
   bytes: Buffer,
   offset: number,
@@ -993,7 +1009,9 @@ const verifyIosRegistrationCryptographically = async (
     provider,
     environment: authPolicy.iosAppAttestEnvironment,
     attestationKeyId: providedKeyIdBytes.value.toString("base64"),
-    attestationPublicKeyPem: leafCertificate.publicKey.toString("pem").trim(),
+    // Persist Node's canonical SPKI PEM so login-time verification uses the
+    // same public-key material/encoding path as the verifier itself.
+    attestationPublicKeyPem: exportSpkiPemFromCertificatePublicKey(leafCertificate),
     appIdentifier: authPolicy.iosBundleId,
     packageName: null,
     signingCertDigest: null,
@@ -1076,6 +1094,18 @@ const verifyIosLoginAssertionCryptographically = async (
   const publicKey = createPublicKey(input.storedCredential.public_key_pem);
   const signatureValid = verifySignature("sha256", signedPayload, publicKey, signature);
   if (!signatureValid) {
+    const storedPublicKeyHash = hashSpkiDerFromPublicKeyPem(
+      input.storedCredential.public_key_pem,
+    ).toString("base64");
+    console.warn("[auth]", {
+      route: "/auth/login/complete",
+      warning: "assertion_signature_verification_failed",
+      signatureLength: signature.length,
+      signaturePrefixHex: signature.subarray(0, Math.min(8, signature.length)).toString("hex"),
+      authenticatorDataLength: authenticatorData.length,
+      storedAttestationKeyId: input.storedCredential.attestation_key_id,
+      storedPublicKeySpkiHash: storedPublicKeyHash,
+    });
     return reject(
       "ATTESTATION_INVALID",
       "iOS assertion signature verification failed.",
