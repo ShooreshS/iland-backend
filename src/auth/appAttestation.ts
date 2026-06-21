@@ -57,6 +57,8 @@ type ParsedAttestedAuthenticatorData = {
   signCount: number;
   aaguid: Buffer;
   credentialId: Buffer;
+  credentialPublicKeyPem: string;
+  credentialPublicKeySpkiDer: Buffer;
 };
 
 type ParsedAssertionAuthenticatorData = {
@@ -244,6 +246,90 @@ const toBuffer = (
 
 const toArrayBuffer = (value: Buffer): ArrayBuffer => Uint8Array.from(value).buffer;
 
+const toBase64Url = (value: Buffer): string =>
+  value.toString("base64").replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/u, "");
+
+const getCoseKeyField = (
+  coseKey: Record<string, unknown> | Map<unknown, unknown>,
+  key: number,
+): unknown => {
+  if (coseKey instanceof Map) {
+    return coseKey.get(key);
+  }
+
+  return coseKey[String(key)];
+};
+
+const parseCoseEc2PublicKey = (
+  coseKeyBytes: Buffer,
+): {
+  success: true;
+  publicKeyPem: string;
+  publicKeySpkiDer: Buffer;
+} | RejectedAppAttestationResult => {
+  try {
+    const decoded = decode(coseKeyBytes);
+    if (!decoded || typeof decoded !== "object") {
+      return reject(
+        "ATTESTATION_INVALID",
+        "iOS attestation credentialPublicKey is not a CBOR map.",
+      );
+    }
+
+    const coseKey = decoded as Record<string, unknown> | Map<unknown, unknown>;
+    const kty = getCoseKeyField(coseKey, 1);
+    const crv = getCoseKeyField(coseKey, -1);
+    const xCoord = toBuffer("iOS attestation credentialPublicKey.x", getCoseKeyField(coseKey, -2));
+    if (!xCoord.success) {
+      return xCoord;
+    }
+
+    const yCoord = toBuffer("iOS attestation credentialPublicKey.y", getCoseKeyField(coseKey, -3));
+    if (!yCoord.success) {
+      return yCoord;
+    }
+
+    if (kty !== 2 || crv !== 1) {
+      return reject(
+        "ATTESTATION_INVALID",
+        "iOS attestation credentialPublicKey is not P-256 EC2.",
+      );
+    }
+
+    if (xCoord.value.length !== 32 || yCoord.value.length !== 32) {
+      return reject(
+        "ATTESTATION_INVALID",
+        "iOS attestation credentialPublicKey coordinates must be 32 bytes.",
+      );
+    }
+
+    const publicKey = createPublicKey({
+      key: {
+        kty: "EC",
+        crv: "P-256",
+        x: toBase64Url(xCoord.value),
+        y: toBase64Url(yCoord.value),
+      },
+      format: "jwk",
+    });
+
+    const publicKeySpkiDer = Buffer.from(
+      publicKey.export({ format: "der", type: "spki" }),
+    );
+
+    return {
+      success: true,
+      publicKeyPem: publicKey.export({ format: "pem", type: "spki" }).toString().trim(),
+      publicKeySpkiDer,
+    };
+  } catch {
+    return reject(
+      "ATTESTATION_INVALID",
+      "iOS attestation credentialPublicKey could not be parsed.",
+    );
+  }
+};
+
 const parseAttestedAuthenticatorData = (
   authData: Buffer,
 ): { success: true; value: ParsedAttestedAuthenticatorData } | RejectedAppAttestationResult => {
@@ -260,6 +346,19 @@ const parseAttestedAuthenticatorData = (
     );
   }
 
+  const credentialPublicKeyBytes = authData.subarray(credentialIdEnd);
+  if (credentialPublicKeyBytes.length === 0) {
+    return reject(
+      "ATTESTATION_INVALID",
+      "iOS attestation authData is missing credentialPublicKey bytes.",
+    );
+  }
+
+  const credentialPublicKey = parseCoseEc2PublicKey(credentialPublicKeyBytes);
+  if (!credentialPublicKey.success) {
+    return credentialPublicKey;
+  }
+
   return {
     success: true,
     value: {
@@ -268,6 +367,8 @@ const parseAttestedAuthenticatorData = (
       signCount: authData.readUInt32BE(33),
       aaguid: authData.subarray(37, 53),
       credentialId: authData.subarray(55, credentialIdEnd),
+      credentialPublicKeyPem: credentialPublicKey.publicKeyPem,
+      credentialPublicKeySpkiDer: credentialPublicKey.publicKeySpkiDer,
     },
   };
 };
@@ -402,14 +503,6 @@ const exportSpkiDerFromCertificatePublicKey = (
   const publicKeyPem = certificate.publicKey.toString("pem");
   const publicKey = createPublicKey(publicKeyPem);
   return Buffer.from(publicKey.export({ format: "der", type: "spki" }));
-};
-
-const exportSpkiPemFromCertificatePublicKey = (
-  certificate: X509Certificate,
-): string => {
-  const publicKeyPem = certificate.publicKey.toString("pem");
-  const publicKey = createPublicKey(publicKeyPem);
-  return publicKey.export({ format: "pem", type: "spki" }).toString().trim();
 };
 
 const hashSpkiDerFromPublicKeyPem = (
@@ -960,22 +1053,26 @@ const verifyIosRegistrationCryptographically = async (
     );
   }
 
-  const leafPublicKeySpki = exportSpkiDerFromCertificatePublicKey(
-    leafCertificate,
+  const credentialPublicKeyHash = sha256(
+    parsedAuthData.value.credentialPublicKeySpkiDer,
   );
-  const computedKeyIdBytes = sha256(leafPublicKeySpki);
-  if (!buffersEqual(providedKeyIdBytes.value, computedKeyIdBytes)) {
-    // Diagnostic compatibility seam:
-    // some valid App Attest payloads observed in rollout do not match our
-    // current SPKI-hash derivation even though the Apple-attested credentialId
-    // and the client-supplied keyId agree. Keep logging this mismatch so the
-    // verifier can be tightened again once the exact encoding difference is
-    // fully characterized.
+  if (!buffersEqual(providedKeyIdBytes.value, credentialPublicKeyHash)) {
+    console.warn("[auth]", {
+      route: "/auth/register/complete",
+      warning: "attestation_authdata_public_key_hash_mismatch",
+      providedKeyId: providedKeyIdBytes.value.toString("base64"),
+      computedCredentialPublicKeyId: credentialPublicKeyHash.toString("base64"),
+    });
+  }
+
+  const leafPublicKeySpki = exportSpkiDerFromCertificatePublicKey(leafCertificate);
+  const leafPublicKeyHash = sha256(leafPublicKeySpki);
+  if (!buffersEqual(providedKeyIdBytes.value, leafPublicKeyHash)) {
     console.warn("[auth]", {
       route: "/auth/register/complete",
       warning: "attestation_leaf_public_key_hash_mismatch",
       providedKeyId: providedKeyIdBytes.value.toString("base64"),
-      computedKeyId: computedKeyIdBytes.toString("base64"),
+      computedKeyId: leafPublicKeyHash.toString("base64"),
     });
   }
 
@@ -1009,9 +1106,9 @@ const verifyIosRegistrationCryptographically = async (
     provider,
     environment: authPolicy.iosAppAttestEnvironment,
     attestationKeyId: providedKeyIdBytes.value.toString("base64"),
-    // Persist Node's canonical SPKI PEM so login-time verification uses the
-    // same public-key material/encoding path as the verifier itself.
-    attestationPublicKeyPem: exportSpkiPemFromCertificatePublicKey(leafCertificate),
+    // Persist the attested credential public key from authData because that is
+    // the key App Attest assertions are signed with at login time.
+    attestationPublicKeyPem: parsedAuthData.value.credentialPublicKeyPem,
     appIdentifier: authPolicy.iosBundleId,
     packageName: null,
     signingCertDigest: null,
