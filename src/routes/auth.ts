@@ -64,6 +64,21 @@ const invalidJsonResponse = (message: string) =>
     },
   );
 
+const logAuthFlowFailure = (
+  route: string,
+  result: { success: false; errorCode?: string; message?: string },
+) => {
+  // Intention:
+  // auth enrollment/login failures are expected during rollout, so log only the
+  // stable diagnostic fields needed to identify policy/config mismatches without
+  // dumping request payloads or sensitive material.
+  console.warn("[auth]", {
+    route,
+    errorCode: result.errorCode || null,
+    message: result.message || null,
+  });
+};
+
 const registerChallengeRoute: RouteDefinition = {
   method: "POST",
   path: "/auth/register/challenge",
@@ -105,6 +120,9 @@ const registerCompleteRoute: RouteDefinition = {
     }
 
     const result = await authService.completeRegistration(parsed.data);
+    if (!result.success) {
+      logAuthFlowFailure("/auth/register/complete", result);
+    }
 
     return json(
       result,
@@ -175,6 +193,9 @@ const loginCompleteRoute: RouteDefinition = {
     }
 
     const result = await authService.completeLogin(parsed.data);
+    if (!result.success) {
+      logAuthFlowFailure("/auth/login/complete", result);
+    }
 
     return json(
       result,
