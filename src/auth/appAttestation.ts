@@ -327,6 +327,18 @@ const verifyAaguid = (
   );
 };
 
+const exportSpkiDerFromCertificatePublicKey = (
+  certificate: X509Certificate,
+): Buffer => {
+  // Intention:
+  // App Attest keyId is derived from the certificate leaf public key's SPKI
+  // bytes. Use Node crypto to canonicalize the PEM/DER export path here rather
+  // than depending on a third-party x509 helper's raw ASN.1 serialization.
+  const publicKeyPem = certificate.publicKey.toString("pem");
+  const publicKey = createPublicKey(publicKeyPem);
+  return Buffer.from(publicKey.export({ format: "der", type: "spki" }));
+};
+
 const readDerLength = (
   bytes: Buffer,
   offset: number,
@@ -813,7 +825,9 @@ const verifyIosRegistrationCryptographically = async (
     return aaguidMismatch;
   }
 
-  const leafPublicKeySpki = Buffer.from(leafCertificate.publicKey.rawData);
+  const leafPublicKeySpki = exportSpkiDerFromCertificatePublicKey(
+    leafCertificate,
+  );
   const computedKeyIdBytes = sha256(leafPublicKeySpki);
   const providedKeyIdBytes = decodeBase64("appAttestation.keyId", keyId.value);
   if (!providedKeyIdBytes.success) {
