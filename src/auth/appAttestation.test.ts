@@ -377,7 +377,7 @@ describe("appAttestationVerifier", () => {
     });
   });
 
-  it("accepts a cryptographic iOS login assertion even when rpIdHash differs", async () => {
+  it("rejects a cryptographic iOS login assertion when rpIdHash differs", async () => {
     const challenge = "challenge-1";
     const clientDataHash = sha256(challenge);
     const mismatchedRpIdHash = sha256("unexpected.app.identifier");
@@ -418,13 +418,12 @@ describe("appAttestationVerifier", () => {
     });
 
     expect(result).toMatchObject({
-      success: true,
-      transitionalCryptoBypassUsed: false,
-      lastCounter: 9,
+      success: false,
+      errorCode: "ATTESTATION_INVALID",
     });
   });
 
-  it("accepts iOS login when assertion signature does not verify under the enrolled App Attest key", async () => {
+  it("rejects iOS login when assertion signature does not verify under the enrolled App Attest key", async () => {
     const challenge = "challenge-1";
     const clientDataHash = sha256(challenge);
     const rpIdHash = sha256("DJWBN8658Q.com.shooresh.iland");
@@ -473,9 +472,63 @@ describe("appAttestationVerifier", () => {
     });
 
     expect(result).toMatchObject({
+      success: false,
+      errorCode: "ATTESTATION_INVALID",
+    });
+  });
+
+  it("verifies a CBOR iOS login assertion even when the blob has trailing bytes", async () => {
+    const challenge = "challenge-1";
+    const clientDataHash = sha256(challenge);
+    const rpIdHash = sha256("DJWBN8658Q.com.shooresh.iland");
+    const { privateKey, publicKey } = generateKeyPairSync("ec", {
+      namedCurve: "prime256v1",
+    });
+    const spkiDer = publicKey.export({ format: "der", type: "spki" });
+    const keyId = sha256(Buffer.from(spkiDer)).toString("base64");
+    const authenticatorData = Buffer.concat([
+      rpIdHash,
+      Buffer.from([0x01]),
+      Buffer.from([0x00, 0x00, 0x00, 0x0d]),
+    ]);
+    const signature = sign(
+      "sha256",
+      Buffer.concat([authenticatorData, clientDataHash]),
+      privateKey,
+    );
+    const assertion = Buffer.concat([
+      Buffer.from(
+        encode({
+          signature,
+          authenticatorData,
+        }),
+      ),
+      Buffer.from([0xde, 0xad, 0xbe, 0xef]),
+    ]).toString("base64");
+
+    const result = await appAttestationVerifier.verifyLoginAssertion({
+      platform: "ios",
+      challenge,
+      storedCredential: buildStoredIosCredential({
+        attestation_key_id: keyId,
+        public_key_pem: publicKey
+          .export({ format: "pem", type: "spki" })
+          .toString()
+          .trim(),
+        last_counter: 12,
+      }),
+      appAssertion: {
+        keyId,
+        appIdentifier: "com.shooresh.iland",
+        assertion,
+        clientDataHash: clientDataHash.toString("base64"),
+      },
+    });
+
+    expect(result).toMatchObject({
       success: true,
       transitionalCryptoBypassUsed: false,
-      lastCounter: 3,
+      lastCounter: 13,
     });
   });
 });

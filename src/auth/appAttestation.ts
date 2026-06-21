@@ -1,6 +1,6 @@
 import "reflect-metadata";
 
-import { decode } from "cbor-x";
+import { decode, decodeMultiple } from "cbor-x";
 import { X509Certificate } from "@peculiar/x509";
 import {
   createHash,
@@ -411,29 +411,58 @@ const parseAssertionAuthenticatorData = (
 const parseIosAssertionPayload = (
   assertionBytes: Buffer,
 ): { success: true; value: ParsedIosAssertionPayload } | RejectedAppAttestationResult => {
+  const extractDecodedAssertion = (
+    decodedAssertion: unknown,
+  ): { success: true; value: ParsedIosAssertionPayload } | RejectedAppAttestationResult | null => {
+    if (!(decodedAssertion && typeof decodedAssertion === "object")) {
+      return null;
+    }
+
+    const record = decodedAssertion instanceof Map
+      ? Object.fromEntries(decodedAssertion.entries())
+      : decodedAssertion as Record<string, unknown>;
+    const authenticatorData = toBuffer(
+      "iOS assertion authenticatorData",
+      record.authenticatorData ?? record.authData,
+    );
+    if (!authenticatorData.success) {
+      return authenticatorData;
+    }
+
+    const signature = toBuffer("iOS assertion signature", record.signature);
+    if (!signature.success) {
+      return signature;
+    }
+
+    return {
+      success: true,
+      value: {
+        authenticatorData: authenticatorData.value,
+        signature: signature.value,
+      },
+    };
+  };
+
   try {
     const decodedAssertion = decode(assertionBytes);
-    if (decodedAssertion && typeof decodedAssertion === "object") {
-      const record = decodedAssertion instanceof Map
-        ? Object.fromEntries(decodedAssertion.entries())
-        : decodedAssertion as Record<string, unknown>;
-      const authenticatorData = toBuffer(
-        "iOS assertion authenticatorData",
-        record.authenticatorData ?? record.authData,
-      );
-      if (authenticatorData.success) {
-        const signature = toBuffer("iOS assertion signature", record.signature);
-        if (!signature.success) {
-          return signature;
-        }
+    const extractedAssertion = extractDecodedAssertion(decodedAssertion);
+    if (extractedAssertion) {
+      return extractedAssertion;
+    }
+  } catch {
+    // Fall through to decodeMultiple() and finally to the raw legacy shape.
+  }
 
-        return {
-          success: true,
-          value: {
-            authenticatorData: authenticatorData.value,
-            signature: signature.value,
-          },
-        };
+  try {
+    let firstDecodedAssertion: unknown;
+    decodeMultiple(assertionBytes, (decodedAssertion) => {
+      firstDecodedAssertion = decodedAssertion;
+      return false;
+    });
+    if (firstDecodedAssertion !== undefined) {
+      const extractedAssertion = extractDecodedAssertion(firstDecodedAssertion);
+      if (extractedAssertion) {
+        return extractedAssertion;
       }
     }
   } catch {
@@ -441,7 +470,7 @@ const parseIosAssertionPayload = (
     // older local tests and some earlier assumptions modeled the assertion as
     // raw authenticatorData || signature bytes. Keep accepting that format so
     // existing fixtures continue to work while production devices use the
-    // CBOR assertion object returned by DCAppAttestService.generateAssertion.
+    // structured assertion object returned by DCAppAttestService.generateAssertion.
   }
 
   if (assertionBytes.length <= IOS_ASSERTION_AUTH_DATA_LENGTH) {
@@ -1365,19 +1394,10 @@ const verifyIosLoginAssertionCryptographically = async (
 
   const expectedRpIdHash = expectedIosRpIdHash();
   if (expectedRpIdHash && !buffersEqual(parsedAuthData.value.rpIdHash, expectedRpIdHash)) {
-    // Compatibility seam:
-    // real devices in rollout have produced valid login assertions from the
-    // enrolled App Attest key whose rpIdHash does not match the registration-
-    // time expectation, while the stronger properties we need here still hold:
-    // key binding, server challenge binding, signature verification, and
-    // strictly increasing signCount. Keep this as a warning until we capture a
-    // golden assertion vector and fully characterize Apple's payload shape.
-    console.warn("[auth]", {
-      route: "/auth/login/complete",
-      warning: "assertion_rp_id_hash_mismatch",
-      actualRpIdHash: parsedAuthData.value.rpIdHash.toString("base64"),
-      expectedRpIdHash: expectedRpIdHash.toString("base64"),
-    });
+    return reject(
+      "ATTESTATION_INVALID",
+      "iOS assertion rpIdHash does not match SHA-256(teamID.bundleID).",
+    );
   }
 
   const signedPayload = Buffer.concat([authenticatorData, clientDataHash.value]);
@@ -1396,27 +1416,10 @@ const verifyIosLoginAssertionCryptographically = async (
       storedAttestationKeyId: input.storedCredential.attestation_key_id,
       storedPublicKeySpkiHash: storedPublicKeyHash,
     });
-
-    // Compatibility seam:
-    // real TestFlight devices are currently producing App Attest enrollment and
-    // assertion artifacts whose key-id/public-key relationship does not match
-    // the strict verifier model implemented here. Failing closed would block
-    // every production login even though the request still proves:
-    // - the enrolled attestation key id matches the device's stored key id,
-    // - the app identifier matches the enrolled app,
-    // - the assertion is bound to the one-time server challenge, and
-    // - the separate device-auth credential signature over the login challenge
-    //   has already been verified by the auth service before this point.
-    //
-    // Keep this bypass narrow to iOS login assertions only and log every use so
-    // the strict cryptographic check can replace it once we have a golden
-    // production assertion vector or Apple's exact verification contract.
-    console.warn("[auth]", {
-      route: "/auth/login/complete",
-      warning: "assertion_signature_compatibility_bypass",
-      storedAttestationKeyId: input.storedCredential.attestation_key_id,
-      storedPublicKeySpkiHash: storedPublicKeyHash,
-    });
+    return reject(
+      "ATTESTATION_INVALID",
+      "iOS assertion signature verification failed.",
+    );
   }
 
   // Replay policy:
