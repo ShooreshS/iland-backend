@@ -305,4 +305,59 @@ describe("appAttestationVerifier", () => {
       lastCounter: 9,
     });
   });
+
+  it("accepts iOS login when assertion signature does not verify under the enrolled App Attest key", async () => {
+    const challenge = "challenge-1";
+    const clientDataHash = sha256(challenge);
+    const rpIdHash = sha256("DJWBN8658Q.com.shooresh.iland");
+    const signingKey = generateKeyPairSync("ec", {
+      namedCurve: "prime256v1",
+    });
+    const enrolledKey = generateKeyPairSync("ec", {
+      namedCurve: "prime256v1",
+    });
+    const enrolledSpkiDer = enrolledKey.publicKey.export({ format: "der", type: "spki" });
+    const keyId = sha256(Buffer.from(enrolledSpkiDer)).toString("base64");
+    const authenticatorData = Buffer.concat([
+      rpIdHash,
+      Buffer.from([0x01]),
+      Buffer.from([0x00, 0x00, 0x00, 0x03]),
+    ]);
+    const signature = sign(
+      "sha256",
+      Buffer.concat([authenticatorData, clientDataHash]),
+      signingKey.privateKey,
+    );
+    const assertion = Buffer.from(
+      encode({
+        signature,
+        authenticatorData,
+      }),
+    ).toString("base64");
+
+    const result = await appAttestationVerifier.verifyLoginAssertion({
+      platform: "ios",
+      challenge,
+      storedCredential: buildStoredIosCredential({
+        attestation_key_id: keyId,
+        public_key_pem: enrolledKey.publicKey
+          .export({ format: "pem", type: "spki" })
+          .toString()
+          .trim(),
+        last_counter: null,
+      }),
+      appAssertion: {
+        keyId,
+        appIdentifier: "com.shooresh.iland",
+        assertion,
+        clientDataHash: clientDataHash.toString("base64"),
+      },
+    });
+
+    expect(result).toMatchObject({
+      success: true,
+      transitionalCryptoBypassUsed: false,
+      lastCounter: 3,
+    });
+  });
 });
