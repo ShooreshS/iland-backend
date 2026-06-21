@@ -6,6 +6,9 @@ import type { AppAttestationCredentialRow } from "../types/db";
 
 process.env.AUTH_IOS_TEAM_ID = "DJWBN8658Q";
 process.env.AUTH_ENABLE_TRANSITIONAL_CRYPTO_BYPASS = "true";
+process.env.AUTH_ANDROID_GOOGLE_API_KEY = "android-google-api-key";
+process.env.AUTH_ANDROID_ALLOWED_SIGNING_CERT_DIGESTS =
+  "allowed-signing-cert-digest";
 
 const { __testOnly, appAttestationVerifier } = await import("./appAttestation");
 
@@ -52,6 +55,87 @@ const buildStoredIosCredential = (
   ...overrides,
 });
 
+const buildStoredAndroidCredential = (
+  overrides: Partial<AppAttestationCredentialRow> = {},
+): AppAttestationCredentialRow => ({
+  id: "android-attestation-1",
+  user_id: "user-1",
+  auth_credential_id: "auth-android-1",
+  platform: "android",
+  attestation_provider: "android_play_integrity",
+  environment: "development",
+  attestation_key_id: null,
+  public_key_pem: null,
+  app_identifier: null,
+  package_name: "com.shooresh.iland",
+  signing_cert_digest: "allowed-signing-cert-digest",
+  status: "verified",
+  last_counter: null,
+  last_asserted_at: null,
+  last_assertion_nonce_hash: null,
+  revoked_at: null,
+  revocation_reason: null,
+  created_at: "2026-06-20T00:00:00.000Z",
+  updated_at: "2026-06-20T00:00:00.000Z",
+  ...overrides,
+});
+
+const withPlayIntegrityFetch = async <T>(
+  payload: unknown,
+  run: () => Promise<T>,
+): Promise<T> => {
+  __testOnly.setPlayIntegrityFetch(
+    (async () =>
+      new Response(JSON.stringify(payload), {
+        status: 200,
+        headers: {
+          "content-type": "application/json",
+        },
+      })) as unknown as typeof fetch,
+  );
+
+  try {
+    return await run();
+  } finally {
+    __testOnly.resetPlayIntegrityFetch();
+  }
+};
+
+const buildPlayIntegrityPayload = (
+  overrides: Partial<{
+    requestPackageName: string;
+    packageName: string;
+    nonce: string;
+    timestampMillis: number;
+    appRecognitionVerdict: string;
+    certificateSha256Digest: string[];
+    deviceRecognitionVerdict: string[];
+  }> = {},
+) => ({
+  tokenPayloadExternal: {
+    requestDetails: {
+      requestPackageName: overrides.requestPackageName || "com.shooresh.iland",
+      nonce:
+        overrides.nonce ||
+        sha256("challenge-1").toString("base64"),
+      timestampMillis:
+        overrides.timestampMillis ||
+        Date.now(),
+    },
+    appIntegrity: {
+      appRecognitionVerdict:
+        overrides.appRecognitionVerdict || "PLAY_RECOGNIZED",
+      packageName: overrides.packageName || "com.shooresh.iland",
+      certificateSha256Digest:
+        overrides.certificateSha256Digest || ["allowed-signing-cert-digest"],
+    },
+    deviceIntegrity: {
+      deviceRecognitionVerdict:
+        overrides.deviceRecognitionVerdict || ["MEETS_DEVICE_INTEGRITY"],
+    },
+  },
+});
+
 describe("appAttestationVerifier", () => {
   it("extracts the Apple nonce from the nested SEQUENCE form", () => {
     const nonce = Buffer.alloc(32, 0x42);
@@ -92,18 +176,28 @@ describe("appAttestationVerifier", () => {
     }
   });
 
-  it("accepts the transitional Android registration contract when app identity matches", async () => {
-    const result = await appAttestationVerifier.verifyRegistrationAttestation({
-      platform: "android",
-      challenge: "challenge-1",
-      appAttestation: {
-        provider: "android_play_integrity",
-        packageName: "com.shooresh.iland",
-        integrityToken: "android-integrity-token",
-      },
-    });
+  it("verifies Android registration through the Play Integrity decode verdict", async () => {
+    const result = await withPlayIntegrityFetch(
+      buildPlayIntegrityPayload(),
+      async () =>
+        appAttestationVerifier.verifyRegistrationAttestation({
+          platform: "android",
+          challenge: "challenge-1",
+          appAttestation: {
+            provider: "android_play_integrity",
+            packageName: "com.shooresh.iland",
+            integrityToken: "android-integrity-token",
+            signingCertDigest: "allowed-signing-cert-digest",
+          },
+        }),
+    );
 
-    expect(result.success).toBe(true);
+    expect(result).toMatchObject({
+      success: true,
+      packageName: "com.shooresh.iland",
+      signingCertDigest: "allowed-signing-cert-digest",
+      transitionalCryptoBypassUsed: false,
+    });
   });
 
   it("rejects iOS registration when clientDataHash does not match the challenge", async () => {
@@ -138,6 +232,30 @@ describe("appAttestationVerifier", () => {
     expect(result).toMatchObject({
       success: false,
       errorCode: "ATTESTATION_INVALID",
+    });
+  });
+
+  it("verifies Android login through the Play Integrity decode verdict", async () => {
+    const result = await withPlayIntegrityFetch(
+      buildPlayIntegrityPayload(),
+      async () =>
+        appAttestationVerifier.verifyLoginAssertion({
+          platform: "android",
+          challenge: "challenge-1",
+          storedCredential: buildStoredAndroidCredential(),
+          appAssertion: {
+            packageName: "com.shooresh.iland",
+            integrityToken: "android-integrity-token",
+            signingCertDigest: "allowed-signing-cert-digest",
+          },
+        }),
+    );
+
+    expect(result).toMatchObject({
+      success: true,
+      packageName: "com.shooresh.iland",
+      signingCertDigest: "allowed-signing-cert-digest",
+      transitionalCryptoBypassUsed: false,
     });
   });
 

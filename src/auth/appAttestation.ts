@@ -72,6 +72,17 @@ type ParsedIosAssertionPayload = {
   signature: Buffer;
 };
 
+type DecodedAndroidIntegrityVerdict = {
+  requestPackageName: string;
+  packageName: string;
+  nonce: string;
+  timestampMillis: number | null;
+  appRecognitionVerdict: string | null;
+  certificateSha256Digests: string[];
+  deviceRecognitionVerdicts: string[];
+  matchedSigningCertDigest: string | null;
+};
+
 const APPLE_APP_ATTEST_ROOT_CA_PEM = `-----BEGIN CERTIFICATE-----
 MIICITCCAaegAwIBAgIQC/O+DvHN0uD7jG5yH2IXmDAKBggqhkjOPQQDAzBSMSYw
 JAYDVQQDDB1BcHBsZSBBcHAgQXR0ZXN0YXRpb24gUm9vdCBDQTETMBEGA1UECgwK
@@ -88,6 +99,7 @@ oyFraWVIyd/dganmrduC1bmTBGwD
 -----END CERTIFICATE-----`;
 
 const APPLE_NONCE_EXTENSION_OID = "1.2.840.113635.100.8.2";
+const PLAY_INTEGRITY_DECODE_URL = "https://playintegrity.googleapis.com/v1/%s:decodeIntegrityToken?key=%s";
 const IOS_ATTESTED_AUTH_DATA_MIN_LENGTH = 55;
 const IOS_ASSERTION_AUTH_DATA_LENGTH = 37;
 const IOS_FLAG_ATTESTED_CREDENTIAL_DATA = 0x40;
@@ -96,6 +108,9 @@ const AAGUID_PRODUCTION = Buffer.concat([
   Buffer.from("appattest", "ascii"),
   Buffer.alloc(7),
 ]);
+const ANDROID_INTEGRITY_MAX_AGE_MS = 10 * 60 * 1000;
+
+let playIntegrityFetch: typeof fetch = fetch;
 
 const asTrimmedString = (value: unknown): string | null => {
   if (typeof value !== "string") {
@@ -511,6 +526,184 @@ const hashSpkiDerFromPublicKeyPem = (
   const publicKey = createPublicKey(publicKeyPem);
   const spkiDer = Buffer.from(publicKey.export({ format: "der", type: "spki" }));
   return sha256(spkiDer);
+};
+
+const truncateForLog = (value: string, maxLength: number): string =>
+  value.length <= maxLength ? value : `${value.slice(0, maxLength)}…`;
+
+const expectedAndroidIntegrityNonce = (challenge: string): string =>
+  expectedClientDataHash(challenge).toString("base64");
+
+const decodeAndroidPlayIntegrityVerdict = async (
+  integrityToken: string,
+  challenge: string,
+): Promise<DecodedAndroidIntegrityVerdict | RejectedAppAttestationResult> => {
+  if (!authPolicy.androidGoogleApiKey) {
+    return reject(
+      "NOT_IMPLEMENTED",
+      "AUTH_ANDROID_GOOGLE_API_KEY is required for real Android Play Integrity verification.",
+    );
+  }
+
+  const url = PLAY_INTEGRITY_DECODE_URL
+    .replace("%s", encodeURIComponent(authPolicy.androidPackageName))
+    .replace("%s", encodeURIComponent(authPolicy.androidGoogleApiKey));
+
+  let response: Response;
+  try {
+    response = await playIntegrityFetch(url, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        integrity_token: integrityToken,
+      }),
+    });
+  } catch {
+    return reject(
+      "ATTESTATION_INVALID",
+      "Google Play Integrity decode request failed.",
+    );
+  }
+
+  const responseText = await response.text();
+  if (!response.ok) {
+    return reject(
+      "ATTESTATION_INVALID",
+      `Google Play Integrity decode returned HTTP ${response.status}: ${truncateForLog(responseText, 200)}`,
+    );
+  }
+
+  let payload: Record<string, unknown>;
+  try {
+    payload = JSON.parse(responseText) as Record<string, unknown>;
+  } catch {
+    return reject(
+      "ATTESTATION_INVALID",
+      "Google Play Integrity decode response is not valid JSON.",
+    );
+  }
+
+  const tokenPayloadExternal =
+    payload.tokenPayloadExternal as Record<string, unknown> | undefined;
+  if (!tokenPayloadExternal || typeof tokenPayloadExternal !== "object") {
+    return reject(
+      "ATTESTATION_INVALID",
+      "Google Play Integrity decode response is missing tokenPayloadExternal.",
+    );
+  }
+
+  const requestDetails =
+    tokenPayloadExternal.requestDetails as Record<string, unknown> | undefined;
+  const appIntegrity =
+    tokenPayloadExternal.appIntegrity as Record<string, unknown> | undefined;
+  const deviceIntegrity =
+    tokenPayloadExternal.deviceIntegrity as Record<string, unknown> | undefined;
+
+  const requestPackageName = asTrimmedString(requestDetails?.requestPackageName) || "";
+  const nonce = asTrimmedString(requestDetails?.nonce) || "";
+  const timestampMillis =
+    typeof requestDetails?.timestampMillis === "number"
+      ? requestDetails.timestampMillis
+      : typeof requestDetails?.timestampMillis === "string"
+        ? Number.parseInt(requestDetails.timestampMillis, 10)
+        : Number.NaN;
+
+  const packageName = asTrimmedString(appIntegrity?.packageName) || "";
+  const appRecognitionVerdict = asTrimmedString(appIntegrity?.appRecognitionVerdict);
+  const certificateSha256Digests = Array.isArray(appIntegrity?.certificateSha256Digest)
+    ? appIntegrity.certificateSha256Digest
+        .map((value) => asTrimmedString(value))
+        .filter((value): value is string => Boolean(value))
+    : [];
+  const deviceRecognitionVerdicts = Array.isArray(deviceIntegrity?.deviceRecognitionVerdict)
+    ? deviceIntegrity.deviceRecognitionVerdict
+        .map((value) => asTrimmedString(value))
+        .filter((value): value is string => Boolean(value))
+    : [];
+
+  if (packageName !== authPolicy.androidPackageName) {
+    return reject(
+      "ATTESTATION_INVALID",
+      "Google Play Integrity packageName does not match the configured app identity.",
+    );
+  }
+
+  if (requestPackageName !== authPolicy.androidPackageName) {
+    return reject(
+      "ATTESTATION_INVALID",
+      "Google Play Integrity requestPackageName does not match the configured app identity.",
+    );
+  }
+
+  const expectedNonce = expectedAndroidIntegrityNonce(challenge);
+  if (nonce !== expectedNonce) {
+    return reject(
+      "ATTESTATION_INVALID",
+      "Google Play Integrity nonce does not match the server challenge hash.",
+    );
+  }
+
+  if (appRecognitionVerdict !== "PLAY_RECOGNIZED") {
+    return reject(
+      "ATTESTATION_INVALID",
+      `Google Play Integrity appRecognitionVerdict is ${appRecognitionVerdict || "missing"}, expected PLAY_RECOGNIZED.`,
+    );
+  }
+
+  let matchedSigningCertDigest: string | null = null;
+  if (authPolicy.androidAllowedSigningCertDigests.length > 0) {
+    matchedSigningCertDigest =
+      certificateSha256Digests.find((digest) =>
+        authPolicy.androidAllowedSigningCertDigests.some(
+          (allowedDigest) => allowedDigest.toLowerCase() === digest.toLowerCase(),
+        )) || null;
+
+    if (!matchedSigningCertDigest) {
+      return reject(
+        "ATTESTATION_INVALID",
+        "Google Play Integrity signing certificate digest is not allow-listed.",
+      );
+    }
+  } else {
+    matchedSigningCertDigest = certificateSha256Digests[0] || null;
+  }
+
+  if (
+    authPolicy.androidRequireStrongIntegrity &&
+    !deviceRecognitionVerdicts.includes("MEETS_STRONG_INTEGRITY")
+  ) {
+    return reject(
+      "ATTESTATION_INVALID",
+      "Google Play Integrity device does not meet strong integrity.",
+    );
+  }
+
+  if (!Number.isFinite(timestampMillis)) {
+    return reject(
+      "ATTESTATION_INVALID",
+      "Google Play Integrity timestampMillis is missing or invalid.",
+    );
+  }
+
+  if (Math.abs(Date.now() - timestampMillis) > ANDROID_INTEGRITY_MAX_AGE_MS) {
+    return reject(
+      "ATTESTATION_INVALID",
+      "Google Play Integrity token timestamp is too old.",
+    );
+  }
+
+  return {
+    requestPackageName,
+    packageName,
+    nonce,
+    timestampMillis,
+    appRecognitionVerdict,
+    certificateSha256Digests,
+    deviceRecognitionVerdicts,
+    matchedSigningCertDigest,
+  };
 };
 
 const readDerLength = (
@@ -1268,6 +1461,38 @@ const verifyStructuredRegistrationAttestation = async (
     return verifyIosRegistrationCryptographically(input, contractValidation.provider);
   }
 
+  if (input.platform === "android") {
+    const integrityToken = asTrimmedString(input.appAttestation.integrityToken);
+    if (!integrityToken) {
+      return reject(
+        "ATTESTATION_INVALID",
+        "appAttestation.integrityToken is required.",
+      );
+    }
+
+    const decodedVerdict = await decodeAndroidPlayIntegrityVerdict(
+      integrityToken,
+      input.challenge,
+    );
+    if (!("packageName" in decodedVerdict)) {
+      return decodedVerdict;
+    }
+
+    return {
+      success: true,
+      provider: contractValidation.provider,
+      environment: fallbackEnvironmentForPlatform("android"),
+      attestationKeyId: null,
+      attestationPublicKeyPem: null,
+      appIdentifier: null,
+      packageName: decodedVerdict.packageName,
+      signingCertDigest: decodedVerdict.matchedSigningCertDigest,
+      lastAssertionNonceHash: null,
+      lastCounter: null,
+      transitionalCryptoBypassUsed: false,
+    };
+  }
+
   if (authPolicy.enableTransitionalCryptoBypass) {
     // Transitional seam:
     // if a platform's final cryptographic verifier is not available yet, keep
@@ -1307,6 +1532,62 @@ const verifyStructuredLoginAssertion = async (
     return verifyIosLoginAssertionCryptographically(input, contractValidation.provider);
   }
 
+  if (input.platform === "android") {
+    const integrityToken = asTrimmedString(input.appAssertion.integrityToken);
+    if (!integrityToken) {
+      return reject(
+        "ATTESTATION_INVALID",
+        "appAssertion.integrityToken is required.",
+      );
+    }
+
+    const decodedVerdict = await decodeAndroidPlayIntegrityVerdict(
+      integrityToken,
+      input.challenge,
+    );
+    if (!("packageName" in decodedVerdict)) {
+      return decodedVerdict;
+    }
+
+    if (
+      input.storedCredential.package_name &&
+      input.storedCredential.package_name !== decodedVerdict.packageName
+    ) {
+      return reject(
+        "ATTESTATION_INVALID",
+        "Google Play Integrity packageName does not match the enrolled app credential.",
+      );
+    }
+
+    if (
+      input.storedCredential.signing_cert_digest &&
+      decodedVerdict.matchedSigningCertDigest &&
+      input.storedCredential.signing_cert_digest.toLowerCase() !==
+        decodedVerdict.matchedSigningCertDigest.toLowerCase()
+    ) {
+      return reject(
+        "ATTESTATION_INVALID",
+        "Google Play Integrity signing certificate digest does not match the enrolled app credential.",
+      );
+    }
+
+    return {
+      success: true,
+      provider: contractValidation.provider,
+      environment: input.storedCredential.environment,
+      attestationKeyId: input.storedCredential.attestation_key_id,
+      attestationPublicKeyPem: input.storedCredential.public_key_pem,
+      appIdentifier: input.storedCredential.app_identifier,
+      packageName: decodedVerdict.packageName,
+      signingCertDigest:
+        decodedVerdict.matchedSigningCertDigest ||
+        input.storedCredential.signing_cert_digest,
+      lastAssertionNonceHash: hashOpaqueBearerToken(input.challenge),
+      lastCounter: input.storedCredential.last_counter,
+      transitionalCryptoBypassUsed: false,
+    };
+  }
+
   if (authPolicy.enableTransitionalCryptoBypass) {
     return {
       success: true,
@@ -1336,6 +1617,12 @@ export const appAttestationVerifier = {
 
 export const __testOnly = {
   extractAppleNonceExtensionValue,
+  setPlayIntegrityFetch(nextFetch: typeof fetch) {
+    playIntegrityFetch = nextFetch;
+  },
+  resetPlayIntegrityFetch() {
+    playIntegrityFetch = fetch;
+  },
 };
 
 export default appAttestationVerifier;

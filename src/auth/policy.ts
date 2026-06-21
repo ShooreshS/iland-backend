@@ -30,6 +30,8 @@ export const authPolicy = Object.freeze({
   androidPackageName: env.auth.androidPackageName,
   iosAppAttestEnvironment: env.auth.iosAppAttestEnvironment,
   androidAllowedSigningCertDigests: env.auth.androidAllowedSigningCertDigests,
+  androidGoogleApiKey: env.auth.androidGoogleApiKey,
+  androidRequireStrongIntegrity: env.auth.androidRequireStrongIntegrity,
 });
 
 export default authPolicy;

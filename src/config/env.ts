@@ -37,6 +37,8 @@ const parsed = z
       .enum(["development", "production"])
       .optional(),
     AUTH_ANDROID_ALLOWED_SIGNING_CERT_DIGESTS: z.string().optional(),
+    AUTH_ANDROID_GOOGLE_API_KEY: z.string().min(1).optional(),
+    AUTH_ANDROID_REQUIRE_STRONG_INTEGRITY: z.string().optional(),
     WALLET_ISSUER_ID: z.string().min(1).optional(),
     WALLET_ISSUER_SIGNING_SECRET: z.string().min(1).optional(),
     VERIFIED_IDENTITY_PEPPER: z.string().min(1).optional(),
@@ -132,6 +134,12 @@ const parsed = z
     AUTH_ANDROID_ALLOWED_SIGNING_CERT_DIGESTS: emptyToUndefined(
       process.env.AUTH_ANDROID_ALLOWED_SIGNING_CERT_DIGESTS,
     ),
+    AUTH_ANDROID_GOOGLE_API_KEY: emptyToUndefined(
+      process.env.AUTH_ANDROID_GOOGLE_API_KEY,
+    ),
+    AUTH_ANDROID_REQUIRE_STRONG_INTEGRITY: emptyToUndefined(
+      process.env.AUTH_ANDROID_REQUIRE_STRONG_INTEGRITY,
+    ),
     WALLET_ISSUER_ID: emptyToUndefined(process.env.WALLET_ISSUER_ID),
     WALLET_ISSUER_SIGNING_SECRET: emptyToUndefined(
       process.env.WALLET_ISSUER_SIGNING_SECRET,
@@ -195,6 +203,11 @@ const authAndroidAllowedSigningCertDigests = (
   .split(",")
   .map((value) => value.trim())
   .filter(Boolean);
+const authAndroidGoogleApiKey = parsed.AUTH_ANDROID_GOOGLE_API_KEY || null;
+const authAndroidRequireStrongIntegrity =
+  parsed.AUTH_ANDROID_REQUIRE_STRONG_INTEGRITY !== undefined
+    ? toBoolean(parsed.AUTH_ANDROID_REQUIRE_STRONG_INTEGRITY)
+    : false;
 
 const walletIssuerId =
   parsed.WALLET_ISSUER_ID || "did:iland:backend:issuer:v0.0.86";
@@ -246,6 +259,8 @@ export const env = Object.freeze({
     androidPackageName: authAndroidPackageName,
     iosAppAttestEnvironment: authIosAppAttestEnvironment,
     androidAllowedSigningCertDigests: authAndroidAllowedSigningCertDigests,
+    androidGoogleApiKey: authAndroidGoogleApiKey,
+    androidRequireStrongIntegrity: authAndroidRequireStrongIntegrity,
   }),
   wallet: Object.freeze({
     issuerId: walletIssuerId,
