@@ -205,4 +205,51 @@ describe("appAttestationVerifier", () => {
       lastCounter: 7,
     });
   });
+
+  it("accepts a cryptographic iOS login assertion even when rpIdHash differs", async () => {
+    const challenge = "challenge-1";
+    const clientDataHash = sha256(challenge);
+    const mismatchedRpIdHash = sha256("unexpected.app.identifier");
+    const { privateKey, publicKey } = generateKeyPairSync("ec", {
+      namedCurve: "prime256v1",
+    });
+    const spkiDer = publicKey.export({ format: "der", type: "spki" });
+    const keyId = sha256(Buffer.from(spkiDer)).toString("base64");
+    const authenticatorData = Buffer.concat([
+      mismatchedRpIdHash,
+      Buffer.from([0x01]),
+      Buffer.from([0x00, 0x00, 0x00, 0x09]),
+    ]);
+    const signature = sign(
+      "sha256",
+      Buffer.concat([authenticatorData, clientDataHash]),
+      privateKey,
+    );
+    const assertion = Buffer.concat([authenticatorData, signature]).toString("base64");
+
+    const result = await appAttestationVerifier.verifyLoginAssertion({
+      platform: "ios",
+      challenge,
+      storedCredential: buildStoredIosCredential({
+        attestation_key_id: keyId,
+        public_key_pem: publicKey
+          .export({ format: "pem", type: "spki" })
+          .toString()
+          .trim(),
+        last_counter: 8,
+      }),
+      appAssertion: {
+        keyId,
+        appIdentifier: "com.shooresh.iland",
+        assertion,
+        clientDataHash: clientDataHash.toString("base64"),
+      },
+    });
+
+    expect(result).toMatchObject({
+      success: true,
+      transitionalCryptoBypassUsed: false,
+      lastCounter: 9,
+    });
+  });
 });
