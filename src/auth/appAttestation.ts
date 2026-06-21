@@ -65,6 +65,11 @@ type ParsedAssertionAuthenticatorData = {
   signCount: number;
 };
 
+type ParsedIosAssertionPayload = {
+  authenticatorData: Buffer;
+  signature: Buffer;
+};
+
 const APPLE_APP_ATTEST_ROOT_CA_PEM = `-----BEGIN CERTIFICATE-----
 MIICITCCAaegAwIBAgIQC/O+DvHN0uD7jG5yH2IXmDAKBggqhkjOPQQDAzBSMSYw
 JAYDVQQDDB1BcHBsZSBBcHAgQXR0ZXN0YXRpb24gUm9vdCBDQTETMBEGA1UECgwK
@@ -283,6 +288,58 @@ const parseAssertionAuthenticatorData = (
       rpIdHash: authData.subarray(0, 32),
       flags: authData[32],
       signCount: authData.readUInt32BE(33),
+    },
+  };
+};
+
+const parseIosAssertionPayload = (
+  assertionBytes: Buffer,
+): { success: true; value: ParsedIosAssertionPayload } | RejectedAppAttestationResult => {
+  try {
+    const decodedAssertion = decode(assertionBytes);
+    if (decodedAssertion && typeof decodedAssertion === "object") {
+      const record = decodedAssertion instanceof Map
+        ? Object.fromEntries(decodedAssertion.entries())
+        : decodedAssertion as Record<string, unknown>;
+      const authenticatorData = toBuffer(
+        "iOS assertion authenticatorData",
+        record.authenticatorData ?? record.authData,
+      );
+      if (authenticatorData.success) {
+        const signature = toBuffer("iOS assertion signature", record.signature);
+        if (!signature.success) {
+          return signature;
+        }
+
+        return {
+          success: true,
+          value: {
+            authenticatorData: authenticatorData.value,
+            signature: signature.value,
+          },
+        };
+      }
+    }
+  } catch {
+    // Compatibility fallback:
+    // older local tests and some earlier assumptions modeled the assertion as
+    // raw authenticatorData || signature bytes. Keep accepting that format so
+    // existing fixtures continue to work while production devices use the
+    // CBOR assertion object returned by DCAppAttestService.generateAssertion.
+  }
+
+  if (assertionBytes.length <= IOS_ASSERTION_AUTH_DATA_LENGTH) {
+    return reject(
+      "ATTESTATION_INVALID",
+      "iOS assertion payload is too short.",
+    );
+  }
+
+  return {
+    success: true,
+    value: {
+      authenticatorData: assertionBytes.subarray(0, IOS_ASSERTION_AUTH_DATA_LENGTH),
+      signature: assertionBytes.subarray(IOS_ASSERTION_AUTH_DATA_LENGTH),
     },
   };
 };
@@ -974,13 +1031,6 @@ const verifyIosLoginAssertionCryptographically = async (
     return assertionBytes;
   }
 
-  if (assertionBytes.value.length <= IOS_ASSERTION_AUTH_DATA_LENGTH) {
-    return reject(
-      "ATTESTATION_INVALID",
-      "iOS assertion payload is too short.",
-    );
-  }
-
   const clientDataHash = validateClientDataHash(
     "appAssertion.clientDataHash",
     input.appAssertion.clientDataHash,
@@ -990,13 +1040,15 @@ const verifyIosLoginAssertionCryptographically = async (
     return clientDataHash;
   }
 
-  // App Attest assertions use a fixed 37-byte authenticatorData prefix followed
-  // by the DER-encoded ECDSA signature over authenticatorData || clientDataHash.
-  const authenticatorData = assertionBytes.value.subarray(
-    0,
-    IOS_ASSERTION_AUTH_DATA_LENGTH,
-  );
-  const signature = assertionBytes.value.subarray(IOS_ASSERTION_AUTH_DATA_LENGTH);
+  const parsedAssertionPayload = parseIosAssertionPayload(assertionBytes.value);
+  if (!parsedAssertionPayload.success) {
+    return parsedAssertionPayload;
+  }
+
+  // Production iOS devices return a CBOR assertion object containing
+  // authenticatorData and the DER-encoded ECDSA signature over
+  // authenticatorData || clientDataHash.
+  const { authenticatorData, signature } = parsedAssertionPayload.value;
 
   const parsedAuthData = parseAssertionAuthenticatorData(authenticatorData);
   if (!parsedAuthData.success) {

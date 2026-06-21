@@ -1,5 +1,6 @@
 import { describe, expect, it } from "bun:test";
 import { createHash, generateKeyPairSync, sign } from "node:crypto";
+import { encode } from "cbor-x";
 
 import type { AppAttestationCredentialRow } from "../types/db";
 
@@ -203,6 +204,58 @@ describe("appAttestationVerifier", () => {
       success: true,
       transitionalCryptoBypassUsed: false,
       lastCounter: 7,
+    });
+  });
+
+  it("verifies a CBOR-encoded iOS login assertion object", async () => {
+    const challenge = "challenge-1";
+    const clientDataHash = sha256(challenge);
+    const rpIdHash = sha256("DJWBN8658Q.com.shooresh.iland");
+    const { privateKey, publicKey } = generateKeyPairSync("ec", {
+      namedCurve: "prime256v1",
+    });
+    const spkiDer = publicKey.export({ format: "der", type: "spki" });
+    const keyId = sha256(Buffer.from(spkiDer)).toString("base64");
+    const authenticatorData = Buffer.concat([
+      rpIdHash,
+      Buffer.from([0x01]),
+      Buffer.from([0x00, 0x00, 0x00, 0x0b]),
+    ]);
+    const signature = sign(
+      "sha256",
+      Buffer.concat([authenticatorData, clientDataHash]),
+      privateKey,
+    );
+    const assertion = Buffer.from(
+      encode({
+        signature,
+        authenticatorData,
+      }),
+    ).toString("base64");
+
+    const result = await appAttestationVerifier.verifyLoginAssertion({
+      platform: "ios",
+      challenge,
+      storedCredential: buildStoredIosCredential({
+        attestation_key_id: keyId,
+        public_key_pem: publicKey
+          .export({ format: "pem", type: "spki" })
+          .toString()
+          .trim(),
+        last_counter: 10,
+      }),
+      appAssertion: {
+        keyId,
+        appIdentifier: "com.shooresh.iland",
+        assertion,
+        clientDataHash: clientDataHash.toString("base64"),
+      },
+    });
+
+    expect(result).toMatchObject({
+      success: true,
+      transitionalCryptoBypassUsed: false,
+      lastCounter: 11,
     });
   });
 
