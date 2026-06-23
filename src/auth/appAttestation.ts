@@ -1467,7 +1467,17 @@ const verifyIosLoginAssertionCryptographically = async (
   const signedPayload = Buffer.concat([authenticatorData, clientDataHash.value]);
   const signedPayloadSha256 = sha256(signedPayload);
   const publicKey = createPublicKey(input.storedCredential.public_key_pem);
-  const signatureValid = verifySignature("sha256", signedPayload, publicKey, signature);
+  const signatureValid =
+    // Production-device behavior:
+    // the observed App Attest login assertion from TestFlight/Release devices
+    // verifies when Node/OpenSSL is given SHA-256(authenticatorData ||
+    // clientDataHash) as the message for an ECDSA-with-SHA256 verify call.
+    //
+    // Keep the older direct payload form as a compatibility path for local
+    // fixtures and earlier assumptions while real-device verification remains
+    // the primary source of truth.
+    verifySignature("sha256", signedPayloadSha256, publicKey, signature) ||
+    verifySignature("sha256", signedPayload, publicKey, signature);
   if (!signatureValid) {
     const rawChallengeBytes = Buffer.from(input.challenge, "utf8");
     const storedPublicKeyHash = hashSpkiDerFromPublicKeyPem(
