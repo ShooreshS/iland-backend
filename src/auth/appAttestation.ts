@@ -1455,9 +1455,48 @@ const verifyIosLoginAssertionCryptographically = async (
   const publicKey = createPublicKey(input.storedCredential.public_key_pem);
   const signatureValid = verifySignature("sha256", signedPayload, publicKey, signature);
   if (!signatureValid) {
+    const rawChallengeBytes = Buffer.from(input.challenge, "utf8");
     const storedPublicKeyHash = hashSpkiDerFromPublicKeyPem(
       input.storedCredential.public_key_pem,
     ).toString("base64");
+    const compatibilityVariants = {
+      authData_plus_clientDataHash: verifySignature(
+        "sha256",
+        Buffer.concat([authenticatorData, clientDataHash.value]),
+        publicKey,
+        signature,
+      ),
+      authData_plus_rawChallengeUtf8: verifySignature(
+        "sha256",
+        Buffer.concat([authenticatorData, rawChallengeBytes]),
+        publicKey,
+        signature,
+      ),
+      clientDataHash_only: verifySignature(
+        "sha256",
+        clientDataHash.value,
+        publicKey,
+        signature,
+      ),
+      rawChallengeUtf8_only: verifySignature(
+        "sha256",
+        rawChallengeBytes,
+        publicKey,
+        signature,
+      ),
+      authenticatorData_only: verifySignature(
+        "sha256",
+        authenticatorData,
+        publicKey,
+        signature,
+      ),
+      clientDataHash_plus_authData: verifySignature(
+        "sha256",
+        Buffer.concat([clientDataHash.value, authenticatorData]),
+        publicKey,
+        signature,
+      ),
+    };
     console.warn("[auth]", {
       route: "/auth/login/complete",
       warning: "assertion_signature_verification_failed",
@@ -1473,6 +1512,7 @@ const verifyIosLoginAssertionCryptographically = async (
       signCount: parsedAuthData.value.signCount,
       clientDataHash: clientDataHash.value.toString("base64"),
       rpIdHash: parsedAuthData.value.rpIdHash.toString("base64"),
+      signatureVariantMatches: compatibilityVariants,
     });
     return reject(
       "ATTESTATION_INVALID",
