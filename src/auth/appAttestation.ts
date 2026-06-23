@@ -531,6 +531,19 @@ const expectedIosRpIdHash = (): Buffer | null => {
   return sha256(`${authPolicy.iosTeamId}.${authPolicy.iosBundleId}`);
 };
 
+const tryVerifySignatureVariant = (
+  algorithm: Parameters<typeof verifySignature>[0],
+  data: Buffer,
+  publicKey: ReturnType<typeof createPublicKey>,
+  signature: Buffer,
+): boolean => {
+  try {
+    return verifySignature(algorithm, data, publicKey, signature);
+  } catch {
+    return false;
+  }
+};
+
 const verifyAaguid = (
   actual: Buffer,
 ): RejectedAppAttestationResult | null => {
@@ -1452,6 +1465,7 @@ const verifyIosLoginAssertionCryptographically = async (
   }
 
   const signedPayload = Buffer.concat([authenticatorData, clientDataHash.value]);
+  const signedPayloadSha256 = sha256(signedPayload);
   const publicKey = createPublicKey(input.storedCredential.public_key_pem);
   const signatureValid = verifySignature("sha256", signedPayload, publicKey, signature);
   if (!signatureValid) {
@@ -1460,37 +1474,55 @@ const verifyIosLoginAssertionCryptographically = async (
       input.storedCredential.public_key_pem,
     ).toString("base64");
     const compatibilityVariants = {
-      authData_plus_clientDataHash: verifySignature(
+      authData_plus_clientDataHash: tryVerifySignatureVariant(
         "sha256",
-        Buffer.concat([authenticatorData, clientDataHash.value]),
+        signedPayload,
         publicKey,
         signature,
       ),
-      authData_plus_rawChallengeUtf8: verifySignature(
+      raw_ecdsa_over_authData_plus_clientDataHash: tryVerifySignatureVariant(
+        null,
+        signedPayload,
+        publicKey,
+        signature,
+      ),
+      raw_ecdsa_over_sha256_authData_plus_clientDataHash: tryVerifySignatureVariant(
+        null,
+        signedPayloadSha256,
+        publicKey,
+        signature,
+      ),
+      sha256_over_sha256_authData_plus_clientDataHash: tryVerifySignatureVariant(
+        "sha256",
+        signedPayloadSha256,
+        publicKey,
+        signature,
+      ),
+      authData_plus_rawChallengeUtf8: tryVerifySignatureVariant(
         "sha256",
         Buffer.concat([authenticatorData, rawChallengeBytes]),
         publicKey,
         signature,
       ),
-      clientDataHash_only: verifySignature(
+      clientDataHash_only: tryVerifySignatureVariant(
         "sha256",
         clientDataHash.value,
         publicKey,
         signature,
       ),
-      rawChallengeUtf8_only: verifySignature(
+      rawChallengeUtf8_only: tryVerifySignatureVariant(
         "sha256",
         rawChallengeBytes,
         publicKey,
         signature,
       ),
-      authenticatorData_only: verifySignature(
+      authenticatorData_only: tryVerifySignatureVariant(
         "sha256",
         authenticatorData,
         publicKey,
         signature,
       ),
-      clientDataHash_plus_authData: verifySignature(
+      clientDataHash_plus_authData: tryVerifySignatureVariant(
         "sha256",
         Buffer.concat([clientDataHash.value, authenticatorData]),
         publicKey,
