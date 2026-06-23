@@ -1328,6 +1328,18 @@ const verifyIosRegistrationCryptographically = async (
     });
   }
 
+  console.warn("[auth]", {
+    route: "/auth/register/complete",
+    diagnostic: "ios_attestation_key_material",
+    attestationKeyId: providedKeyIdBytes.value.toString("base64"),
+    credentialIdFromAuthData: parsedAuthData.value.credentialId.toString("base64"),
+    authDataCredentialPublicKeySpkiHash: credentialPublicKeyHash.toString("base64"),
+    leafCertificatePublicKeySpkiHash: leafPublicKeyHash.toString("base64"),
+    attestationChallengeClientDataHash: clientDataHash.value.toString("base64"),
+    signCount: parsedAuthData.value.signCount,
+    aaguidHex: parsedAuthData.value.aaguid.toString("hex"),
+  });
+
   const nonceExtension = leafCertificate.getExtension(APPLE_NONCE_EXTENSION_OID);
   if (!nonceExtension) {
     return reject(
@@ -1424,6 +1436,15 @@ const verifyIosLoginAssertionCryptographically = async (
 
   const expectedRpIdHash = expectedIosRpIdHash();
   if (expectedRpIdHash && !buffersEqual(parsedAuthData.value.rpIdHash, expectedRpIdHash)) {
+    console.warn("[auth]", {
+      route: "/auth/login/complete",
+      diagnostic: "ios_assertion_rp_id_hash_mismatch",
+      requestKeyId: canonicalBase64(asTrimmedString(input.appAssertion.keyId) || "") || null,
+      storedAttestationKeyId: input.storedCredential.attestation_key_id,
+      actualRpIdHash: parsedAuthData.value.rpIdHash.toString("base64"),
+      expectedRpIdHash: expectedRpIdHash.toString("base64"),
+      signCount: parsedAuthData.value.signCount,
+    });
     return reject(
       "ATTESTATION_INVALID",
       "iOS assertion rpIdHash does not match SHA-256(teamID.bundleID).",
@@ -1440,11 +1461,18 @@ const verifyIosLoginAssertionCryptographically = async (
     console.warn("[auth]", {
       route: "/auth/login/complete",
       warning: "assertion_signature_verification_failed",
+      requestKeyId: canonicalBase64(asTrimmedString(input.appAssertion.keyId) || "") || null,
       signatureLength: signature.length,
       signaturePrefixHex: signature.subarray(0, Math.min(8, signature.length)).toString("hex"),
       authenticatorDataLength: authenticatorData.length,
       storedAttestationKeyId: input.storedCredential.attestation_key_id,
       storedPublicKeySpkiHash: storedPublicKeyHash,
+      storedAppIdentifier: input.storedCredential.app_identifier,
+      assertionAppIdentifier:
+        asTrimmedString(input.appAssertion.appIdentifier) || null,
+      signCount: parsedAuthData.value.signCount,
+      clientDataHash: clientDataHash.value.toString("base64"),
+      rpIdHash: parsedAuthData.value.rpIdHash.toString("base64"),
     });
     return reject(
       "ATTESTATION_INVALID",

@@ -32,7 +32,9 @@ Set at least:
 3. Apply migrations to hosted Supabase:
 
 ```bash
+# if not linked yet
 supabase link --project-ref <YOUR_PROJECT_REF>
+# then:
 supabase db push
 ```
 
