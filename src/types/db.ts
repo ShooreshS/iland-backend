@@ -220,6 +220,9 @@ export type IdentityProfileRow = {
   national_id_scan_completed: boolean;
   face_scan_completed: boolean;
   face_bound_to_identity: boolean;
+  passport_verified_at: string | null;
+  national_id_verified_at: string | null;
+  face_verified_at: string | null;
   document_country_code: string | null;
   issuing_country_code: string | null;
   home_country_code: string | null;
@@ -239,6 +242,9 @@ export type NewIdentityProfileRow = {
   national_id_scan_completed: boolean;
   face_scan_completed: boolean;
   face_bound_to_identity: boolean;
+  passport_verified_at: string | null;
+  national_id_verified_at: string | null;
+  face_verified_at: string | null;
   document_country_code: string | null;
   issuing_country_code: string | null;
   home_country_code: string | null;

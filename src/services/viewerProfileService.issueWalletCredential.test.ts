@@ -54,6 +54,9 @@ const createIdentityProfile = (
   national_id_scan_completed: false,
   face_scan_completed: false,
   face_bound_to_identity: false,
+  passport_verified_at: null,
+  national_id_verified_at: null,
+  face_verified_at: null,
   document_country_code: "IR",
   issuing_country_code: "IR",
   home_country_code: "IR",
@@ -190,6 +193,19 @@ describe("viewerProfileService.issueWalletCredential", () => {
         walletCredentialRepository,
         "updateByUserId",
         async () => issuedCredentialRow,
+      ),
+      patchMethod(
+        identityProfileRepository,
+        "updateVerificationStateByUserId",
+        async () =>
+          createIdentityProfile({
+            passport_scan_completed: true,
+            passport_nfc_completed: true,
+            face_scan_completed: true,
+            face_bound_to_identity: true,
+            passport_verified_at: FIXED_TIME,
+            face_verified_at: FIXED_TIME,
+          }),
       ),
       patchMethod(userRepository, "updateWalletCredentialLink", async () => linkedUser),
     ];

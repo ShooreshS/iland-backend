@@ -342,6 +342,9 @@ export type IdentityProfileDto = {
   nationalIdScanCompleted: boolean;
   faceScanCompleted: boolean;
   faceBoundToIdentity: boolean;
+  passportVerifiedAt: string | null;
+  nationalIdVerifiedAt: string | null;
+  faceVerifiedAt: string | null;
   documentCountryCode: string | null;
   issuingCountryCode: string | null;
   homeLocation: {

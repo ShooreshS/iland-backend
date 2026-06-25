@@ -203,6 +203,9 @@ const mapIdentityProfileToDto = (row: IdentityProfileRow | null) => {
     nationalIdScanCompleted: row.national_id_scan_completed,
     faceScanCompleted: row.face_scan_completed,
     faceBoundToIdentity: row.face_bound_to_identity,
+    passportVerifiedAt: row.passport_verified_at,
+    nationalIdVerifiedAt: row.national_id_verified_at,
+    faceVerifiedAt: row.face_verified_at,
     documentCountryCode: normalizeCountryCode(row.document_country_code),
     issuingCountryCode: normalizeCountryCode(row.issuing_country_code),
     homeLocation:
@@ -731,6 +734,19 @@ export const viewerProfileService = {
         hasWallet: true,
         walletCredentialId: resolvedIssuedRow.id,
       })) || linkedUser;
+
+    // Policy:
+    // only mark verification methods as completed for UI badges once the
+    // backend has accepted the end-to-end identity flow and issued the
+    // backend credential. Local scan success on the device is not enough.
+    await identityProfileRepository.updateVerificationStateByUserId(user.id, {
+      passport_scan_completed: true,
+      passport_nfc_completed: true,
+      face_scan_completed: true,
+      face_bound_to_identity: true,
+      passport_verified_at: identityProfile.passport_verified_at || issuedAt,
+      face_verified_at: identityProfile.face_verified_at || issuedAt,
+    });
 
     return {
       success: true,
