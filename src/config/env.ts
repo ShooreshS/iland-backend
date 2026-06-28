@@ -16,8 +16,25 @@ const toBoolean = (value: string): boolean => {
 
 const normalizeAndroidCertDigest = (value: string): string => {
   const trimmed = value.trim();
-  if (/^[a-f0-9:]+$/i.test(trimmed)) {
-    return trimmed.replace(/:/g, "").toLowerCase();
+  const hexCandidate = trimmed.replace(/:/g, "");
+  if (/^[a-f0-9]+$/i.test(hexCandidate) && hexCandidate.length === 64) {
+    return hexCandidate.toLowerCase();
+  }
+
+  const base64Candidate = trimmed.replace(/=+$/u, "");
+  if (/^[a-z0-9_-]+$/i.test(base64Candidate) && base64Candidate.length === 43) {
+    try {
+      const padded = base64Candidate
+        .replace(/-/g, "+")
+        .replace(/_/g, "/")
+        .padEnd(Math.ceil(base64Candidate.length / 4) * 4, "=");
+      const decoded = Buffer.from(padded, "base64");
+      if (decoded.length === 32) {
+        return decoded.toString("hex");
+      }
+    } catch {
+      // Fall through to lowercase normalization for unusual future formats.
+    }
   }
 
   return trimmed.toLowerCase();

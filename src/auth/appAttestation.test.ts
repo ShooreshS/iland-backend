@@ -7,6 +7,10 @@ import type { AppAttestationCredentialRow } from "../types/db";
 const { privateKey: googleOAuthPrivateKey } = generateKeyPairSync("rsa", {
   modulusLength: 2048,
 });
+const allowedAndroidSigningCertDigestBase64Url =
+  "i-maz_0hklkjhdgrb5hgow0h8y5mrmdyy7gkcnfmz2m";
+const allowedAndroidSigningCertDigestHex =
+  "8be99acffd2192592385d82b6f9860a30d21f32e66ae6772cbb8247277e6cf69";
 
 process.env.AUTH_IOS_TEAM_ID = "DJWBN8658Q";
 process.env.AUTH_ENABLE_TRANSITIONAL_CRYPTO_BYPASS = "true";
@@ -15,8 +19,7 @@ process.env.AUTH_ANDROID_GOOGLE_SERVICE_ACCOUNT_CLIENT_EMAIL =
 process.env.AUTH_ANDROID_GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY = googleOAuthPrivateKey
   .export({ format: "pem", type: "pkcs8" })
   .toString();
-process.env.AUTH_ANDROID_ALLOWED_SIGNING_CERT_DIGESTS =
-  "allowed-signing-cert-digest";
+process.env.AUTH_ANDROID_ALLOWED_SIGNING_CERT_DIGESTS = allowedAndroidSigningCertDigestHex;
 
 const { __testOnly, appAttestationVerifier } = await import("./appAttestation");
 
@@ -79,7 +82,7 @@ const buildStoredAndroidCredential = (
   public_key_pem: null,
   app_identifier: null,
   package_name: "com.shooresh.iland",
-  signing_cert_digest: "allowed-signing-cert-digest",
+  signing_cert_digest: allowedAndroidSigningCertDigestHex,
   status: "verified",
   last_counter: null,
   last_asserted_at: null,
@@ -155,7 +158,7 @@ const buildPlayIntegrityPayload = (
         overrides.appRecognitionVerdict || "PLAY_RECOGNIZED",
       packageName: overrides.packageName || "com.shooresh.iland",
       certificateSha256Digest:
-        overrides.certificateSha256Digest || ["allowed-signing-cert-digest"],
+        overrides.certificateSha256Digest || [allowedAndroidSigningCertDigestBase64Url],
     },
     deviceIntegrity: {
       deviceRecognitionVerdict:
@@ -215,7 +218,7 @@ describe("appAttestationVerifier", () => {
             provider: "android_play_integrity",
             packageName: "com.shooresh.iland",
             integrityToken: "android-integrity-token",
-            signingCertDigest: "allowed-signing-cert-digest",
+            signingCertDigest: allowedAndroidSigningCertDigestBase64Url,
           },
         }),
     );
@@ -223,7 +226,7 @@ describe("appAttestationVerifier", () => {
     expect(result).toMatchObject({
       success: true,
       packageName: "com.shooresh.iland",
-      signingCertDigest: "allowed-signing-cert-digest",
+      signingCertDigest: allowedAndroidSigningCertDigestHex,
       transitionalCryptoBypassUsed: false,
     });
   });
@@ -274,7 +277,7 @@ describe("appAttestationVerifier", () => {
           appAssertion: {
             packageName: "com.shooresh.iland",
             integrityToken: "android-integrity-token",
-            signingCertDigest: "allowed-signing-cert-digest",
+            signingCertDigest: allowedAndroidSigningCertDigestBase64Url,
           },
         }),
     );
@@ -282,7 +285,7 @@ describe("appAttestationVerifier", () => {
     expect(result).toMatchObject({
       success: true,
       packageName: "com.shooresh.iland",
-      signingCertDigest: "allowed-signing-cert-digest",
+      signingCertDigest: allowedAndroidSigningCertDigestHex,
       transitionalCryptoBypassUsed: false,
     });
   });
@@ -300,7 +303,7 @@ describe("appAttestationVerifier", () => {
           appAssertion: {
             packageName: "com.shooresh.iland",
             integrityToken: "android-integrity-token",
-            signingCertDigest: "allowed-signing-cert-digest",
+            signingCertDigest: allowedAndroidSigningCertDigestBase64Url,
           },
         }),
     );
@@ -308,7 +311,7 @@ describe("appAttestationVerifier", () => {
     expect(result).toMatchObject({
       success: true,
       packageName: "com.shooresh.iland",
-      signingCertDigest: "allowed-signing-cert-digest",
+      signingCertDigest: allowedAndroidSigningCertDigestHex,
     });
   });
 

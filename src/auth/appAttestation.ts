@@ -134,11 +134,26 @@ const normalizeAndroidCertDigest = (value: string | null): string | null => {
     return null;
   }
 
-  if (/^[a-f0-9:]+$/i.test(value)) {
-    return value.replace(/:/g, "").toLowerCase();
+  const trimmed = value.trim();
+  const hexCandidate = trimmed.replace(/:/g, "");
+  if (/^[a-f0-9]+$/i.test(hexCandidate) && hexCandidate.length === 64) {
+    return hexCandidate.toLowerCase();
   }
 
-  return value.toLowerCase();
+  const base64Candidate = trimmed.replace(/=+$/u, "");
+  if (/^[a-z0-9_-]+$/i.test(base64Candidate) && base64Candidate.length === 43) {
+    try {
+      const decoded = Buffer.from(normalizeBase64(base64Candidate), "base64");
+      if (decoded.length === 32) {
+        return decoded.toString("hex");
+      }
+    } catch {
+      // Fall through to lowercase normalization so the caller can still compare
+      // unusual future formats without throwing while parsing an attestation.
+    }
+  }
+
+  return trimmed.toLowerCase();
 };
 
 const defaultProviderForPlatform = (
@@ -1219,7 +1234,11 @@ const validateRegistrationContract = (
 
   const signingCertDigest = asTrimmedString(input.appAttestation.signingCertDigest);
   const normalizedSigningCertDigest = normalizeAndroidCertDigest(signingCertDigest);
+  // In strict Android mode, the Google Play Integrity verdict is the authority
+  // for signing certificate digests. The caller-supplied digest can be useful
+  // diagnostics, but it must not decide production trust before decode.
   if (
+    authPolicy.enableTransitionalCryptoBypass &&
     authPolicy.androidAllowedSigningCertDigests.length > 0 &&
     (!normalizedSigningCertDigest ||
       !authPolicy.androidAllowedSigningCertDigests.includes(normalizedSigningCertDigest))
@@ -1350,7 +1369,11 @@ const validateLoginAssertionContract = (
 
   const signingCertDigest = asTrimmedString(input.appAssertion.signingCertDigest);
   const normalizedSigningCertDigest = normalizeAndroidCertDigest(signingCertDigest);
+  // In strict Android mode, compare the stored credential and configured
+  // allow-list against Google's decoded Play Integrity verdict, not this
+  // app-supplied diagnostic value.
   if (
+    authPolicy.enableTransitionalCryptoBypass &&
     authPolicy.androidAllowedSigningCertDigests.length > 0 &&
     (!normalizedSigningCertDigest ||
       !authPolicy.androidAllowedSigningCertDigests.includes(normalizedSigningCertDigest))
