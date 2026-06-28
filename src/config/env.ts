@@ -43,6 +43,9 @@ const normalizeAndroidCertDigest = (value: string): string => {
 const parsed = z
   .object({
     NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
+    ILAND_ENV_VALIDATION_SCOPE: z
+      .enum(["server", "supabase-admin-script"])
+      .default("server"),
     HOST: z.string().min(1).default("0.0.0.0"),
     PORT: z.coerce.number().int().min(1).max(65535).default(3001),
     SUPABASE_URL: z.string().url().optional(),
@@ -94,7 +97,19 @@ const parsed = z
       input.AUTH_ENABLE_TRANSITIONAL_CRYPTO_BYPASS !== undefined
         ? toBoolean(input.AUTH_ENABLE_TRANSITIONAL_CRYPTO_BYPASS)
         : input.NODE_ENV !== "production";
-    if (input.NODE_ENV === "production" && transitionalBypassEnabled) {
+
+    const skipServerOnlyAuthValidation =
+      input.ILAND_ENV_VALIDATION_SCOPE === "supabase-admin-script";
+
+    // Intention:
+    // Production server startup must fail closed when app-attestation auth is
+    // misconfigured. Supabase admin scripts such as OIDC key seeding do not
+    // serve requests and only need DB credentials, so they opt out explicitly.
+    if (
+      !skipServerOnlyAuthValidation &&
+      input.NODE_ENV === "production" &&
+      transitionalBypassEnabled
+    ) {
       context.addIssue({
         code: z.ZodIssueCode.custom,
         message:
@@ -103,7 +118,11 @@ const parsed = z
       });
     }
 
-    if (!transitionalBypassEnabled && !input.AUTH_IOS_TEAM_ID) {
+    if (
+      !skipServerOnlyAuthValidation &&
+      !transitionalBypassEnabled &&
+      !input.AUTH_IOS_TEAM_ID
+    ) {
       context.addIssue({
         code: z.ZodIssueCode.custom,
         message:
@@ -120,6 +139,7 @@ const parsed = z
         input.AUTH_ANDROID_GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY,
     );
     if (
+      !skipServerOnlyAuthValidation &&
       !transitionalBypassEnabled &&
       !hasAndroidGoogleServiceAccountJson &&
       !hasAndroidGoogleServiceAccountParts
@@ -136,7 +156,11 @@ const parsed = z
       .split(",")
       .map((value) => value.trim())
       .filter(Boolean);
-    if (!transitionalBypassEnabled && allowedAndroidSigningDigests.length === 0) {
+    if (
+      !skipServerOnlyAuthValidation &&
+      !transitionalBypassEnabled &&
+      allowedAndroidSigningDigests.length === 0
+    ) {
       context.addIssue({
         code: z.ZodIssueCode.custom,
         message:
@@ -147,6 +171,7 @@ const parsed = z
   })
   .parse({
     NODE_ENV: process.env.NODE_ENV,
+    ILAND_ENV_VALIDATION_SCOPE: process.env.ILAND_ENV_VALIDATION_SCOPE,
     HOST: process.env.HOST,
     PORT: process.env.PORT,
     SUPABASE_URL: emptyToUndefined(process.env.SUPABASE_URL),
