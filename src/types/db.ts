@@ -313,6 +313,29 @@ export type NewWalletCredentialRegistrationRow = {
   wallet_public_key: string;
 };
 
+export type OidcSigningKeyStatus =
+  | "active"
+  | "retiring"
+  | "retired"
+  | "revoked";
+
+export type OidcSigningKeyRow = {
+  id: string;
+  kid: string;
+  key_use: "sig";
+  algorithm: "RS256";
+  status: OidcSigningKeyStatus;
+  public_jwk: Record<string, unknown>;
+  private_key_ref: string | null;
+  not_before: string;
+  not_after: string | null;
+  activated_at: string | null;
+  retired_at: string | null;
+  revoked_at: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
 export type PollRow = {
   id: string;
   slug: string;
