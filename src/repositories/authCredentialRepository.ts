@@ -84,6 +84,40 @@ export const authCredentialRepository = {
 
     return data || null;
   },
+
+  async revokeActiveByUserId(
+    userId: string,
+    input: {
+      revocationReason: string;
+      excludeAuthCredentialId?: string | null;
+    },
+  ): Promise<AuthCredentialRow[]> {
+    const supabase = requireSupabaseAdminClient();
+
+    let query = supabase
+      .from("auth_credentials")
+      .update({
+        status: "revoked",
+        revoked_at: new Date().toISOString(),
+        revocation_reason: input.revocationReason,
+      })
+      .eq("user_id", userId)
+      .eq("status", "active");
+
+    if (input.excludeAuthCredentialId) {
+      query = query.neq("id", input.excludeAuthCredentialId);
+    }
+
+    const { data, error } = await query
+      .select(AUTH_CREDENTIAL_COLUMNS)
+      .returns<AuthCredentialRow[]>();
+
+    if (error) {
+      throw error;
+    }
+
+    return data || [];
+  },
 };
 
 export default authCredentialRepository;

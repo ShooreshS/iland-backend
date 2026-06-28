@@ -741,19 +741,6 @@ const expectedIosRpIdHash = (): Buffer | null => {
   return sha256(`${authPolicy.iosTeamId}.${authPolicy.iosBundleId}`);
 };
 
-const tryVerifySignatureVariant = (
-  algorithm: Parameters<typeof verifySignature>[0],
-  data: Buffer,
-  publicKey: ReturnType<typeof createPublicKey>,
-  signature: Buffer,
-): boolean => {
-  try {
-    return verifySignature(algorithm, data, publicKey, signature);
-  } catch {
-    return false;
-  }
-};
-
 const verifyAaguid = (
   actual: Buffer,
 ): RejectedAppAttestationResult | null => {
@@ -770,26 +757,6 @@ const verifyAaguid = (
     "ATTESTATION_INVALID",
     `iOS App Attest AAGUID does not match the configured ${authPolicy.iosAppAttestEnvironment} environment.`,
   );
-};
-
-const exportSpkiDerFromCertificatePublicKey = (
-  certificate: X509Certificate,
-): Buffer => {
-  // Intention:
-  // App Attest keyId is derived from the certificate leaf public key's SPKI
-  // bytes. Use Node crypto to canonicalize the PEM/DER export path here rather
-  // than depending on a third-party x509 helper's raw ASN.1 serialization.
-  const publicKeyPem = certificate.publicKey.toString("pem");
-  const publicKey = createPublicKey(publicKeyPem);
-  return Buffer.from(publicKey.export({ format: "der", type: "spki" }));
-};
-
-const hashSpkiDerFromPublicKeyPem = (
-  publicKeyPem: string,
-): Buffer => {
-  const publicKey = createPublicKey(publicKeyPem);
-  const spkiDer = Buffer.from(publicKey.export({ format: "der", type: "spki" }));
-  return sha256(spkiDer);
 };
 
 const truncateForLog = (value: string, maxLength: number): string =>
@@ -938,17 +905,7 @@ const decodeAndroidPlayIntegrityVerdict = async (
       warning: "nonce_mismatch",
       nonceLength: nonce.length,
       expectedNonceLength: expectedNonce.length,
-      nonceSha256: sha256(nonce).toString("base64"),
-      expectedNonceSha256: sha256(expectedNonce).toString("base64"),
       decodedNonceLength: decodedNonce?.length ?? null,
-      challengeLength: challenge.length,
-      challengeHashPrefix: hashOpaqueBearerToken(challenge).slice(0, 16),
-      matchesExpectedString: nonce === expectedNonce,
-      matchesExpectedStandardBase64: nonce === expectedNonceHash.toString("base64"),
-      matchesExpectedBase64UrlWithPadding: nonce === expectedNonceHash
-        .toString("base64")
-        .replace(/\+/g, "-")
-        .replace(/\//g, "_"),
     });
     return reject(
       "ATTESTATION_INVALID",
@@ -978,8 +935,7 @@ const decodeAndroidPlayIntegrityVerdict = async (
         packageName,
         requestPackageName,
         appRecognitionVerdict,
-        certificateSha256Digests,
-        allowedSigningCertDigests: authPolicy.androidAllowedSigningCertDigests,
+        certificateSha256DigestCount: certificateSha256Digests.length,
       });
       return reject(
         "ATTESTATION_INVALID",
@@ -1576,41 +1532,6 @@ const verifyIosRegistrationCryptographically = async (
     );
   }
 
-  const credentialPublicKeyHash = sha256(
-    parsedAuthData.value.credentialPublicKeySpkiDer,
-  );
-  if (!buffersEqual(providedKeyIdBytes.value, credentialPublicKeyHash)) {
-    console.warn("[auth]", {
-      route: "/auth/register/complete",
-      warning: "attestation_authdata_public_key_hash_mismatch",
-      providedKeyId: providedKeyIdBytes.value.toString("base64"),
-      computedCredentialPublicKeyId: credentialPublicKeyHash.toString("base64"),
-    });
-  }
-
-  const leafPublicKeySpki = exportSpkiDerFromCertificatePublicKey(leafCertificate);
-  const leafPublicKeyHash = sha256(leafPublicKeySpki);
-  if (!buffersEqual(providedKeyIdBytes.value, leafPublicKeyHash)) {
-    console.warn("[auth]", {
-      route: "/auth/register/complete",
-      warning: "attestation_leaf_public_key_hash_mismatch",
-      providedKeyId: providedKeyIdBytes.value.toString("base64"),
-      computedKeyId: leafPublicKeyHash.toString("base64"),
-    });
-  }
-
-  console.warn("[auth]", {
-    route: "/auth/register/complete",
-    diagnostic: "ios_attestation_key_material",
-    attestationKeyId: providedKeyIdBytes.value.toString("base64"),
-    credentialIdFromAuthData: parsedAuthData.value.credentialId.toString("base64"),
-    authDataCredentialPublicKeySpkiHash: credentialPublicKeyHash.toString("base64"),
-    leafCertificatePublicKeySpkiHash: leafPublicKeyHash.toString("base64"),
-    attestationChallengeClientDataHash: clientDataHash.value.toString("base64"),
-    signCount: parsedAuthData.value.signCount,
-    aaguidHex: parsedAuthData.value.aaguid.toString("hex"),
-  });
-
   const nonceExtension = leafCertificate.getExtension(APPLE_NONCE_EXTENSION_OID);
   if (!nonceExtension) {
     return reject(
@@ -1709,11 +1630,7 @@ const verifyIosLoginAssertionCryptographically = async (
   if (expectedRpIdHash && !buffersEqual(parsedAuthData.value.rpIdHash, expectedRpIdHash)) {
     console.warn("[auth]", {
       route: "/auth/login/complete",
-      diagnostic: "ios_assertion_rp_id_hash_mismatch",
-      requestKeyId: canonicalBase64(asTrimmedString(input.appAssertion.keyId) || "") || null,
-      storedAttestationKeyId: input.storedCredential.attestation_key_id,
-      actualRpIdHash: parsedAuthData.value.rpIdHash.toString("base64"),
-      expectedRpIdHash: expectedRpIdHash.toString("base64"),
+      warning: "ios_assertion_rp_id_hash_mismatch",
       signCount: parsedAuthData.value.signCount,
     });
     return reject(
@@ -1737,82 +1654,12 @@ const verifyIosLoginAssertionCryptographically = async (
     verifySignature("sha256", signedPayloadSha256, publicKey, signature) ||
     verifySignature("sha256", signedPayload, publicKey, signature);
   if (!signatureValid) {
-    const rawChallengeBytes = Buffer.from(input.challenge, "utf8");
-    const storedPublicKeyHash = hashSpkiDerFromPublicKeyPem(
-      input.storedCredential.public_key_pem,
-    ).toString("base64");
-    const compatibilityVariants = {
-      authData_plus_clientDataHash: tryVerifySignatureVariant(
-        "sha256",
-        signedPayload,
-        publicKey,
-        signature,
-      ),
-      raw_ecdsa_over_authData_plus_clientDataHash: tryVerifySignatureVariant(
-        null,
-        signedPayload,
-        publicKey,
-        signature,
-      ),
-      raw_ecdsa_over_sha256_authData_plus_clientDataHash: tryVerifySignatureVariant(
-        null,
-        signedPayloadSha256,
-        publicKey,
-        signature,
-      ),
-      sha256_over_sha256_authData_plus_clientDataHash: tryVerifySignatureVariant(
-        "sha256",
-        signedPayloadSha256,
-        publicKey,
-        signature,
-      ),
-      authData_plus_rawChallengeUtf8: tryVerifySignatureVariant(
-        "sha256",
-        Buffer.concat([authenticatorData, rawChallengeBytes]),
-        publicKey,
-        signature,
-      ),
-      clientDataHash_only: tryVerifySignatureVariant(
-        "sha256",
-        clientDataHash.value,
-        publicKey,
-        signature,
-      ),
-      rawChallengeUtf8_only: tryVerifySignatureVariant(
-        "sha256",
-        rawChallengeBytes,
-        publicKey,
-        signature,
-      ),
-      authenticatorData_only: tryVerifySignatureVariant(
-        "sha256",
-        authenticatorData,
-        publicKey,
-        signature,
-      ),
-      clientDataHash_plus_authData: tryVerifySignatureVariant(
-        "sha256",
-        Buffer.concat([clientDataHash.value, authenticatorData]),
-        publicKey,
-        signature,
-      ),
-    };
     console.warn("[auth]", {
       route: "/auth/login/complete",
       warning: "assertion_signature_verification_failed",
-      requestKeyId: canonicalBase64(asTrimmedString(input.appAssertion.keyId) || "") || null,
       signatureLength: signature.length,
-      signaturePrefixHex: signature.subarray(0, Math.min(8, signature.length)).toString("hex"),
       authenticatorDataLength: authenticatorData.length,
-      storedAttestationKeyId: input.storedCredential.attestation_key_id,
-      storedPublicKeySpkiHash: storedPublicKeyHash,
-      storedAppIdentifier: input.storedCredential.app_identifier,
-      assertionAppIdentifier:
-        asTrimmedString(input.appAssertion.appIdentifier) || null,
       signCount: parsedAuthData.value.signCount,
-      clientDataHash: clientDataHash.value.toString("base64"),
-      rpIdHash: parsedAuthData.value.rpIdHash.toString("base64"),
-      signatureVariantMatches: compatibilityVariants,
     });
     return reject(
       "ATTESTATION_INVALID",

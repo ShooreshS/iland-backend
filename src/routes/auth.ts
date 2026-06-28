@@ -1,9 +1,9 @@
 import { z } from "zod";
 import { hashOpaqueBearerToken } from "../auth/tokens";
-import requireViewer from "../auth/requireViewer";
+import defaultRequireViewer from "../auth/requireViewer";
 import { json } from "../middleware/json";
-import authSessionRepository from "../repositories/authSessionRepository";
-import authService from "../services/authService";
+import defaultAuthSessionRepository from "../repositories/authSessionRepository";
+import defaultAuthService from "../services/authService";
 import type { RouteDefinition } from "../types/http";
 
 const challengeRequestSchema = z
@@ -78,6 +78,38 @@ const logAuthFlowFailure = (
     message: result.message || null,
   });
 };
+
+type AuthServiceLike = Pick<
+  typeof defaultAuthService,
+  | "issueChallenge"
+  | "completeRegistration"
+  | "completeLogin"
+  | "refreshSession"
+  | "logoutSession"
+  | "listSessionsForUser"
+  | "revokeSessionForUser"
+>;
+
+type RequireViewerFn = typeof defaultRequireViewer;
+
+type AuthSessionRepositoryLike = Pick<
+  typeof defaultAuthSessionRepository,
+  "getByAccessTokenHash"
+>;
+
+export type AuthRouteDependencies = {
+  authServiceLike?: AuthServiceLike;
+  requireViewerFn?: RequireViewerFn;
+  authSessionRepositoryLike?: AuthSessionRepositoryLike;
+};
+
+export const createAuthRoutes = (
+  dependencies: AuthRouteDependencies = {},
+): RouteDefinition[] => {
+const authService = dependencies.authServiceLike ?? defaultAuthService;
+const requireViewer = dependencies.requireViewerFn ?? defaultRequireViewer;
+const authSessionRepository =
+  dependencies.authSessionRepositoryLike ?? defaultAuthSessionRepository;
 
 const registerChallengeRoute: RouteDefinition = {
   method: "POST",
@@ -367,7 +399,7 @@ const revokeSessionRoute: RouteDefinition = {
   },
 };
 
-export const authRoutes: RouteDefinition[] = [
+return [
   registerChallengeRoute,
   registerCompleteRoute,
   loginChallengeRoute,
@@ -377,5 +409,8 @@ export const authRoutes: RouteDefinition[] = [
   listSessionsRoute,
   revokeSessionRoute,
 ];
+};
+
+export const authRoutes: RouteDefinition[] = createAuthRoutes();
 
 export default authRoutes;

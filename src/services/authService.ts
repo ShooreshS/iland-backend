@@ -54,6 +54,12 @@ type RefreshSessionInput = {
   refreshToken: string;
 };
 
+type RecoveryRevocationInput = {
+  userId: string;
+  preserveAuthCredentialId?: string | null;
+  reason?: string;
+};
+
 const createOpaqueChallenge = (): string => createOpaqueBearerToken().token;
 
 const notImplementedErrorResponse = (operation: string) => ({
@@ -137,6 +143,74 @@ const buildFirstPartySessionTokens = () => {
 
 const nowIsPast = (isoTimestamp: string) => new Date(isoTimestamp).getTime() <= Date.now();
 
+const toPublicSession = (session: AuthSessionRow | null) => {
+  if (!session) {
+    return null;
+  }
+
+  return {
+    id: session.id,
+    userId: session.user_id,
+    authCredentialId: session.auth_credential_id,
+    status: session.status,
+    authGeneration: session.auth_generation,
+    attestationVerifiedAt: session.attestation_verified_at,
+    lastSeenAt: session.last_seen_at,
+    expiresAt: session.expires_at,
+    revokedAt: session.revoked_at,
+    revocationReason: session.revocation_reason,
+    createdAt: session.created_at,
+    updatedAt: session.updated_at,
+  };
+};
+
+const revokeRefreshFamilyForSession = async (
+  sessionId: string,
+  reason: string,
+  status: "revoked" | "reused" | "expired" = "revoked",
+) =>
+  refreshTokenFamilyRepository.revokeBySessionId(sessionId, {
+    status,
+    revocationReason: reason,
+  });
+
+const revokeSessionLineage = async (
+  session: AuthSessionRow,
+  reason: string,
+  options: {
+    refreshFamilyStatus?: "revoked" | "reused" | "expired";
+    auditEventType?: string;
+    auditMetadata?: Record<string, unknown>;
+  } = {},
+) => {
+  // Enforced lifecycle policy:
+  // a server session and its refresh-token family are one revocable lineage.
+  // Leaving a refresh family active after revoking the access session creates
+  // confusing UX and a possible stale retry path, so every session revocation
+  // goes through this helper.
+  const revokedSession =
+    session.status === "active"
+      ? await authSessionRepository.revokeById(session.id, reason)
+      : session;
+  await revokeRefreshFamilyForSession(
+    session.id,
+    reason,
+    options.refreshFamilyStatus ?? "revoked",
+  );
+
+  await authAuditEventRepository.insert({
+    user_id: session.user_id,
+    session_id: session.id,
+    event_type: options.auditEventType ?? `auth_session_revoked:${reason}`,
+    metadata: {
+      reason,
+      ...(options.auditMetadata ?? {}),
+    },
+  });
+
+  return revokedSession;
+};
+
 const pruneInactiveLoginSessions = async (
   userId: string,
   sessions: AuthSessionRow[],
@@ -164,18 +238,11 @@ const pruneInactiveLoginSessions = async (
       continue;
     }
 
-    const revoked = await authSessionRepository.revokeById(session.id, revocationReason);
-    if (revoked) {
-      await authAuditEventRepository.insert({
-        user_id: userId,
-        session_id: session.id,
-        event_type: `auth_session_revoked:${revocationReason}`,
-        metadata: {
-          reason: revocationReason,
-          prunedDuringLogin: true,
-        },
-      });
-    }
+    await revokeSessionLineage(session, revocationReason, {
+      auditMetadata: {
+        prunedDuringLogin: true,
+      },
+    });
   }
 
   return stillActive;
@@ -585,6 +652,10 @@ export const authService = {
         status: "expired",
         revocationReason: "refresh_token_expired",
       });
+      await authSessionRepository.revokeById(
+        refreshFamily.session_id,
+        "refresh_token_expired",
+      );
 
       return {
         success: false as const,
@@ -603,6 +674,10 @@ export const authService = {
     }
 
     if (session.status !== "active") {
+      await refreshTokenFamilyRepository.revokeById(refreshFamily.id, {
+        status: "revoked",
+        revocationReason: "session_not_active",
+      });
       return {
         success: false as const,
         errorCode: "SESSION_NOT_ACTIVE",
@@ -620,6 +695,9 @@ export const authService = {
     }
 
     if (user.account_status !== "active") {
+      await revokeSessionLineage(session, "account_disabled", {
+        auditEventType: "auth_session_revoked:account_disabled",
+      });
       return disabledAccountResponse;
     }
 
@@ -697,10 +775,27 @@ export const authService = {
   },
 
   async listSessionsForUser(userId: string) {
+    const user = await userRepository.getById(userId);
+    if (!user) {
+      return {
+        success: false as const,
+        errorCode: "USER_NOT_FOUND",
+        message: "Session user could not be resolved.",
+      };
+    }
+
     const sessions = await authSessionRepository.listByUserId(userId);
+    await pruneInactiveLoginSessions(
+      userId,
+      sessions,
+      user.auth_generation,
+      "__session_list_no_replacement__",
+    );
+    const refreshedSessions = await authSessionRepository.listByUserId(userId);
+
     return {
       success: true as const,
-      sessions,
+      sessions: refreshedSessions.map(toPublicSession),
       policy: {
         maxActiveSessionsPerUser: authPolicy.maxActiveSessionsPerUser,
       },
@@ -717,27 +812,92 @@ export const authService = {
       };
     }
 
-    const revoked = await authSessionRepository.revokeById(
-      sessionId,
+    const revoked = await revokeSessionLineage(
+      session,
       "user_requested_session_revoke",
+      {
+        auditEventType: "auth_session_revoked:user_request",
+      },
     );
-
-    if (revoked) {
-      await authAuditEventRepository.insert({
-        user_id: userId,
-        session_id: sessionId,
-        event_type: "auth_session_revoked:user_request",
-        metadata: {
-          reason: "user_requested_session_revoke",
-        },
-      });
-    }
 
     return {
       success: true as const,
-      session: revoked,
+      session: toPublicSession(revoked),
     };
   },
+
+  async revokeAuthenticationForRecovery(input: RecoveryRevocationInput) {
+    const reason = input.reason ?? "identity_recovery_completed";
+    const user = await userRepository.incrementAuthGeneration(input.userId);
+    if (!user) {
+      return {
+        success: false as const,
+        errorCode: "USER_NOT_FOUND",
+        message: "Recovery user could not be resolved.",
+      };
+    }
+
+    const sessions = await authSessionRepository.listByUserId(input.userId);
+    const sessionsToRevoke = sessions.filter(
+      (session) =>
+        session.status === "active" &&
+        session.auth_credential_id !== (input.preserveAuthCredentialId ?? null),
+    );
+    const revokedSessions: AuthSessionRow[] = [];
+    let revokedRefreshFamilyCount = 0;
+    for (const session of sessionsToRevoke) {
+      const revokedSession = await revokeSessionLineage(session, reason, {
+        auditEventType: "auth_session_revoked:identity_recovery",
+      });
+      if (revokedSession) {
+        revokedSessions.push(revokedSession);
+      }
+      revokedRefreshFamilyCount += 1;
+    }
+
+    const [revokedCredentials, revokedAttestations] = await Promise.all([
+      authCredentialRepository.revokeActiveByUserId(input.userId, {
+        revocationReason: reason,
+        excludeAuthCredentialId: input.preserveAuthCredentialId ?? null,
+      }),
+      appAttestationCredentialRepository.revokeActiveByUserId(input.userId, {
+        revocationReason: reason,
+        excludeAuthCredentialId: input.preserveAuthCredentialId ?? null,
+      }),
+    ]);
+
+    await authAuditEventRepository.insert({
+      user_id: input.userId,
+      event_type: "auth_recovery_revoked_authentication_lineage",
+      metadata: {
+        reason,
+        newAuthGeneration: user.auth_generation,
+        preservedAuthCredentialId: input.preserveAuthCredentialId ?? null,
+        revokedSessionCount: revokedSessions.length,
+        revokedRefreshFamilyCount,
+        revokedCredentialCount: revokedCredentials.length,
+        revokedAttestationCredentialCount: revokedAttestations.length,
+      },
+    });
+
+    return {
+      success: true as const,
+      user: {
+        id: user.id,
+        authGeneration: user.auth_generation,
+      },
+      revoked: {
+        sessions: revokedSessions.length,
+        refreshTokenFamilies: revokedRefreshFamilyCount,
+        authCredentials: revokedCredentials.length,
+        appAttestationCredentials: revokedAttestations.length,
+      },
+    };
+  },
+};
+
+export const __testOnly = {
+  pruneInactiveLoginSessions,
 };
 
 export default authService;

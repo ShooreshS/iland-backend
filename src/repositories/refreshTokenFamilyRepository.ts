@@ -144,6 +144,61 @@ export const refreshTokenFamilyRepository = {
 
     return data || null;
   },
+
+  async revokeBySessionId(
+    sessionId: string,
+    input: {
+      status: "revoked" | "reused" | "expired";
+      revocationReason: string;
+    },
+  ): Promise<RefreshTokenFamilyRow | null> {
+    const supabase = requireSupabaseAdminClient();
+
+    const { data, error } = await supabase
+      .from("refresh_token_families")
+      .update({
+        status: input.status,
+        revoked_at: new Date().toISOString(),
+        revocation_reason: input.revocationReason,
+      })
+      .eq("session_id", sessionId)
+      .select(REFRESH_TOKEN_FAMILY_COLUMNS)
+      .maybeSingle<RefreshTokenFamilyRow>();
+
+    if (error) {
+      throw error;
+    }
+
+    return data || null;
+  },
+
+  async revokeActiveByUserId(
+    userId: string,
+    input: {
+      status: "revoked" | "reused" | "expired";
+      revocationReason: string;
+    },
+  ): Promise<RefreshTokenFamilyRow[]> {
+    const supabase = requireSupabaseAdminClient();
+
+    const { data, error } = await supabase
+      .from("refresh_token_families")
+      .update({
+        status: input.status,
+        revoked_at: new Date().toISOString(),
+        revocation_reason: input.revocationReason,
+      })
+      .eq("user_id", userId)
+      .eq("status", "active")
+      .select(REFRESH_TOKEN_FAMILY_COLUMNS)
+      .returns<RefreshTokenFamilyRow[]>();
+
+    if (error) {
+      throw error;
+    }
+
+    return data || [];
+  },
 };
 
 export default refreshTokenFamilyRepository;

@@ -1,6 +1,7 @@
 import { hashOpaqueBearerToken } from "./tokens";
 import { json } from "../middleware/json";
 import authSessionRepository from "../repositories/authSessionRepository";
+import refreshTokenFamilyRepository from "../repositories/refreshTokenFamilyRepository";
 import userRepository from "../repositories/userRepository";
 import type { ViewerContext } from "../types/auth";
 import authPolicy from "./policy";
@@ -24,6 +25,15 @@ type RequireViewerDependencies = {
     touchLastSeen(sessionId: string): Promise<void>;
     revokeById(sessionId: string, revocationReason: string): Promise<AuthSessionRow | null>;
   };
+  refreshTokenFamilyRepositoryLike?: {
+    revokeBySessionId(
+      sessionId: string,
+      input: {
+        status: "revoked" | "reused" | "expired";
+        revocationReason: string;
+      },
+    ): Promise<unknown>;
+  };
   userRepositoryLike?: {
     getById(userId: string): Promise<ViewerContext["user"] | null>;
   };
@@ -43,8 +53,26 @@ const buildRequireViewer = (
   dependencies: RequireViewerDependencies = {},
 ) => {
   const authSessionRepo = dependencies.authSessionRepositoryLike || authSessionRepository;
+  const refreshTokenFamilyRepo =
+    dependencies.refreshTokenFamilyRepositoryLike ||
+    (dependencies.authSessionRepositoryLike
+      ? {
+          revokeBySessionId: async () => null,
+        }
+      : refreshTokenFamilyRepository);
   const userRepo = dependencies.userRepositoryLike || userRepository;
   const now = dependencies.nowFn || (() => Date.now());
+
+  const revokeSessionLineage = async (
+    session: AuthSessionRow,
+    reason: string,
+  ) => {
+    await authSessionRepo.revokeById(session.id, reason);
+    await refreshTokenFamilyRepo.revokeBySessionId(session.id, {
+      status: reason === "session_expired" ? "expired" : "revoked",
+      revocationReason: reason,
+    });
+  };
 
   // Enforced policy intention:
   // - protected routes resolve the viewer only from a
@@ -87,7 +115,7 @@ const buildRequireViewer = (
       // if an expired bearer token still reaches a protected route, revoke the
       // server-side session immediately so later inspection and cleanup see the
       // row as dead rather than leaving it "active but expired".
-      await authSessionRepo.revokeById(session.id, "session_expired");
+      await revokeSessionLineage(session, "session_expired");
       return buildFailure(
         401,
         "session_expired",
@@ -105,6 +133,7 @@ const buildRequireViewer = (
     }
 
     if (user.account_status !== "active") {
+      await revokeSessionLineage(session, "account_disabled");
       return buildFailure(
         403,
         "account_disabled",
@@ -117,7 +146,7 @@ const buildRequireViewer = (
       // any auth-generation mismatch means recovery or a security action has
       // superseded this bearer session. Revoke it on first contact so the
       // stale row no longer appears active in session-management flows.
-      await authSessionRepo.revokeById(session.id, "auth_generation_mismatch");
+      await revokeSessionLineage(session, "auth_generation_mismatch");
       return buildFailure(
         401,
         "session_stale",

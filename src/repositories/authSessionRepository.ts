@@ -149,6 +149,56 @@ export const authSessionRepository = {
 
     return data || null;
   },
+
+  async revokeActiveByUserId(
+    userId: string,
+    revocationReason: string,
+  ): Promise<AuthSessionRow[]> {
+    const supabase = requireSupabaseAdminClient();
+
+    const { data, error } = await supabase
+      .from("auth_sessions")
+      .update({
+        status: "revoked",
+        revoked_at: new Date().toISOString(),
+        revocation_reason: revocationReason,
+      })
+      .eq("user_id", userId)
+      .eq("status", "active")
+      .select(AUTH_SESSION_COLUMNS)
+      .returns<AuthSessionRow[]>();
+
+    if (error) {
+      throw error;
+    }
+
+    return data || [];
+  },
+
+  async revokeActiveByAuthCredentialId(
+    authCredentialId: string,
+    revocationReason: string,
+  ): Promise<AuthSessionRow[]> {
+    const supabase = requireSupabaseAdminClient();
+
+    const { data, error } = await supabase
+      .from("auth_sessions")
+      .update({
+        status: "revoked",
+        revoked_at: new Date().toISOString(),
+        revocation_reason: revocationReason,
+      })
+      .eq("auth_credential_id", authCredentialId)
+      .eq("status", "active")
+      .select(AUTH_SESSION_COLUMNS)
+      .returns<AuthSessionRow[]>();
+
+    if (error) {
+      throw error;
+    }
+
+    return data || [];
+  },
 };
 
 export default authSessionRepository;

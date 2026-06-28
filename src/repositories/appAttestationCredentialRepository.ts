@@ -120,6 +120,40 @@ export const appAttestationCredentialRepository = {
 
     return data || null;
   },
+
+  async revokeActiveByUserId(
+    userId: string,
+    input: {
+      revocationReason: string;
+      excludeAuthCredentialId?: string | null;
+    },
+  ): Promise<AppAttestationCredentialRow[]> {
+    const supabase = requireSupabaseAdminClient();
+
+    let query = supabase
+      .from("app_attestation_credentials")
+      .update({
+        status: "revoked",
+        revoked_at: new Date().toISOString(),
+        revocation_reason: input.revocationReason,
+      })
+      .eq("user_id", userId)
+      .eq("status", "verified");
+
+    if (input.excludeAuthCredentialId) {
+      query = query.neq("auth_credential_id", input.excludeAuthCredentialId);
+    }
+
+    const { data, error } = await query
+      .select(APP_ATTESTATION_CREDENTIAL_COLUMNS)
+      .returns<AppAttestationCredentialRow[]>();
+
+    if (error) {
+      throw error;
+    }
+
+    return data || [];
+  },
 };
 
 export default appAttestationCredentialRepository;

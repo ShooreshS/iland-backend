@@ -68,6 +68,11 @@ describe("requireViewer", () => {
   it("revokes expired bearer sessions on first contact", async () => {
     const accessToken = "access-token-1";
     const revoked: Array<{ sessionId: string; reason: string }> = [];
+    const revokedRefreshFamilies: Array<{
+      sessionId: string;
+      status: string;
+      reason: string;
+    }> = [];
 
     const requireViewer = createRequireViewer({
       nowFn: () => new Date("2026-06-21T12:00:00.000Z").getTime(),
@@ -89,6 +94,16 @@ describe("requireViewer", () => {
             status: "revoked",
             revocation_reason: reason,
           });
+        },
+      },
+      refreshTokenFamilyRepositoryLike: {
+        revokeBySessionId: async (sessionId, input) => {
+          revokedRefreshFamilies.push({
+            sessionId,
+            status: input.status,
+            reason: input.revocationReason,
+          });
+          return null;
         },
       },
       userRepositoryLike: {
@@ -118,11 +133,23 @@ describe("requireViewer", () => {
         reason: "session_expired",
       },
     ]);
+    expect(revokedRefreshFamilies).toEqual([
+      {
+        sessionId: "session-1",
+        status: "expired",
+        reason: "session_expired",
+      },
+    ]);
   });
 
   it("revokes stale bearer sessions when auth_generation no longer matches", async () => {
     const accessToken = "access-token-2";
     const revoked: Array<{ sessionId: string; reason: string }> = [];
+    const revokedRefreshFamilies: Array<{
+      sessionId: string;
+      status: string;
+      reason: string;
+    }> = [];
 
     const requireViewer = createRequireViewer({
       nowFn: () => new Date("2026-06-21T12:00:00.000Z").getTime(),
@@ -145,6 +172,16 @@ describe("requireViewer", () => {
             status: "revoked",
             revocation_reason: reason,
           });
+        },
+      },
+      refreshTokenFamilyRepositoryLike: {
+        revokeBySessionId: async (sessionId, input) => {
+          revokedRefreshFamilies.push({
+            sessionId,
+            status: input.status,
+            reason: input.revocationReason,
+          });
+          return null;
         },
       },
       userRepositoryLike: {
@@ -174,6 +211,142 @@ describe("requireViewer", () => {
         reason: "auth_generation_mismatch",
       },
     ]);
+    expect(revokedRefreshFamilies).toEqual([
+      {
+        sessionId: "session-1",
+        status: "revoked",
+        reason: "auth_generation_mismatch",
+      },
+    ]);
+  });
+
+  it("revokes active sessions when the account is disabled", async () => {
+    const accessToken = "access-token-disabled";
+    const revoked: Array<{ sessionId: string; reason: string }> = [];
+    const revokedRefreshFamilies: Array<{
+      sessionId: string;
+      status: string;
+      reason: string;
+    }> = [];
+
+    const requireViewer = createRequireViewer({
+      nowFn: () => new Date("2026-06-21T12:00:00.000Z").getTime(),
+      authSessionRepositoryLike: {
+        getByAccessTokenHash: async (hash) => {
+          if (hash !== hashOpaqueBearerToken(accessToken)) {
+            return null;
+          }
+
+          return buildSession({
+            expires_at: "2026-06-21T13:00:00.000Z",
+          });
+        },
+        touchLastSeen: async () => {},
+        revokeById: async (sessionId, reason) => {
+          revoked.push({ sessionId, reason });
+          return buildSession({
+            id: sessionId,
+            status: "revoked",
+            revocation_reason: reason,
+          });
+        },
+      },
+      refreshTokenFamilyRepositoryLike: {
+        revokeBySessionId: async (sessionId, input) => {
+          revokedRefreshFamilies.push({
+            sessionId,
+            status: input.status,
+            reason: input.revocationReason,
+          });
+          return null;
+        },
+      },
+      userRepositoryLike: {
+        getById: async () => ({
+          ...activeUser,
+          account_status: "disabled",
+        }),
+      },
+    });
+
+    const response = await requireViewer(
+      new Request("http://127.0.0.1:3001/me/profile", {
+        headers: {
+          authorization: `Bearer ${accessToken}`,
+        },
+      }),
+    );
+
+    expect(response.ok).toBe(false);
+    if (!response.ok) {
+      expect(response.response.status).toBe(403);
+      expect(await response.response.json()).toMatchObject({
+        error: "account_disabled",
+      });
+    }
+
+    expect(revoked).toEqual([
+      {
+        sessionId: "session-1",
+        reason: "account_disabled",
+      },
+    ]);
+    expect(revokedRefreshFamilies).toEqual([
+      {
+        sessionId: "session-1",
+        status: "revoked",
+        reason: "account_disabled",
+      },
+    ]);
+  });
+
+  it("rejects revoked bearer sessions", async () => {
+    const accessToken = "access-token-revoked";
+    let touched = false;
+
+    const requireViewer = createRequireViewer({
+      nowFn: () => new Date("2026-06-21T12:00:00.000Z").getTime(),
+      authSessionRepositoryLike: {
+        getByAccessTokenHash: async (hash) => {
+          if (hash !== hashOpaqueBearerToken(accessToken)) {
+            return null;
+          }
+
+          return buildSession({
+            status: "revoked",
+            revoked_at: "2026-06-21T11:00:00.000Z",
+            revocation_reason: "user_requested_session_revoke",
+          });
+        },
+        touchLastSeen: async () => {
+          touched = true;
+        },
+        revokeById: async () => null,
+      },
+      refreshTokenFamilyRepositoryLike: {
+        revokeBySessionId: async () => null,
+      },
+      userRepositoryLike: {
+        getById: async () => activeUser,
+      },
+    });
+
+    const response = await requireViewer(
+      new Request("http://127.0.0.1:3001/me/profile", {
+        headers: {
+          authorization: `Bearer ${accessToken}`,
+        },
+      }),
+    );
+
+    expect(response.ok).toBe(false);
+    if (!response.ok) {
+      expect(response.response.status).toBe(401);
+      expect(await response.response.json()).toMatchObject({
+        error: "viewer_not_resolved",
+      });
+    }
+    expect(touched).toBe(false);
   });
 
   it("touches last_seen for valid bearer sessions", async () => {
