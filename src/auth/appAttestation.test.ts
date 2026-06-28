@@ -8,9 +8,9 @@ const { privateKey: googleOAuthPrivateKey } = generateKeyPairSync("rsa", {
   modulusLength: 2048,
 });
 const allowedAndroidSigningCertDigestBase64Url =
-  "i-maz_0hklkjhdgrb5hgow0h8y5mrmdyy7gkcnfmz2m";
+  "I-MaZ_0HklkJHDGrB5hGow0H8Y5mrmdYY7GKCnfmZ2M";
 const allowedAndroidSigningCertDigestHex =
-  "8be99acffd2192592385d82b6f9860a30d21f32e66ae6772cbb8247277e6cf69";
+  "23e31a67fd079259091c31ab079846a30d07f18e66ae675863b18a0a77e66763";
 
 process.env.AUTH_IOS_TEAM_ID = "DJWBN8658Q";
 process.env.AUTH_ENABLE_TRANSITIONAL_CRYPTO_BYPASS = "true";

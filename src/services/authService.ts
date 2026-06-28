@@ -14,7 +14,11 @@ import authCredentialRepository from "../repositories/authCredentialRepository";
 import authSessionRepository from "../repositories/authSessionRepository";
 import refreshTokenFamilyRepository from "../repositories/refreshTokenFamilyRepository";
 import userRepository from "../repositories/userRepository";
-import type { AuthChallengePurpose, AuthCredentialPlatform } from "../types/db";
+import type {
+  AuthChallengePurpose,
+  AuthCredentialPlatform,
+  AuthSessionRow,
+} from "../types/db";
 
 const AUTH_CHALLENGE_TTL_MS = 5 * 60 * 1000;
 
@@ -132,6 +136,50 @@ const buildFirstPartySessionTokens = () => {
 };
 
 const nowIsPast = (isoTimestamp: string) => new Date(isoTimestamp).getTime() <= Date.now();
+
+const pruneInactiveLoginSessions = async (
+  userId: string,
+  sessions: AuthSessionRow[],
+  currentAuthGeneration: number,
+  replacingAuthCredentialId: string,
+): Promise<AuthSessionRow[]> => {
+  const stillActive: AuthSessionRow[] = [];
+
+  for (const session of sessions) {
+    if (session.status !== "active") {
+      continue;
+    }
+
+    let revocationReason: string | null = null;
+    if (nowIsPast(session.expires_at)) {
+      revocationReason = "session_expired_before_login";
+    } else if (session.auth_generation !== currentAuthGeneration) {
+      revocationReason = "auth_generation_mismatch_before_login";
+    } else if (session.auth_credential_id === replacingAuthCredentialId) {
+      revocationReason = "same_credential_session_superseded_before_login";
+    }
+
+    if (!revocationReason) {
+      stillActive.push(session);
+      continue;
+    }
+
+    const revoked = await authSessionRepository.revokeById(session.id, revocationReason);
+    if (revoked) {
+      await authAuditEventRepository.insert({
+        user_id: userId,
+        session_id: session.id,
+        event_type: `auth_session_revoked:${revocationReason}`,
+        metadata: {
+          reason: revocationReason,
+          prunedDuringLogin: true,
+        },
+      });
+    }
+  }
+
+  return stillActive;
+};
 
 export const authService = {
   async issueChallenge(input: IssueAuthChallengeInput) {
@@ -408,9 +456,13 @@ export const authService = {
     }
 
     const existingSessions = await authSessionRepository.listByUserId(user.id);
-    const activeSessionCount = existingSessions.filter(
-      (session) => session.status === "active",
-    ).length;
+    const activeSessions = await pruneInactiveLoginSessions(
+      user.id,
+      existingSessions,
+      user.auth_generation,
+      authCredential.id,
+    );
+    const activeSessionCount = activeSessions.length;
     if (activeSessionCount >= authPolicy.maxActiveSessionsPerUser) {
       return {
         success: false as const,
