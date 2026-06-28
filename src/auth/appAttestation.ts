@@ -5,6 +5,7 @@ import { X509Certificate } from "@peculiar/x509";
 import {
   createHash,
   createPublicKey,
+  sign as signData,
   timingSafeEqual,
   verify as verifySignature,
 } from "node:crypto";
@@ -99,7 +100,9 @@ oyFraWVIyd/dganmrduC1bmTBGwD
 -----END CERTIFICATE-----`;
 
 const APPLE_NONCE_EXTENSION_OID = "1.2.840.113635.100.8.2";
-const PLAY_INTEGRITY_DECODE_URL = "https://playintegrity.googleapis.com/v1/%s:decodeIntegrityToken?key=%s";
+const PLAY_INTEGRITY_DECODE_URL = "https://playintegrity.googleapis.com/v1/%s:decodeIntegrityToken";
+const GOOGLE_OAUTH_TOKEN_URL = "https://oauth2.googleapis.com/token";
+const PLAY_INTEGRITY_OAUTH_SCOPE = "https://www.googleapis.com/auth/playintegrity";
 const IOS_ATTESTED_AUTH_DATA_MIN_LENGTH = 55;
 const IOS_ASSERTION_AUTH_DATA_LENGTH = 37;
 const IOS_FLAG_ATTESTED_CREDENTIAL_DATA = 0x40;
@@ -111,6 +114,11 @@ const AAGUID_PRODUCTION = Buffer.concat([
 const ANDROID_INTEGRITY_MAX_AGE_MS = 10 * 60 * 1000;
 
 let playIntegrityFetch: typeof fetch = fetch;
+let googleOAuthFetch: typeof fetch = fetch;
+let playIntegrityAccessTokenCache: {
+  accessToken: string;
+  expiresAtMs: number;
+} | null = null;
 
 const asTrimmedString = (value: unknown): string | null => {
   if (typeof value !== "string") {
@@ -275,6 +283,193 @@ const toArrayBuffer = (value: Buffer): ArrayBuffer => Uint8Array.from(value).buf
 
 const toBase64Url = (value: Buffer): string =>
   value.toString("base64").replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/u, "");
+
+type GoogleServiceAccountCredential = {
+  clientEmail: string;
+  privateKey: string;
+};
+
+type PlayIntegrityAccessTokenResult =
+  | {
+      success: true;
+      accessToken: string;
+    }
+  | RejectedAppAttestationResult;
+
+const base64UrlJson = (value: Record<string, unknown>): string =>
+  toBase64Url(Buffer.from(JSON.stringify(value), "utf8"));
+
+const normalizeGooglePrivateKey = (value: string): string =>
+  value.replace(/\\n/g, "\n");
+
+const readGoogleServiceAccountCredential = ():
+  | {
+      success: true;
+      credential: GoogleServiceAccountCredential;
+    }
+  | RejectedAppAttestationResult => {
+  if (authPolicy.androidGoogleServiceAccountJson) {
+    let parsedCredential: unknown;
+    try {
+      parsedCredential = JSON.parse(authPolicy.androidGoogleServiceAccountJson);
+    } catch {
+      return reject(
+        "NOT_IMPLEMENTED",
+        "AUTH_ANDROID_GOOGLE_SERVICE_ACCOUNT_JSON is not valid JSON.",
+      );
+    }
+
+    const credentialRecord = parsedCredential as Record<string, unknown>;
+    const clientEmail = asTrimmedString(credentialRecord.client_email);
+    const privateKey = asTrimmedString(credentialRecord.private_key);
+    if (!clientEmail || !privateKey) {
+      return reject(
+        "NOT_IMPLEMENTED",
+        "AUTH_ANDROID_GOOGLE_SERVICE_ACCOUNT_JSON must contain client_email and private_key.",
+      );
+    }
+
+    return {
+      success: true,
+      credential: {
+        clientEmail,
+        privateKey: normalizeGooglePrivateKey(privateKey),
+      },
+    };
+  }
+
+  const clientEmail = asTrimmedString(authPolicy.androidGoogleServiceAccountClientEmail);
+  const privateKey = asTrimmedString(authPolicy.androidGoogleServiceAccountPrivateKey);
+  if (!clientEmail || !privateKey) {
+    return reject(
+      "NOT_IMPLEMENTED",
+      "Google Play Integrity decode requires service-account OAuth credentials.",
+    );
+  }
+
+  return {
+    success: true,
+    credential: {
+      clientEmail,
+      privateKey: normalizeGooglePrivateKey(privateKey),
+    },
+  };
+};
+
+const signGoogleServiceAccountJwt = (
+  credential: GoogleServiceAccountCredential,
+): string => {
+  const issuedAt = Math.floor(Date.now() / 1000);
+  const header = base64UrlJson({
+    alg: "RS256",
+    typ: "JWT",
+  });
+  const claims = base64UrlJson({
+    iss: credential.clientEmail,
+    scope: PLAY_INTEGRITY_OAUTH_SCOPE,
+    aud: GOOGLE_OAUTH_TOKEN_URL,
+    iat: issuedAt,
+    exp: issuedAt + 3600,
+  });
+  const signingInput = `${header}.${claims}`;
+  const signature = signData(
+    "RSA-SHA256",
+    Buffer.from(signingInput, "utf8"),
+    credential.privateKey,
+  );
+
+  return `${signingInput}.${toBase64Url(signature)}`;
+};
+
+const getPlayIntegrityAccessToken = async (): Promise<PlayIntegrityAccessTokenResult> => {
+  const now = Date.now();
+  if (
+    playIntegrityAccessTokenCache &&
+    playIntegrityAccessTokenCache.expiresAtMs > now + 60_000
+  ) {
+    return {
+      success: true,
+      accessToken: playIntegrityAccessTokenCache.accessToken,
+    };
+  }
+
+  const credentialResult = readGoogleServiceAccountCredential();
+  if (!credentialResult.success) {
+    return credentialResult;
+  }
+
+  let assertion: string;
+  try {
+    assertion = signGoogleServiceAccountJwt(credentialResult.credential);
+  } catch {
+    return reject(
+      "NOT_IMPLEMENTED",
+      "Google service-account private key could not sign the Play Integrity OAuth assertion.",
+    );
+  }
+
+  let response: Response;
+  try {
+    response = await googleOAuthFetch(GOOGLE_OAUTH_TOKEN_URL, {
+      method: "POST",
+      headers: {
+        "content-type": "application/x-www-form-urlencoded",
+      },
+      body: new URLSearchParams({
+        grant_type: "urn:ietf:params:oauth:grant-type:jwt-bearer",
+        assertion,
+      }).toString(),
+    });
+  } catch {
+    return reject(
+      "ATTESTATION_INVALID",
+      "Google OAuth token request for Play Integrity decode failed.",
+    );
+  }
+
+  const responseText = await response.text();
+  if (!response.ok) {
+    return reject(
+      "ATTESTATION_INVALID",
+      `Google OAuth token request returned HTTP ${response.status}: ${truncateForLog(responseText, 200)}`,
+    );
+  }
+
+  let payload: Record<string, unknown>;
+  try {
+    payload = JSON.parse(responseText) as Record<string, unknown>;
+  } catch {
+    return reject(
+      "ATTESTATION_INVALID",
+      "Google OAuth token response is not valid JSON.",
+    );
+  }
+
+  const accessToken = asTrimmedString(payload.access_token);
+  if (!accessToken) {
+    return reject(
+      "ATTESTATION_INVALID",
+      "Google OAuth token response is missing access_token.",
+    );
+  }
+
+  const expiresInSeconds =
+    typeof payload.expires_in === "number"
+      ? payload.expires_in
+      : typeof payload.expires_in === "string"
+        ? Number.parseInt(payload.expires_in, 10)
+        : 3600;
+
+  playIntegrityAccessTokenCache = {
+    accessToken,
+    expiresAtMs: now + Math.max(60, expiresInSeconds || 3600) * 1000,
+  };
+
+  return {
+    success: true,
+    accessToken,
+  };
+};
 
 const getCoseKeyField = (
   coseKey: Record<string, unknown> | Map<unknown, unknown>,
@@ -585,8 +780,11 @@ const hashSpkiDerFromPublicKeyPem = (
 const truncateForLog = (value: string, maxLength: number): string =>
   value.length <= maxLength ? value : `${value.slice(0, maxLength)}…`;
 
+// Must match the Android client nonce passed to Play Integrity:
+// SHA-256(challenge), encoded as base64url without padding. Google rejects
+// normal Base64 because '+' and '/' are not web-safe nonce characters.
 const expectedAndroidIntegrityNonce = (challenge: string): string =>
-  expectedClientDataHash(challenge).toString("base64");
+  toBase64Url(expectedClientDataHash(challenge));
 
 const decodeAndroidPlayIntegrityVerdict = async (
   integrityToken: string,
@@ -597,13 +795,6 @@ const decodeAndroidPlayIntegrityVerdict = async (
   // the Google decode API and pin the verdict to an explicit allow-list of
   // release signing certificate digests. Do not silently accept an unpinned
   // certificate in strict mode.
-  if (!authPolicy.androidGoogleApiKey) {
-    return reject(
-      "NOT_IMPLEMENTED",
-      "AUTH_ANDROID_GOOGLE_API_KEY is required for real Android Play Integrity verification.",
-    );
-  }
-
   if (
     !authPolicy.enableTransitionalCryptoBypass &&
     authPolicy.androidAllowedSigningCertDigests.length === 0
@@ -614,15 +805,22 @@ const decodeAndroidPlayIntegrityVerdict = async (
     );
   }
 
-  const url = PLAY_INTEGRITY_DECODE_URL
-    .replace("%s", encodeURIComponent(authPolicy.androidPackageName))
-    .replace("%s", encodeURIComponent(authPolicy.androidGoogleApiKey));
+  const accessTokenResult = await getPlayIntegrityAccessToken();
+  if (!accessTokenResult.success) {
+    return accessTokenResult;
+  }
+
+  const url = PLAY_INTEGRITY_DECODE_URL.replace(
+    "%s",
+    encodeURIComponent(authPolicy.androidPackageName),
+  );
 
   let response: Response;
   try {
     response = await playIntegrityFetch(url, {
       method: "POST",
       headers: {
+        authorization: `Bearer ${accessTokenResult.accessToken}`,
         "content-type": "application/json",
       },
       body: JSON.stringify({
@@ -1765,6 +1963,14 @@ export const __testOnly = {
   },
   resetPlayIntegrityFetch() {
     playIntegrityFetch = fetch;
+  },
+  setGoogleOAuthFetch(nextFetch: typeof fetch) {
+    googleOAuthFetch = nextFetch;
+    playIntegrityAccessTokenCache = null;
+  },
+  resetGoogleOAuthFetch() {
+    googleOAuthFetch = fetch;
+    playIntegrityAccessTokenCache = null;
   },
 };
 

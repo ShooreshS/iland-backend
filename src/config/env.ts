@@ -45,6 +45,9 @@ const parsed = z
       .optional(),
     AUTH_ANDROID_ALLOWED_SIGNING_CERT_DIGESTS: z.string().optional(),
     AUTH_ANDROID_GOOGLE_API_KEY: z.string().min(1).optional(),
+    AUTH_ANDROID_GOOGLE_SERVICE_ACCOUNT_JSON: z.string().min(1).optional(),
+    AUTH_ANDROID_GOOGLE_SERVICE_ACCOUNT_CLIENT_EMAIL: z.string().min(1).optional(),
+    AUTH_ANDROID_GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY: z.string().min(1).optional(),
     AUTH_ANDROID_REQUIRE_STRONG_INTEGRITY: z.string().optional(),
     WALLET_ISSUER_ID: z.string().min(1).optional(),
     WALLET_ISSUER_SIGNING_SECRET: z.string().min(1).optional(),
@@ -92,12 +95,23 @@ const parsed = z
       });
     }
 
-    if (!transitionalBypassEnabled && !input.AUTH_ANDROID_GOOGLE_API_KEY) {
+    const hasAndroidGoogleServiceAccountJson = Boolean(
+      input.AUTH_ANDROID_GOOGLE_SERVICE_ACCOUNT_JSON,
+    );
+    const hasAndroidGoogleServiceAccountParts = Boolean(
+      input.AUTH_ANDROID_GOOGLE_SERVICE_ACCOUNT_CLIENT_EMAIL &&
+        input.AUTH_ANDROID_GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY,
+    );
+    if (
+      !transitionalBypassEnabled &&
+      !hasAndroidGoogleServiceAccountJson &&
+      !hasAndroidGoogleServiceAccountParts
+    ) {
       context.addIssue({
         code: z.ZodIssueCode.custom,
         message:
-          "AUTH_ANDROID_GOOGLE_API_KEY is required when real Play Integrity verification is enabled.",
-        path: ["AUTH_ANDROID_GOOGLE_API_KEY"],
+          "AUTH_ANDROID_GOOGLE_SERVICE_ACCOUNT_JSON or AUTH_ANDROID_GOOGLE_SERVICE_ACCOUNT_CLIENT_EMAIL/AUTH_ANDROID_GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY is required when real Play Integrity verification is enabled.",
+        path: ["AUTH_ANDROID_GOOGLE_SERVICE_ACCOUNT_JSON"],
       });
     }
 
@@ -150,6 +164,15 @@ const parsed = z
     ),
     AUTH_ANDROID_GOOGLE_API_KEY: emptyToUndefined(
       process.env.AUTH_ANDROID_GOOGLE_API_KEY,
+    ),
+    AUTH_ANDROID_GOOGLE_SERVICE_ACCOUNT_JSON: emptyToUndefined(
+      process.env.AUTH_ANDROID_GOOGLE_SERVICE_ACCOUNT_JSON,
+    ),
+    AUTH_ANDROID_GOOGLE_SERVICE_ACCOUNT_CLIENT_EMAIL: emptyToUndefined(
+      process.env.AUTH_ANDROID_GOOGLE_SERVICE_ACCOUNT_CLIENT_EMAIL,
+    ),
+    AUTH_ANDROID_GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY: emptyToUndefined(
+      process.env.AUTH_ANDROID_GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY,
     ),
     AUTH_ANDROID_REQUIRE_STRONG_INTEGRITY: emptyToUndefined(
       process.env.AUTH_ANDROID_REQUIRE_STRONG_INTEGRITY,
@@ -210,6 +233,13 @@ const authAndroidAllowedSigningCertDigests = (
   .map((value) => normalizeAndroidCertDigest(value))
   .filter(Boolean);
 const authAndroidGoogleApiKey = parsed.AUTH_ANDROID_GOOGLE_API_KEY || null;
+const authAndroidGoogleServiceAccountJson =
+  parsed.AUTH_ANDROID_GOOGLE_SERVICE_ACCOUNT_JSON || null;
+const authAndroidGoogleServiceAccountClientEmail =
+  parsed.AUTH_ANDROID_GOOGLE_SERVICE_ACCOUNT_CLIENT_EMAIL || null;
+const authAndroidGoogleServiceAccountPrivateKey =
+  parsed.AUTH_ANDROID_GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY?.replace(/\\n/g, "\n") ||
+  null;
 const authAndroidRequireStrongIntegrity =
   parsed.AUTH_ANDROID_REQUIRE_STRONG_INTEGRITY !== undefined
     ? toBoolean(parsed.AUTH_ANDROID_REQUIRE_STRONG_INTEGRITY)
@@ -264,6 +294,11 @@ export const env = Object.freeze({
     iosAppAttestEnvironment: authIosAppAttestEnvironment,
     androidAllowedSigningCertDigests: authAndroidAllowedSigningCertDigests,
     androidGoogleApiKey: authAndroidGoogleApiKey,
+    androidGoogleServiceAccountJson: authAndroidGoogleServiceAccountJson,
+    androidGoogleServiceAccountClientEmail:
+      authAndroidGoogleServiceAccountClientEmail,
+    androidGoogleServiceAccountPrivateKey:
+      authAndroidGoogleServiceAccountPrivateKey,
     androidRequireStrongIntegrity: authAndroidRequireStrongIntegrity,
   }),
   wallet: Object.freeze({

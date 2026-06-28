@@ -4,9 +4,17 @@ import { encode } from "cbor-x";
 
 import type { AppAttestationCredentialRow } from "../types/db";
 
+const { privateKey: googleOAuthPrivateKey } = generateKeyPairSync("rsa", {
+  modulusLength: 2048,
+});
+
 process.env.AUTH_IOS_TEAM_ID = "DJWBN8658Q";
 process.env.AUTH_ENABLE_TRANSITIONAL_CRYPTO_BYPASS = "true";
-process.env.AUTH_ANDROID_GOOGLE_API_KEY = "android-google-api-key";
+process.env.AUTH_ANDROID_GOOGLE_SERVICE_ACCOUNT_CLIENT_EMAIL =
+  "play-integrity-test@example.iam.gserviceaccount.com";
+process.env.AUTH_ANDROID_GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY = googleOAuthPrivateKey
+  .export({ format: "pem", type: "pkcs8" })
+  .toString();
 process.env.AUTH_ANDROID_ALLOWED_SIGNING_CERT_DIGESTS =
   "allowed-signing-cert-digest";
 
@@ -14,6 +22,9 @@ const { __testOnly, appAttestationVerifier } = await import("./appAttestation");
 
 const sha256 = (value: Buffer | string): Buffer =>
   createHash("sha256").update(value).digest();
+
+const toBase64Url = (value: Buffer): string =>
+  value.toString("base64").replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/u, "");
 
 const derLength = (length: number): number[] => {
   if (length < 0x80) {
@@ -84,6 +95,22 @@ const withPlayIntegrityFetch = async <T>(
   payload: unknown,
   run: () => Promise<T>,
 ): Promise<T> => {
+  __testOnly.setGoogleOAuthFetch(
+    (async () =>
+      new Response(
+        JSON.stringify({
+          access_token: "test-play-integrity-oauth-token",
+          expires_in: 3600,
+          token_type: "Bearer",
+        }),
+        {
+          status: 200,
+          headers: {
+            "content-type": "application/json",
+          },
+        },
+      )) as unknown as typeof fetch,
+  );
   __testOnly.setPlayIntegrityFetch(
     (async () =>
       new Response(JSON.stringify(payload), {
@@ -97,6 +124,7 @@ const withPlayIntegrityFetch = async <T>(
   try {
     return await run();
   } finally {
+    __testOnly.resetGoogleOAuthFetch();
     __testOnly.resetPlayIntegrityFetch();
   }
 };
@@ -117,7 +145,7 @@ const buildPlayIntegrityPayload = (
       requestPackageName: overrides.requestPackageName || "com.shooresh.iland",
       nonce:
         overrides.nonce ||
-        sha256("challenge-1").toString("base64"),
+        toBase64Url(sha256("challenge-1")),
       timestampMillis:
         overrides.timestampMillis ||
         Date.now(),
