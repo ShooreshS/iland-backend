@@ -957,6 +957,15 @@ const decodeAndroidPlayIntegrityVerdict = async (
         )) || null;
 
     if (!matchedSigningCertDigest) {
+      console.warn("[auth]", {
+        route: "android_play_integrity_decode",
+        warning: "signing_certificate_digest_not_allow_listed",
+        packageName,
+        requestPackageName,
+        appRecognitionVerdict,
+        certificateSha256Digests,
+        allowedSigningCertDigests: authPolicy.androidAllowedSigningCertDigests,
+      });
       return reject(
         "ATTESTATION_INVALID",
         "Google Play Integrity signing certificate digest is not allow-listed.",
