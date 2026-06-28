@@ -780,9 +780,18 @@ const hashSpkiDerFromPublicKeyPem = (
 const truncateForLog = (value: string, maxLength: number): string =>
   value.length <= maxLength ? value : `${value.slice(0, maxLength)}…`;
 
+const decodeAndroidIntegrityNonce = (nonce: string): Buffer | null => {
+  try {
+    return Buffer.from(normalizeBase64(nonce), "base64");
+  } catch {
+    return null;
+  }
+};
+
 // Must match the Android client nonce passed to Play Integrity:
-// SHA-256(challenge), encoded as base64url without padding. Google rejects
-// normal Base64 because '+' and '/' are not web-safe nonce characters.
+// SHA-256(challenge), encoded as base64url without padding. We compare decoded
+// bytes instead of raw strings so harmless padding/standard-vs-url-safe encoding
+// differences do not break an otherwise valid challenge binding.
 const expectedAndroidIntegrityNonce = (challenge: string): string =>
   toBase64Url(expectedClientDataHash(challenge));
 
@@ -905,8 +914,27 @@ const decodeAndroidPlayIntegrityVerdict = async (
     );
   }
 
-  const expectedNonce = expectedAndroidIntegrityNonce(challenge);
-  if (nonce !== expectedNonce) {
+  const expectedNonceHash = expectedClientDataHash(challenge);
+  const expectedNonce = toBase64Url(expectedNonceHash);
+  const decodedNonce = decodeAndroidIntegrityNonce(nonce);
+  if (!decodedNonce || !buffersEqual(decodedNonce, expectedNonceHash)) {
+    console.warn("[auth]", {
+      route: "android_play_integrity_decode",
+      warning: "nonce_mismatch",
+      nonceLength: nonce.length,
+      expectedNonceLength: expectedNonce.length,
+      nonceSha256: sha256(nonce).toString("base64"),
+      expectedNonceSha256: sha256(expectedNonce).toString("base64"),
+      decodedNonceLength: decodedNonce?.length ?? null,
+      challengeLength: challenge.length,
+      challengeHashPrefix: hashOpaqueBearerToken(challenge).slice(0, 16),
+      matchesExpectedString: nonce === expectedNonce,
+      matchesExpectedStandardBase64: nonce === expectedNonceHash.toString("base64"),
+      matchesExpectedBase64UrlWithPadding: nonce === expectedNonceHash
+        .toString("base64")
+        .replace(/\+/g, "-")
+        .replace(/\//g, "_"),
+    });
     return reject(
       "ATTESTATION_INVALID",
       "Google Play Integrity nonce does not match the server challenge hash.",

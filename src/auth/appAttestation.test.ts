@@ -287,6 +287,31 @@ describe("appAttestationVerifier", () => {
     });
   });
 
+  it("accepts Android Play Integrity nonce padding when decoded bytes match", async () => {
+    const result = await withPlayIntegrityFetch(
+      buildPlayIntegrityPayload({
+        nonce: sha256("challenge-1").toString("base64"),
+      }),
+      async () =>
+        appAttestationVerifier.verifyLoginAssertion({
+          platform: "android",
+          challenge: "challenge-1",
+          storedCredential: buildStoredAndroidCredential(),
+          appAssertion: {
+            packageName: "com.shooresh.iland",
+            integrityToken: "android-integrity-token",
+            signingCertDigest: "allowed-signing-cert-digest",
+          },
+        }),
+    );
+
+    expect(result).toMatchObject({
+      success: true,
+      packageName: "com.shooresh.iland",
+      signingCertDigest: "allowed-signing-cert-digest",
+    });
+  });
+
   it("rejects iOS login assertion when attestation key id does not match enrollment", async () => {
     const result = await appAttestationVerifier.verifyLoginAssertion({
       platform: "ios",
