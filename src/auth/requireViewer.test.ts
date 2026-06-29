@@ -8,6 +8,7 @@ const activeUser: UserRow = {
   id: "user-1",
   username: null,
   display_name: null,
+  public_nickname: null,
   onboarding_status: "complete",
   verification_level: "verified",
   has_wallet: true,

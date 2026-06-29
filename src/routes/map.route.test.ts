@@ -8,6 +8,7 @@ const viewerUser: UserRow = {
   id: "viewer-user-1",
   username: null,
   display_name: null,
+  public_nickname: null,
   onboarding_status: "not_started",
   verification_level: "anonymous",
   has_wallet: false,

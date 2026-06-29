@@ -4,6 +4,7 @@ export type UserRow = {
   id: string;
   username: string | null;
   display_name: string | null;
+  public_nickname: string | null;
   onboarding_status: string;
   verification_level: string;
   has_wallet: boolean;
@@ -19,6 +20,7 @@ export type UserRow = {
 export type NewUserRow = {
   username: string | null;
   display_name: string | null;
+  public_nickname?: string | null;
   onboarding_status: string;
   verification_level: string;
   has_wallet: boolean;

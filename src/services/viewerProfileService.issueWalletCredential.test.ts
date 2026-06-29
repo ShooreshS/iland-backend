@@ -24,6 +24,7 @@ const createUser = (overrides: Partial<UserRow> = {}): UserRow => {
     id: "user-1",
     username: null,
     display_name: null,
+    public_nickname: null,
     onboarding_status: "identity_pending",
     verification_level: "nid_verified",
     has_wallet: false,
@@ -263,6 +264,75 @@ describe("viewerProfileService.issueWalletCredential", () => {
       if (!result.success) {
         expect(result.errorCode).toBe("IDENTITY_PROFILE_REQUIRED");
       }
+    } finally {
+      restoreFns.reverse().forEach((restore) => restore());
+    }
+  });
+});
+
+describe("viewerProfileService.updatePublicNickname", () => {
+  it("updates the public nickname and returns OIDC-safe profile claims", async () => {
+    const user = createUser();
+    const updatedUser = createUser({
+      public_nickname: "bright-voter-1234",
+    });
+
+    const restoreFns = [
+      patchMethod(userRepository, "getById", async () => user),
+      patchMethod(userRepository, "getByPublicNickname", async () => null),
+      patchMethod(userRepository, "updatePublicNickname", async () => updatedUser),
+      patchMethod(identityProfileRepository, "getByUserId", async () =>
+        createIdentityProfile({
+          passport_verified_at: FIXED_TIME,
+          face_verified_at: FIXED_TIME,
+        }),
+      ),
+      patchMethod(walletCredentialRepository, "getByUserId", async () => null),
+    ];
+
+    try {
+      const result = await viewerProfileService.updatePublicNickname(user.id, {
+        publicNickname: "Bright Voter 1234",
+      });
+
+      expect(result.success).toBe(true);
+      expect(result.profile?.user.publicNickname).toBe("bright-voter-1234");
+      expect(result.profile?.claims).toEqual({
+        nickname: "bright-voter-1234",
+        profile_completed: true,
+        passport_verified: true,
+        face_verified: true,
+      });
+    } finally {
+      restoreFns.reverse().forEach((restore) => restore());
+    }
+  });
+
+  it("rejects nicknames owned by another user", async () => {
+    const user = createUser({ id: "user-1" });
+    const existingUser = createUser({
+      id: "user-2",
+      public_nickname: "bright-voter-1234",
+    });
+    let updateCalled = 0;
+
+    const restoreFns = [
+      patchMethod(userRepository, "getById", async () => user),
+      patchMethod(userRepository, "getByPublicNickname", async () => existingUser),
+      patchMethod(userRepository, "updatePublicNickname", async () => {
+        updateCalled += 1;
+        return createUser();
+      }),
+    ];
+
+    try {
+      const result = await viewerProfileService.updatePublicNickname(user.id, {
+        publicNickname: "bright-voter-1234",
+      });
+
+      expect(result.success).toBe(false);
+      expect(result.errorCode).toBe("NICKNAME_TAKEN");
+      expect(updateCalled).toBe(0);
     } finally {
       restoreFns.reverse().forEach((restore) => restore());
     }

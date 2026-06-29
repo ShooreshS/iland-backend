@@ -214,6 +214,7 @@ export type AppUserDto = {
   id: string;
   username?: string;
   displayName?: string;
+  publicNickname?: string;
   onboardingStatus: string;
   verificationLevel: string;
   hasWallet: boolean;
@@ -222,6 +223,13 @@ export type AppUserDto = {
   preferredLanguage?: string;
   createdAt: string;
   updatedAt: string;
+};
+
+export type ViewerProfileClaimsDto = {
+  nickname?: string;
+  profile_completed: boolean;
+  passport_verified: boolean;
+  face_verified: boolean;
 };
 
 export type WalletStatus = "not_created" | "local_only" | "issued";
@@ -387,6 +395,7 @@ export type GeoAreaOptionDto = {
 
 export type CurrentViewerProfileDto = {
   user: AppUserDto;
+  claims: ViewerProfileClaimsDto;
   identityProfile: IdentityProfileDto;
   homeArea: GeoAreaOptionDto | null;
   wallet: ViewerWalletStateDto;
@@ -426,6 +435,17 @@ export type UpdateViewerHomeLocationResultDto = {
     | "IDENTITY_PROFILE_NOT_FOUND"
     | "INVALID_COORDINATES"
     | "INVALID_INPUT";
+  message?: string;
+};
+
+export type UpdateViewerPublicNicknameRequestDto = {
+  publicNickname: string;
+};
+
+export type UpdateViewerPublicNicknameResultDto = {
+  success: boolean;
+  profile?: CurrentViewerProfileDto;
+  errorCode?: "USER_NOT_FOUND" | "INVALID_NICKNAME" | "NICKNAME_TAKEN";
   message?: string;
 };
 

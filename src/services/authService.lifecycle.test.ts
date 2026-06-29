@@ -14,6 +14,7 @@ const activeUser: UserRow = {
   id: "user-1",
   username: null,
   display_name: null,
+  public_nickname: null,
   onboarding_status: "identity_pending",
   verification_level: "nid_verified",
   has_wallet: false,

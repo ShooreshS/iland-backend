@@ -7,6 +7,7 @@ import type {
   BindVerifiedIdentityResultDto,
   IssueWalletCredentialResultDto,
   UpdateViewerHomeLocationResultDto,
+  UpdateViewerPublicNicknameResultDto,
   ViewerLandSelectionResultDto,
 } from "../types/contracts";
 import type { RouteDefinition } from "../types/http";
@@ -58,6 +59,12 @@ const updateHomeLocationSchema = z
   })
   .strict();
 
+const updatePublicNicknameSchema = z
+  .object({
+    publicNickname: z.string().trim().min(1).max(64),
+  })
+  .strict();
+
 const verifyIdentitySchema = z
   .object({
     nidnh: z.string().trim().min(1),
@@ -91,6 +98,15 @@ const homeLocationErrorStatusMap: Record<
   IDENTITY_PROFILE_NOT_FOUND: 409,
   INVALID_COORDINATES: 400,
   INVALID_INPUT: 400,
+};
+
+const publicNicknameErrorStatusMap: Record<
+  NonNullable<UpdateViewerPublicNicknameResultDto["errorCode"]>,
+  number
+> = {
+  USER_NOT_FOUND: 401,
+  INVALID_NICKNAME: 400,
+  NICKNAME_TAKEN: 409,
 };
 
 const verifyIdentityErrorStatusMap: Record<
@@ -174,6 +190,55 @@ const updateViewerHomeLocationRoute: RouteDefinition = {
     return json(
       result,
       homeLocationErrorStatusMap[result.errorCode || "INVALID_INPUT"],
+    );
+  },
+};
+
+const updateViewerPublicNicknameRoute: RouteDefinition = {
+  method: "PATCH",
+  path: "/me/profile/public-nickname",
+  handler: async ({ request }) => {
+    const viewerResult = await requireViewer(request);
+    if (!viewerResult.ok) {
+      return viewerResult.response;
+    }
+
+    let requestBody: unknown;
+    try {
+      requestBody = await request.json();
+    } catch {
+      return json(
+        {
+          error: "invalid_request",
+          message: "Request body must be valid JSON.",
+        },
+        400,
+      );
+    }
+
+    const parsedBody = updatePublicNicknameSchema.safeParse(requestBody);
+    if (!parsedBody.success) {
+      return json(
+        {
+          error: "invalid_request",
+          message: "Public nickname update request body is invalid.",
+        },
+        400,
+      );
+    }
+
+    const result = await viewerProfileService.updatePublicNickname(
+      viewerResult.viewer.userId,
+      parsedBody.data,
+    );
+
+    if (result.success) {
+      return json(result);
+    }
+
+    return json(
+      result,
+      publicNicknameErrorStatusMap[result.errorCode || "INVALID_NICKNAME"],
     );
   },
 };
@@ -463,6 +528,7 @@ const verifyIdentityRoute = createVerifyIdentityRoute();
 export const meRoutes: RouteDefinition[] = [
   getCurrentViewerProfileRoute,
   updateViewerHomeLocationRoute,
+  updateViewerPublicNicknameRoute,
   getViewerLandStateRoute,
   updateViewerLandRoute,
   updateViewerLandFlagRoute,

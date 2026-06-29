@@ -1,4 +1,4 @@
-import { createHmac, randomUUID } from "node:crypto";
+import { createHmac, randomInt, randomUUID } from "node:crypto";
 import env from "../config/env";
 import identityProfileRepository from "../repositories/identityProfileRepository";
 import landRepository from "../repositories/landRepository";
@@ -18,6 +18,8 @@ import type {
   PollCreationReferenceDataDto,
   UpdateViewerHomeLocationRequestDto,
   UpdateViewerHomeLocationResultDto,
+  UpdateViewerPublicNicknameRequestDto,
+  UpdateViewerPublicNicknameResultDto,
   ViewerWalletStateDto,
   WalletCredentialDto,
   WalletStatus,
@@ -53,6 +55,7 @@ type CreateLandInput = {
 
 type IssueWalletCredentialInput = IssueWalletCredentialRequestDto;
 type UpdateHomeLocationInput = UpdateViewerHomeLocationRequestDto;
+type UpdatePublicNicknameInput = UpdateViewerPublicNicknameRequestDto;
 
 const ALLOWED_HOME_LOCATION_SOURCES = new Set([
   "user_selected",
@@ -62,6 +65,45 @@ const ALLOWED_HOME_LOCATION_SOURCES = new Set([
 ]);
 
 const DEFAULT_HOME_COUNTRY_CODE = "ZZ";
+const PUBLIC_NICKNAME_MIN_LENGTH = 3;
+const PUBLIC_NICKNAME_MAX_LENGTH = 32;
+const PUBLIC_NICKNAME_PATTERN = /^[a-z][a-z0-9-]{2,31}$/;
+const RESERVED_PUBLIC_NICKNAMES = new Set([
+  "admin",
+  "administrator",
+  "civicos",
+  "codeiland",
+  "iland",
+  "support",
+  "system",
+  "root",
+  "null",
+  "undefined",
+]);
+const NICKNAME_ADJECTIVES = [
+  "bright",
+  "calm",
+  "clear",
+  "curious",
+  "fair",
+  "kind",
+  "open",
+  "steady",
+  "swift",
+  "true",
+];
+const NICKNAME_NOUNS = [
+  "anchor",
+  "atlas",
+  "bridge",
+  "citizen",
+  "harbor",
+  "lantern",
+  "pilot",
+  "river",
+  "signal",
+  "voter",
+];
 
 const normalizeText = (value: unknown): string | null => {
   if (typeof value !== "string") {
@@ -70,6 +112,58 @@ const normalizeText = (value: unknown): string | null => {
 
   const trimmed = value.trim();
   return trimmed.length > 0 ? trimmed : null;
+};
+
+const normalizePublicNickname = (value: unknown): string | null => {
+  const normalized = normalizeText(value);
+  if (!normalized) {
+    return null;
+  }
+
+  return normalized
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .replace(/-{2,}/g, "-");
+};
+
+const validatePublicNickname = (publicNickname: string | null): string | null => {
+  if (!publicNickname) {
+    return "Public nickname is required.";
+  }
+
+  if (
+    publicNickname.length < PUBLIC_NICKNAME_MIN_LENGTH ||
+    publicNickname.length > PUBLIC_NICKNAME_MAX_LENGTH
+  ) {
+    return "Public nickname must be 3 to 32 characters.";
+  }
+
+  if (!PUBLIC_NICKNAME_PATTERN.test(publicNickname)) {
+    return "Public nickname must start with a letter and contain only letters, numbers, and hyphens.";
+  }
+
+  if (RESERVED_PUBLIC_NICKNAMES.has(publicNickname)) {
+    return "This public nickname is reserved.";
+  }
+
+  return null;
+};
+
+const createRandomNicknameCandidate = (): string => {
+  const adjective = NICKNAME_ADJECTIVES[randomInt(NICKNAME_ADJECTIVES.length)];
+  const noun = NICKNAME_NOUNS[randomInt(NICKNAME_NOUNS.length)];
+  const suffix = randomInt(1000, 10000);
+  return `${adjective}-${noun}-${suffix}`;
+};
+
+const isUniqueConstraintError = (error: unknown): boolean => {
+  const maybeError = error as { code?: unknown; message?: unknown };
+  return (
+    maybeError?.code === "23505" ||
+    (typeof maybeError?.message === "string" &&
+      maybeError.message.toLowerCase().includes("public_nickname"))
+  );
 };
 
 const normalizeCountryCode = (value: unknown): string | null => {
@@ -282,6 +376,7 @@ const mapUserToDto = (user: UserRow) => ({
   id: user.id,
   ...(user.username ? { username: user.username } : null),
   ...(user.display_name ? { displayName: user.display_name } : null),
+  ...(user.public_nickname ? { publicNickname: user.public_nickname } : null),
   onboardingStatus: user.onboarding_status,
   verificationLevel: user.verification_level,
   hasWallet: user.has_wallet,
@@ -291,6 +386,76 @@ const mapUserToDto = (user: UserRow) => ({
   createdAt: user.created_at,
   updatedAt: user.updated_at,
 });
+
+const buildViewerProfileClaims = (
+  user: UserRow,
+  identityProfile: ReturnType<typeof mapIdentityProfileToDto>,
+) => {
+  const passportVerified = Boolean(identityProfile?.passportVerifiedAt);
+  const faceVerified = Boolean(identityProfile?.faceVerifiedAt);
+  const profileCompleted = Boolean(
+    user.public_nickname && passportVerified && faceVerified,
+  );
+
+  return {
+    ...(user.public_nickname ? { nickname: user.public_nickname } : null),
+    profile_completed: profileCompleted,
+    passport_verified: passportVerified,
+    face_verified: faceVerified,
+  };
+};
+
+const resolveUniquePublicNickname = async (): Promise<string> => {
+  for (let attempt = 0; attempt < 50; attempt += 1) {
+    const candidate = createRandomNicknameCandidate();
+    const existingUser = await userRepository.getByPublicNickname(candidate);
+    if (!existingUser) {
+      return candidate;
+    }
+  }
+
+  return `citizen-${randomUUID().replace(/-/g, "").slice(0, 12)}`;
+};
+
+const ensurePublicNickname = async (user: UserRow): Promise<UserRow> => {
+  const currentNickname = normalizePublicNickname(user.public_nickname);
+  if (currentNickname && !validatePublicNickname(currentNickname)) {
+    return currentNickname === user.public_nickname
+      ? user
+      : {
+          ...user,
+          public_nickname: currentNickname,
+        };
+  }
+
+  // SSO policy:
+  // every verified/backend account gets a non-PII public nickname before the
+  // profile is exposed to relying parties. The nickname is not derived from
+  // document data and can be edited by the user later.
+  const generatedNickname = await resolveUniquePublicNickname();
+  try {
+    return (
+      (await userRepository.updatePublicNickname(user.id, generatedNickname)) ||
+      {
+        ...user,
+        public_nickname: generatedNickname,
+      }
+    );
+  } catch (error) {
+    if (!isUniqueConstraintError(error)) {
+      throw error;
+    }
+
+    const fallbackNickname = await resolveUniquePublicNickname();
+    return (
+      (await userRepository.updatePublicNickname(user.id, fallbackNickname)) ||
+      {
+        ...user,
+        public_nickname: fallbackNickname,
+      }
+    );
+  }
+};
 
 const resolveSelectedLand = async (user: UserRow): Promise<LandDto | null> => {
   const selectedLandId = normalizeText(user.selected_land_id);
@@ -309,10 +474,11 @@ const resolveSelectedLand = async (user: UserRow): Promise<LandDto | null> => {
 const buildCurrentViewerProfile = async (
   user: UserRow,
 ): Promise<CurrentViewerProfileDto> => {
+  const resolvedUser = await ensurePublicNickname(user);
   const [identityProfileRow, selectedLand, walletCredentialRow] = await Promise.all([
-    identityProfileRepository.getByUserId(user.id),
-    resolveSelectedLand(user),
-    walletCredentialRepository.getByUserId(user.id),
+    identityProfileRepository.getByUserId(resolvedUser.id),
+    resolveSelectedLand(resolvedUser),
+    walletCredentialRepository.getByUserId(resolvedUser.id),
   ]);
 
   const identityProfile = mapIdentityProfileToDto(identityProfileRow);
@@ -327,10 +493,11 @@ const buildCurrentViewerProfile = async (
       : null;
 
   return {
-    user: mapUserToDto(user),
+    user: mapUserToDto(resolvedUser),
+    claims: buildViewerProfileClaims(resolvedUser, identityProfile),
     identityProfile,
     homeArea,
-    wallet: buildViewerWalletState(user, walletCredential),
+    wallet: buildViewerWalletState(resolvedUser, walletCredential),
     walletCredential,
     selectedLand,
     primaryCitizenship: null,
@@ -605,6 +772,68 @@ export const viewerProfileService = {
     return {
       success: true,
       profile: await buildCurrentViewerProfile(user),
+    };
+  },
+
+  async updatePublicNickname(
+    viewerUserId: string,
+    input: UpdatePublicNicknameInput,
+  ): Promise<UpdateViewerPublicNicknameResultDto> {
+    const user = await userRepository.getById(viewerUserId);
+    if (!user) {
+      return {
+        success: false,
+        errorCode: "USER_NOT_FOUND",
+        message: "The current user could not be resolved.",
+      };
+    }
+
+    const nextNickname = normalizePublicNickname(input.publicNickname);
+    const validationMessage = validatePublicNickname(nextNickname);
+    if (validationMessage || !nextNickname) {
+      return {
+        success: false,
+        errorCode: "INVALID_NICKNAME",
+        message:
+          validationMessage ||
+          "Public nickname must start with a letter and contain only letters, numbers, and hyphens.",
+      };
+    }
+
+    const existingUser = await userRepository.getByPublicNickname(nextNickname);
+    if (existingUser && existingUser.id !== user.id) {
+      return {
+        success: false,
+        errorCode: "NICKNAME_TAKEN",
+        message: "This public nickname is already taken.",
+      };
+    }
+
+    let updatedUser: UserRow | null;
+    try {
+      updatedUser = await userRepository.updatePublicNickname(user.id, nextNickname);
+    } catch (error) {
+      if (isUniqueConstraintError(error)) {
+        return {
+          success: false,
+          errorCode: "NICKNAME_TAKEN",
+          message: "This public nickname is already taken.",
+        };
+      }
+      throw error;
+    }
+
+    if (!updatedUser) {
+      return {
+        success: false,
+        errorCode: "USER_NOT_FOUND",
+        message: "The current user could not be resolved.",
+      };
+    }
+
+    return {
+      success: true,
+      profile: await buildCurrentViewerProfile(updatedUser),
     };
   },
 
