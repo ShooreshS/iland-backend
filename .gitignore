@@ -8,3 +8,4 @@ node_modules
 test.json
 test.md
 dev
+sso-client-secrets/

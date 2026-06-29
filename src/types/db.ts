@@ -336,6 +336,60 @@ export type OidcSigningKeyRow = {
   updated_at: string;
 };
 
+export type OidcClientType = "confidential" | "public";
+export type OidcClientApplicationType = "web" | "native";
+export type OidcClientStatus = "active" | "disabled" | "deleted";
+
+export type OidcClientRow = {
+  id: string;
+  client_id: string;
+  client_name: string;
+  client_type: OidcClientType;
+  application_type: OidcClientApplicationType;
+  status: OidcClientStatus;
+  client_uri: string | null;
+  logo_uri: string | null;
+  tos_uri: string | null;
+  policy_uri: string | null;
+  sector_identifier: string;
+  allowed_scopes: string[];
+  default_scopes: string[];
+  require_pkce: boolean;
+  pkce_required_method: "S256";
+  id_token_signed_response_alg: "RS256";
+  access_token_ttl_seconds: number;
+  authorization_code_ttl_seconds: number;
+  refresh_token_ttl_days: number;
+  created_at: string;
+  updated_at: string;
+};
+
+export type OidcClientSecretStatus = "active" | "revoked" | "expired";
+
+export type OidcClientSecretRow = {
+  id: string;
+  client_id: string;
+  secret_hash: string;
+  label: string | null;
+  status: OidcClientSecretStatus;
+  last_used_at: string | null;
+  expires_at: string | null;
+  revoked_at: string | null;
+  revocation_reason: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type OidcClientRedirectUriUsage = "redirect" | "post_logout";
+
+export type OidcClientRedirectUriRow = {
+  id: string;
+  client_id: string;
+  usage: OidcClientRedirectUriUsage;
+  redirect_uri: string;
+  created_at: string;
+};
+
 export type PollRow = {
   id: string;
   slug: string;

@@ -1,0 +1,11 @@
+{
+  "client_id": "codeiland-web",
+  "client_name": "Code iLand",
+  "client_type": "confidential",
+  "application_type": "web",
+  "sector_identifier": "codeiland.com",
+  "allowed_scopes": ["openid", "profile", "offline_access"],
+  "default_scopes": ["openid", "profile"],
+  "redirect_uri": "https://codeiland-back-production.up.railway.app/auth/callback",
+  "post_logout_redirect_uri": "https://www.codeiland.com/"
+}
