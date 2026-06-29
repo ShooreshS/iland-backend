@@ -1,0 +1,543 @@
+import { requireSupabaseAdminClient } from "../db/supabaseClient";
+import type {
+  OidcClientRedirectUriRow,
+  OidcClientRow,
+  OidcClientSecretRow,
+} from "../types/db";
+
+const OIDC_CLIENT_COLUMNS =
+  "id,client_id,client_name,client_type,application_type,status,client_uri,logo_uri,tos_uri,policy_uri,sector_identifier,allowed_scopes,default_scopes,require_pkce,pkce_required_method,id_token_signed_response_alg,access_token_ttl_seconds,authorization_code_ttl_seconds,refresh_token_ttl_days,created_at,updated_at";
+
+const OIDC_CLIENT_SECRET_COLUMNS =
+  "id,client_id,secret_hash,label,status,last_used_at,expires_at,revoked_at,revocation_reason,created_at,updated_at";
+
+const OIDC_CLIENT_REDIRECT_URI_COLUMNS =
+  "id,client_id,usage,redirect_uri,created_at";
+
+const OIDC_AUTHORIZATION_REQUEST_COLUMNS =
+  "id,request_id,client_id,user_id,auth_session_id,status,response_type,redirect_uri,scopes,state,nonce,code_challenge,code_challenge_method,prompt,max_age_seconds,ui_locales,login_hint_hash,consent_required,approved_at,denied_at,consumed_at,expires_at,created_at,updated_at";
+
+const OIDC_AUTHORIZATION_CODE_COLUMNS =
+  "id,code_hash,authorization_request_id,client_id,user_id,auth_session_id,pairwise_subject_id,status,redirect_uri,scopes,nonce,code_challenge,code_challenge_method,auth_generation,expires_at,consumed_at,revoked_at,revocation_reason,created_at,updated_at";
+
+const OIDC_PAIRWISE_SUBJECT_COLUMNS =
+  "id,user_id,sector_identifier,subject_identifier,first_client_id,created_at";
+
+const OIDC_GRANT_COLUMNS =
+  "id,user_id,client_id,pairwise_subject_id,status,scopes,claims,consented_at,expires_at,revoked_at,revocation_reason,created_at,updated_at";
+
+const OIDC_REFRESH_TOKEN_FAMILY_COLUMNS =
+  "id,grant_id,auth_session_id,client_id,user_id,status,current_token_hash,previous_token_hash,rotation_counter,auth_generation,last_rotated_at,last_used_at,expires_at,revoked_at,revocation_reason,created_at,updated_at";
+
+export type OidcAuthorizationRequestRow = {
+  id: string;
+  request_id: string;
+  client_id: string;
+  user_id: string | null;
+  auth_session_id: string | null;
+  status:
+    | "pending"
+    | "approved"
+    | "denied"
+    | "expired"
+    | "consumed"
+    | "cancelled";
+  response_type: "code";
+  redirect_uri: string;
+  scopes: string[];
+  state: string | null;
+  nonce: string | null;
+  code_challenge: string;
+  code_challenge_method: "S256";
+  prompt: string[];
+  max_age_seconds: number | null;
+  ui_locales: string[];
+  login_hint_hash: string | null;
+  consent_required: boolean;
+  approved_at: string | null;
+  denied_at: string | null;
+  consumed_at: string | null;
+  expires_at: string;
+  created_at: string;
+  updated_at: string;
+};
+
+export type OidcAuthorizationCodeRow = {
+  id: string;
+  code_hash: string;
+  authorization_request_id: string;
+  client_id: string;
+  user_id: string;
+  auth_session_id: string | null;
+  pairwise_subject_id: string;
+  status: "active" | "consumed" | "expired" | "revoked";
+  redirect_uri: string;
+  scopes: string[];
+  nonce: string | null;
+  code_challenge: string;
+  code_challenge_method: "S256";
+  auth_generation: number;
+  expires_at: string;
+  consumed_at: string | null;
+  revoked_at: string | null;
+  revocation_reason: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type OidcPairwiseSubjectRow = {
+  id: string;
+  user_id: string;
+  sector_identifier: string;
+  subject_identifier: string;
+  first_client_id: string | null;
+  created_at: string;
+};
+
+export type OidcGrantRow = {
+  id: string;
+  user_id: string;
+  client_id: string;
+  pairwise_subject_id: string;
+  status: "active" | "revoked" | "expired";
+  scopes: string[];
+  claims: Record<string, unknown>;
+  consented_at: string;
+  expires_at: string | null;
+  revoked_at: string | null;
+  revocation_reason: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type OidcRefreshTokenFamilyRow = {
+  id: string;
+  grant_id: string;
+  auth_session_id: string | null;
+  client_id: string;
+  user_id: string;
+  status: "active" | "revoked" | "reused" | "expired";
+  current_token_hash: string;
+  previous_token_hash: string | null;
+  rotation_counter: number;
+  auth_generation: number;
+  last_rotated_at: string;
+  last_used_at: string | null;
+  expires_at: string;
+  revoked_at: string | null;
+  revocation_reason: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export const oidcProviderRepository = {
+  async getClientByClientId(clientId: string): Promise<OidcClientRow | null> {
+    const supabase = requireSupabaseAdminClient();
+
+    const { data, error } = await supabase
+      .from("oidc_clients")
+      .select(OIDC_CLIENT_COLUMNS)
+      .eq("client_id", clientId)
+      .maybeSingle<OidcClientRow>();
+
+    if (error) {
+      throw error;
+    }
+
+    return data || null;
+  },
+
+  async getRedirectUri(input: {
+    clientDbId: string;
+    usage: "redirect" | "post_logout";
+    redirectUri: string;
+  }): Promise<OidcClientRedirectUriRow | null> {
+    const supabase = requireSupabaseAdminClient();
+
+    const { data, error } = await supabase
+      .from("oidc_client_redirect_uris")
+      .select(OIDC_CLIENT_REDIRECT_URI_COLUMNS)
+      .eq("client_id", input.clientDbId)
+      .eq("usage", input.usage)
+      .eq("redirect_uri", input.redirectUri)
+      .maybeSingle<OidcClientRedirectUriRow>();
+
+    if (error) {
+      throw error;
+    }
+
+    return data || null;
+  },
+
+  async getActiveSecretByHash(input: {
+    clientDbId: string;
+    secretHash: string;
+  }): Promise<OidcClientSecretRow | null> {
+    const supabase = requireSupabaseAdminClient();
+
+    const { data, error } = await supabase
+      .from("oidc_client_secrets")
+      .select(OIDC_CLIENT_SECRET_COLUMNS)
+      .eq("client_id", input.clientDbId)
+      .eq("secret_hash", input.secretHash)
+      .eq("status", "active")
+      .maybeSingle<OidcClientSecretRow>();
+
+    if (error) {
+      throw error;
+    }
+
+    if (data?.expires_at && Date.parse(data.expires_at) <= Date.now()) {
+      return null;
+    }
+
+    return data || null;
+  },
+
+  async touchClientSecret(secretId: string): Promise<void> {
+    const supabase = requireSupabaseAdminClient();
+
+    const { error } = await supabase
+      .from("oidc_client_secrets")
+      .update({
+        last_used_at: new Date().toISOString(),
+      })
+      .eq("id", secretId);
+
+    if (error) {
+      throw error;
+    }
+  },
+
+  async insertAuthorizationRequest(input: {
+    requestId: string;
+    clientDbId: string;
+    userId: string;
+    authSessionId: string | null;
+    redirectUri: string;
+    scopes: string[];
+    state: string | null;
+    nonce: string | null;
+    codeChallenge: string;
+    codeChallengeMethod: "S256";
+    expiresAt: string;
+  }): Promise<OidcAuthorizationRequestRow> {
+    const now = new Date().toISOString();
+    const supabase = requireSupabaseAdminClient();
+
+    const { data, error } = await supabase
+      .from("oidc_authorization_requests")
+      .insert({
+        request_id: input.requestId,
+        client_id: input.clientDbId,
+        user_id: input.userId,
+        auth_session_id: input.authSessionId,
+        status: "approved",
+        response_type: "code",
+        redirect_uri: input.redirectUri,
+        scopes: input.scopes,
+        state: input.state,
+        nonce: input.nonce,
+        code_challenge: input.codeChallenge,
+        code_challenge_method: input.codeChallengeMethod,
+        prompt: [],
+        ui_locales: [],
+        consent_required: false,
+        approved_at: now,
+        expires_at: input.expiresAt,
+      })
+      .select(OIDC_AUTHORIZATION_REQUEST_COLUMNS)
+      .single<OidcAuthorizationRequestRow>();
+
+    if (error) {
+      throw error;
+    }
+
+    return data;
+  },
+
+  async getPairwiseSubject(input: {
+    userId: string;
+    sectorIdentifier: string;
+  }): Promise<OidcPairwiseSubjectRow | null> {
+    const supabase = requireSupabaseAdminClient();
+
+    const { data, error } = await supabase
+      .from("oidc_pairwise_subjects")
+      .select(OIDC_PAIRWISE_SUBJECT_COLUMNS)
+      .eq("user_id", input.userId)
+      .eq("sector_identifier", input.sectorIdentifier)
+      .maybeSingle<OidcPairwiseSubjectRow>();
+
+    if (error) {
+      throw error;
+    }
+
+    return data || null;
+  },
+
+  async insertPairwiseSubject(input: {
+    userId: string;
+    sectorIdentifier: string;
+    subjectIdentifier: string;
+    firstClientDbId: string;
+  }): Promise<OidcPairwiseSubjectRow> {
+    const supabase = requireSupabaseAdminClient();
+
+    const { data, error } = await supabase
+      .from("oidc_pairwise_subjects")
+      .insert({
+        user_id: input.userId,
+        sector_identifier: input.sectorIdentifier,
+        subject_identifier: input.subjectIdentifier,
+        first_client_id: input.firstClientDbId,
+      })
+      .select(OIDC_PAIRWISE_SUBJECT_COLUMNS)
+      .single<OidcPairwiseSubjectRow>();
+
+    if (error) {
+      throw error;
+    }
+
+    return data;
+  },
+
+  async getPairwiseSubjectById(
+    pairwiseSubjectId: string,
+  ): Promise<OidcPairwiseSubjectRow | null> {
+    const supabase = requireSupabaseAdminClient();
+
+    const { data, error } = await supabase
+      .from("oidc_pairwise_subjects")
+      .select(OIDC_PAIRWISE_SUBJECT_COLUMNS)
+      .eq("id", pairwiseSubjectId)
+      .maybeSingle<OidcPairwiseSubjectRow>();
+
+    if (error) {
+      throw error;
+    }
+
+    return data || null;
+  },
+
+  async upsertGrant(input: {
+    userId: string;
+    clientDbId: string;
+    pairwiseSubjectId: string;
+    scopes: string[];
+    claims: Record<string, unknown>;
+  }): Promise<OidcGrantRow> {
+    const supabase = requireSupabaseAdminClient();
+
+    const { data, error } = await supabase
+      .from("oidc_grants")
+      .upsert(
+        {
+          user_id: input.userId,
+          client_id: input.clientDbId,
+          pairwise_subject_id: input.pairwiseSubjectId,
+          status: "active",
+          scopes: input.scopes,
+          claims: input.claims,
+          consented_at: new Date().toISOString(),
+          expires_at: null,
+          revoked_at: null,
+          revocation_reason: null,
+        },
+        {
+          onConflict: "user_id,client_id",
+        },
+      )
+      .select(OIDC_GRANT_COLUMNS)
+      .single<OidcGrantRow>();
+
+    if (error) {
+      throw error;
+    }
+
+    return data;
+  },
+
+  async getGrantByUserAndClient(input: {
+    userId: string;
+    clientDbId: string;
+  }): Promise<OidcGrantRow | null> {
+    const supabase = requireSupabaseAdminClient();
+
+    const { data, error } = await supabase
+      .from("oidc_grants")
+      .select(OIDC_GRANT_COLUMNS)
+      .eq("user_id", input.userId)
+      .eq("client_id", input.clientDbId)
+      .maybeSingle<OidcGrantRow>();
+
+    if (error) {
+      throw error;
+    }
+
+    return data || null;
+  },
+
+  async insertAuthorizationCode(input: {
+    codeHash: string;
+    authorizationRequestId: string;
+    clientDbId: string;
+    userId: string;
+    authSessionId: string | null;
+    pairwiseSubjectId: string;
+    redirectUri: string;
+    scopes: string[];
+    nonce: string | null;
+    codeChallenge: string;
+    codeChallengeMethod: "S256";
+    authGeneration: number;
+    expiresAt: string;
+  }): Promise<OidcAuthorizationCodeRow> {
+    const supabase = requireSupabaseAdminClient();
+
+    const { data, error } = await supabase
+      .from("oidc_authorization_codes")
+      .insert({
+        code_hash: input.codeHash,
+        authorization_request_id: input.authorizationRequestId,
+        client_id: input.clientDbId,
+        user_id: input.userId,
+        auth_session_id: input.authSessionId,
+        pairwise_subject_id: input.pairwiseSubjectId,
+        status: "active",
+        redirect_uri: input.redirectUri,
+        scopes: input.scopes,
+        nonce: input.nonce,
+        code_challenge: input.codeChallenge,
+        code_challenge_method: input.codeChallengeMethod,
+        auth_generation: input.authGeneration,
+        expires_at: input.expiresAt,
+      })
+      .select(OIDC_AUTHORIZATION_CODE_COLUMNS)
+      .single<OidcAuthorizationCodeRow>();
+
+    if (error) {
+      throw error;
+    }
+
+    return data;
+  },
+
+  async getAuthorizationCodeByHash(
+    codeHash: string,
+  ): Promise<OidcAuthorizationCodeRow | null> {
+    const supabase = requireSupabaseAdminClient();
+
+    const { data, error } = await supabase
+      .from("oidc_authorization_codes")
+      .select(OIDC_AUTHORIZATION_CODE_COLUMNS)
+      .eq("code_hash", codeHash)
+      .maybeSingle<OidcAuthorizationCodeRow>();
+
+    if (error) {
+      throw error;
+    }
+
+    return data || null;
+  },
+
+  async consumeAuthorizationCode(
+    codeId: string,
+  ): Promise<OidcAuthorizationCodeRow | null> {
+    const supabase = requireSupabaseAdminClient();
+
+    const { data, error } = await supabase
+      .from("oidc_authorization_codes")
+      .update({
+        status: "consumed",
+        consumed_at: new Date().toISOString(),
+      })
+      .eq("id", codeId)
+      .eq("status", "active")
+      .select(OIDC_AUTHORIZATION_CODE_COLUMNS)
+      .maybeSingle<OidcAuthorizationCodeRow>();
+
+    if (error) {
+      throw error;
+    }
+
+    return data || null;
+  },
+
+  async expireAuthorizationCode(
+    codeId: string,
+  ): Promise<OidcAuthorizationCodeRow | null> {
+    const supabase = requireSupabaseAdminClient();
+
+    const { data, error } = await supabase
+      .from("oidc_authorization_codes")
+      .update({
+        status: "expired",
+        revoked_at: new Date().toISOString(),
+        revocation_reason: "authorization_code_expired",
+      })
+      .eq("id", codeId)
+      .eq("status", "active")
+      .select(OIDC_AUTHORIZATION_CODE_COLUMNS)
+      .maybeSingle<OidcAuthorizationCodeRow>();
+
+    if (error) {
+      throw error;
+    }
+
+    return data || null;
+  },
+
+  async consumeAuthorizationRequest(requestId: string): Promise<void> {
+    const supabase = requireSupabaseAdminClient();
+
+    const { error } = await supabase
+      .from("oidc_authorization_requests")
+      .update({
+        status: "consumed",
+        consumed_at: new Date().toISOString(),
+      })
+      .eq("id", requestId);
+
+    if (error) {
+      throw error;
+    }
+  },
+
+  async insertRefreshTokenFamily(input: {
+    grantId: string;
+    authSessionId: string | null;
+    clientDbId: string;
+    userId: string;
+    currentTokenHash: string;
+    authGeneration: number;
+    expiresAt: string;
+  }): Promise<OidcRefreshTokenFamilyRow> {
+    const supabase = requireSupabaseAdminClient();
+
+    const { data, error } = await supabase
+      .from("oidc_refresh_token_families")
+      .insert({
+        grant_id: input.grantId,
+        auth_session_id: input.authSessionId,
+        client_id: input.clientDbId,
+        user_id: input.userId,
+        status: "active",
+        current_token_hash: input.currentTokenHash,
+        previous_token_hash: null,
+        rotation_counter: 0,
+        auth_generation: input.authGeneration,
+        expires_at: input.expiresAt,
+      })
+      .select(OIDC_REFRESH_TOKEN_FAMILY_COLUMNS)
+      .single<OidcRefreshTokenFamilyRow>();
+
+    if (error) {
+      throw error;
+    }
+
+    return data;
+  },
+};
+
+export default oidcProviderRepository;
