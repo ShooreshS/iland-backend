@@ -737,10 +737,9 @@ export const createOidcProviderService = (
       requestId: string;
       pollSecret: string;
     }): AuthorizationQrTransactionStatus {
-      cleanupAuthorizationQrTransactions();
-
       const transaction = authorizationQrTransactions.get(input.requestId);
       if (!transaction || transaction.pollSecretHash !== sha256Hex(input.pollSecret)) {
+        cleanupAuthorizationQrTransactions();
         return { status: "not_found" };
       }
 
@@ -782,10 +781,9 @@ export const createOidcProviderService = (
         }
       | { success: false; status: number; error: string }
     > {
-      cleanupAuthorizationQrTransactions();
-
       const transaction = authorizationQrTransactions.get(input.requestId);
       if (!transaction) {
+        cleanupAuthorizationQrTransactions();
         return { success: false, status: 404, error: "authorization_request_not_found" };
       }
 
@@ -838,10 +836,9 @@ export const createOidcProviderService = (
       requestId: string;
       secret: string;
     }): { success: true } | { success: false; status: number; error: string } {
-      cleanupAuthorizationQrTransactions();
-
       const transaction = authorizationQrTransactions.get(input.requestId);
       if (!transaction) {
+        cleanupAuthorizationQrTransactions();
         return { success: false, status: 404, error: "authorization_request_not_found" };
       }
 
@@ -878,10 +875,9 @@ export const createOidcProviderService = (
       authSessionId?: string | null;
       approvedClaims?: Record<string, unknown> | null;
     }): Promise<{ success: true } | { success: false; status: number; error: string }> {
-      cleanupAuthorizationQrTransactions();
-
       const transaction = authorizationQrTransactions.get(input.requestId);
       if (!transaction) {
+        cleanupAuthorizationQrTransactions();
         return { success: false, status: 404, error: "authorization_request_not_found" };
       }
 
