@@ -245,6 +245,7 @@ describe("idp authorize QR approval routes", () => {
 
   it("allows the CivicOS app to approve a pending authorize QR with a bearer session", async () => {
     let approvedInput: Record<string, unknown> | null = null;
+    const auditEvents: Array<Record<string, unknown>> = [];
     const localRoutes = createIdpRoutes({
       oidcDiscoveryServiceLike: service,
       oidcProviderServiceLike: {
@@ -317,6 +318,12 @@ describe("idp authorize QR approval routes", () => {
             user_id: "user-1",
           }) as any,
       },
+      oidcAuditEventRepositoryLike: {
+        insert: async (event: Record<string, unknown>) => {
+          auditEvents.push(event);
+          return null;
+        },
+      },
     });
     const request = new Request("https://example.com/idp/authorize/approve", {
       method: "POST",
@@ -355,6 +362,13 @@ describe("idp authorize QR approval routes", () => {
         passport_verified: false,
       },
     });
+    expect(auditEvents).toContainEqual(
+      expect.objectContaining({
+        user_id: "user-1",
+        auth_session_id: "session-1",
+        event_type: "oidc_authorize_approve_succeeded",
+      }),
+    );
   });
 
   it("lets the CivicOS app preview a pending authorize QR before approval", async () => {
@@ -617,5 +631,40 @@ describe("idp UserInfo and revocation routes", () => {
     expect(seen.form?.get("token")).toBe("token-to-revoke");
     expect(seen.form?.get("token_type_hint")).toBe("refresh_token");
     expect(seen.authorizationHeader).toBe("Basic abc123");
+  });
+
+  it("rate limits excessive token endpoint attempts", async () => {
+    const localRoutes = createRoutes();
+    const route = findLocalRoute(localRoutes, "POST", "/idp/token");
+    let lastResponse: Response | null = null;
+
+    for (let attempt = 0; attempt < 41; attempt += 1) {
+      const request = new Request("https://example.com/idp/token", {
+        method: "POST",
+        headers: {
+          "content-type": "application/x-www-form-urlencoded",
+          "x-forwarded-for": "203.0.113.41",
+        },
+        body: new URLSearchParams({
+          grant_type: "authorization_code",
+          client_id: "rate-limit-client",
+          code: `code-${attempt}`,
+          redirect_uri: "https://example.com/callback",
+          code_verifier: "verifier",
+        }),
+      });
+
+      lastResponse = await route.handler({
+        request,
+        url: new URL(request.url),
+        params: {},
+      });
+    }
+
+    expect(lastResponse?.status).toBe(429);
+    expect(lastResponse?.headers.get("retry-after")).toBeTruthy();
+    expect(await lastResponse?.json()).toMatchObject({
+      error: "rate_limited",
+    });
   });
 });

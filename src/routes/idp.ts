@@ -1,9 +1,13 @@
+import { createHash } from "node:crypto";
 import { createRequire } from "node:module";
 
 import { json } from "../middleware/json";
 import { hashOpaqueBearerToken } from "../auth/tokens";
 import defaultRequireViewer from "../auth/requireViewer";
 import defaultAuthSessionRepository from "../repositories/authSessionRepository";
+import defaultOidcAuditEventRepository, {
+  type NewOidcAuditEventRow,
+} from "../repositories/oidcAuditEventRepository";
 import defaultOidcDiscoveryService from "../services/oidcDiscoveryService";
 import defaultOidcProviderService from "../services/oidcProviderService";
 import type { RouteDefinition } from "../types/http";
@@ -47,6 +51,10 @@ type OidcProviderServiceLike = Pick<
 export type IdpRouteDependencies = {
   oidcDiscoveryServiceLike?: OidcDiscoveryServiceLike;
   oidcProviderServiceLike?: OidcProviderServiceLike;
+  oidcAuditEventRepositoryLike?: Pick<
+    typeof defaultOidcAuditEventRepository,
+    "insert"
+  > | null;
   requireViewerFn?: typeof defaultRequireViewer;
   authSessionRepositoryLike?: Pick<
     typeof defaultAuthSessionRepository,
@@ -58,6 +66,107 @@ const NO_STORE_HEADERS = {
   "cache-control": "no-store",
   pragma: "no-cache",
 };
+
+const OIDC_RATE_LIMITS = {
+  authorize: { limit: 80, windowMs: 60_000 },
+  authorizeApprove: { limit: 30, windowMs: 60_000 },
+  token: { limit: 40, windowMs: 60_000 },
+} as const;
+
+type OidcRateLimitName = keyof typeof OIDC_RATE_LIMITS;
+
+type RateLimitBucket = {
+  count: number;
+  resetAtMs: number;
+};
+
+const rateLimitBuckets = new Map<string, RateLimitBucket>();
+let lastRateLimitPruneMs = 0;
+
+const hashAuditValue = (value: string | null): string | null => {
+  const normalized = value?.trim();
+  if (!normalized) {
+    return null;
+  }
+
+  return createHash("sha256")
+    .update(`civicos:oidc-audit:v1:${normalized}`, "utf8")
+    .digest("hex");
+};
+
+const getClientAddress = (request: Request): string =>
+  request.headers.get("cf-connecting-ip")?.split(",")[0]?.trim() ||
+  request.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ||
+  "unknown";
+
+const getAuditHashes = (request: Request) => ({
+  ip_hash: hashAuditValue(getClientAddress(request)),
+  user_agent_hash: hashAuditValue(request.headers.get("user-agent")),
+});
+
+const consumeRateLimit = (input: {
+  request: Request;
+  name: OidcRateLimitName;
+  subject?: string | null;
+}):
+  | { allowed: true }
+  | {
+      allowed: false;
+      retryAfterSeconds: number;
+      limit: number;
+      resetAtMs: number;
+    } => {
+  const policy = OIDC_RATE_LIMITS[input.name];
+  const subject = input.subject?.trim() || "unknown";
+  const key = `${input.name}:${getClientAddress(input.request)}:${subject}`;
+  const nowMs = Date.now();
+
+  if (nowMs - lastRateLimitPruneMs > 60_000) {
+    lastRateLimitPruneMs = nowMs;
+    for (const [bucketKey, bucket] of rateLimitBuckets.entries()) {
+      if (bucket.resetAtMs <= nowMs) {
+        rateLimitBuckets.delete(bucketKey);
+      }
+    }
+  }
+
+  const existing = rateLimitBuckets.get(key);
+
+  if (!existing || existing.resetAtMs <= nowMs) {
+    rateLimitBuckets.set(key, {
+      count: 1,
+      resetAtMs: nowMs + policy.windowMs,
+    });
+    return { allowed: true };
+  }
+
+  if (existing.count >= policy.limit) {
+    return {
+      allowed: false,
+      retryAfterSeconds: Math.max(1, Math.ceil((existing.resetAtMs - nowMs) / 1000)),
+      limit: policy.limit,
+      resetAtMs: existing.resetAtMs,
+    };
+  }
+
+  existing.count += 1;
+  return { allowed: true };
+};
+
+const rateLimitResponse = (decision: Exclude<ReturnType<typeof consumeRateLimit>, { allowed: true }>) =>
+  json(
+    {
+      error: "rate_limited",
+      error_description: "Too many requests. Try again later.",
+    },
+    429,
+    {
+      ...NO_STORE_HEADERS,
+      "retry-after": String(decision.retryAfterSeconds),
+      "x-ratelimit-limit": String(decision.limit),
+      "x-ratelimit-reset": new Date(decision.resetAtMs).toISOString(),
+    },
+  );
 
 const redirect = (location: string, status = 302): Response =>
   new Response(null, {
@@ -269,6 +378,37 @@ export const createIdpRoutes = (
   const requireViewer = dependencies.requireViewerFn ?? defaultRequireViewer;
   const authSessionRepository =
     dependencies.authSessionRepositoryLike ?? defaultAuthSessionRepository;
+  const oidcAuditEventRepository =
+    dependencies.oidcAuditEventRepositoryLike === undefined
+      ? defaultOidcAuditEventRepository
+      : dependencies.oidcAuditEventRepositoryLike;
+
+  const writeAuditEvent = async (
+    request: Request,
+    input: Omit<
+      NewOidcAuditEventRow,
+      "ip_hash" | "user_agent_hash" | "occurred_at"
+    >,
+  ): Promise<void> => {
+    if (!oidcAuditEventRepository) {
+      return;
+    }
+
+    try {
+      await oidcAuditEventRepository.insert({
+        ...input,
+        ...getAuditHashes(request),
+      });
+    } catch (error) {
+      // Audit is required for security visibility, but it must not make the IdP
+      // unavailable. The request outcome remains authoritative; failed audit
+      // persistence is surfaced to server logs for operational follow-up.
+      console.warn("[idp] oidc audit insert failed", {
+        eventType: input.event_type,
+        message: error instanceof Error ? error.message : String(error),
+      });
+    }
+  };
 
   const openIdConfigurationRoute: RouteDefinition = {
     method: "GET",
@@ -292,11 +432,37 @@ export const createIdpRoutes = (
     method: "GET",
     path: "/idp/authorize",
     handler: async ({ request, url }) => {
+      const requestedClientId = url.searchParams.get("client_id")?.trim() || null;
+      const authorizeLimit = consumeRateLimit({
+        request,
+        name: "authorize",
+        subject: requestedClientId,
+      });
+      if (!authorizeLimit.allowed) {
+        await writeAuditEvent(request, {
+          event_type: "oidc_authorize_rate_limited",
+          metadata: {
+            clientId: requestedClientId,
+            path: "/idp/authorize",
+          },
+        });
+        return rateLimitResponse(authorizeLimit);
+      }
+
       const validation = await oidcProviderService.validateAuthorizationRequest(
         url.searchParams,
       );
 
       if (!validation.success) {
+        await writeAuditEvent(request, {
+          event_type: "oidc_authorize_failed",
+          metadata: {
+            clientId: requestedClientId,
+            error: validation.error,
+            hasRedirectUri: Boolean(validation.redirectUri),
+          },
+        });
+
         if (validation.redirectUri) {
           return redirect(
             appendAuthorizeError({
@@ -340,6 +506,16 @@ export const createIdpRoutes = (
         statusUrl.searchParams.set("requestId", qrTransaction.requestId);
         statusUrl.searchParams.set("pollSecret", qrTransaction.pollSecret);
 
+        await writeAuditEvent(request, {
+          client_id: validation.request.client.id,
+          event_type: "oidc_authorize_qr_created",
+          metadata: {
+            clientId: validation.request.client.client_id,
+            requestId: qrTransaction.requestId,
+            scopes: validation.request.scopes,
+          },
+        });
+
         return renderAuthorizeQrPage({
           clientName: validation.request.client.client_name,
           scopes: validation.request.scopes,
@@ -361,6 +537,18 @@ export const createIdpRoutes = (
         viewer: viewerResult.viewer,
         authSessionId:
           authSession?.user_id === viewerResult.viewer.userId ? authSession.id : null,
+      });
+
+      await writeAuditEvent(request, {
+        user_id: viewerResult.viewer.userId,
+        client_id: validation.request.client.id,
+        auth_session_id:
+          authSession?.user_id === viewerResult.viewer.userId ? authSession.id : null,
+        event_type: "oidc_authorize_direct_approved",
+        metadata: {
+          clientId: validation.request.client.client_id,
+          scopes: validation.request.scopes,
+        },
       });
 
       return redirect(result.redirectTo);
@@ -406,8 +594,40 @@ export const createIdpRoutes = (
     method: "POST",
     path: "/idp/authorize/approve",
     handler: async ({ request }) => {
+      const body = await parseJsonBody(request);
+      const requestId = toNonEmptyString(body?.requestId);
+      const secret = toNonEmptyString(body?.secret);
+      const approvedClaims =
+        body?.approvedClaims &&
+        typeof body.approvedClaims === "object" &&
+        !Array.isArray(body.approvedClaims)
+          ? (body.approvedClaims as Record<string, unknown>)
+          : null;
+
+      const approveLimit = consumeRateLimit({
+        request,
+        name: "authorizeApprove",
+        subject: requestId,
+      });
+      if (!approveLimit.allowed) {
+        await writeAuditEvent(request, {
+          event_type: "oidc_authorize_approve_rate_limited",
+          metadata: {
+            requestId,
+            path: "/idp/authorize/approve",
+          },
+        });
+        return rateLimitResponse(approveLimit);
+      }
+
       const viewerResult = await requireViewer(request);
       if (!viewerResult.ok) {
+        await writeAuditEvent(request, {
+          event_type: "oidc_authorize_approve_unauthorized",
+          metadata: {
+            requestId,
+          },
+        });
         return json(
           {
             ok: false,
@@ -419,17 +639,16 @@ export const createIdpRoutes = (
         );
       }
 
-      const body = await parseJsonBody(request);
-      const requestId = toNonEmptyString(body?.requestId);
-      const secret = toNonEmptyString(body?.secret);
-      const approvedClaims =
-        body?.approvedClaims &&
-        typeof body.approvedClaims === "object" &&
-        !Array.isArray(body.approvedClaims)
-          ? (body.approvedClaims as Record<string, unknown>)
-          : null;
-
       if (!requestId || !secret) {
+        await writeAuditEvent(request, {
+          user_id: viewerResult.viewer.userId,
+          event_type: "oidc_authorize_approve_failed",
+          metadata: {
+            error: "invalid_request",
+            hasRequestId: Boolean(requestId),
+            hasSecret: Boolean(secret),
+          },
+        });
         return json(
           {
             ok: false,
@@ -458,6 +677,17 @@ export const createIdpRoutes = (
       });
 
       if (!result.success) {
+        await writeAuditEvent(request, {
+          user_id: viewerResult.viewer.userId,
+          auth_session_id:
+            authSession?.user_id === viewerResult.viewer.userId ? authSession.id : null,
+          event_type: "oidc_authorize_approve_failed",
+          metadata: {
+            requestId,
+            error: result.error,
+            status: result.status,
+          },
+        });
         return json(
           {
             ok: false,
@@ -467,6 +697,19 @@ export const createIdpRoutes = (
           NO_STORE_HEADERS,
         );
       }
+
+      await writeAuditEvent(request, {
+        user_id: viewerResult.viewer.userId,
+        auth_session_id:
+          authSession?.user_id === viewerResult.viewer.userId ? authSession.id : null,
+        event_type: "oidc_authorize_approve_succeeded",
+        metadata: {
+          requestId,
+          approvedClaimKeys: Object.entries(approvedClaims ?? {})
+            .filter(([, value]) => value === true)
+            .map(([key]) => key),
+        },
+      });
 
       return json({ ok: true }, 200, NO_STORE_HEADERS);
     },
@@ -585,6 +828,13 @@ export const createIdpRoutes = (
     handler: async ({ request }) => {
       const form = await parseFormBody(request);
       if (!form) {
+        await writeAuditEvent(request, {
+          event_type: "oidc_token_failed",
+          metadata: {
+            error: "invalid_request",
+            reason: "body_not_form_encoded",
+          },
+        });
         return json(
           {
             error: "invalid_request",
@@ -595,12 +845,38 @@ export const createIdpRoutes = (
         );
       }
 
+      const tokenClientId = form.get("client_id")?.trim() || "basic-auth";
+      const tokenLimit = consumeRateLimit({
+        request,
+        name: "token",
+        subject: tokenClientId,
+      });
+      if (!tokenLimit.allowed) {
+        await writeAuditEvent(request, {
+          event_type: "oidc_token_rate_limited",
+          metadata: {
+            clientId: tokenClientId,
+            grantType: form.get("grant_type") || null,
+          },
+        });
+        return rateLimitResponse(tokenLimit);
+      }
+
       const result = await oidcProviderService.exchangeAuthorizationCode({
         form,
         authorizationHeader: request.headers.get("authorization"),
       });
 
       if (!result.success) {
+        await writeAuditEvent(request, {
+          event_type: "oidc_token_failed",
+          metadata: {
+            clientId: tokenClientId,
+            grantType: form.get("grant_type") || null,
+            error: result.error,
+            status: result.status,
+          },
+        });
         return json(
           {
             error: result.error,
@@ -615,6 +891,21 @@ export const createIdpRoutes = (
           },
         );
       }
+
+      await writeAuditEvent(request, {
+        user_id: result.audit.userId,
+        client_id: result.audit.clientDbId,
+        auth_session_id: result.audit.authSessionId,
+        authorization_request_id: result.audit.authorizationRequestId,
+        grant_id: result.audit.grantId,
+        event_type: "oidc_token_succeeded",
+        metadata: {
+          clientId: result.audit.clientId,
+          grantType: form.get("grant_type") || null,
+          scopes: result.audit.scopes,
+          issuedRefreshToken: result.audit.issuedRefreshToken,
+        },
+      });
 
       return json(result.body, 200, NO_STORE_HEADERS);
     },
@@ -682,6 +973,13 @@ export const createIdpRoutes = (
     handler: async ({ request }) => {
       const form = await parseFormBody(request);
       if (!form) {
+        await writeAuditEvent(request, {
+          event_type: "oidc_revoke_failed",
+          metadata: {
+            error: "invalid_request",
+            reason: "body_not_form_encoded",
+          },
+        });
         return json(
           {
             error: "invalid_request",
@@ -698,6 +996,15 @@ export const createIdpRoutes = (
       });
 
       if (!result.success) {
+        await writeAuditEvent(request, {
+          event_type: "oidc_revoke_failed",
+          metadata: {
+            clientId: form.get("client_id")?.trim() || "basic-auth",
+            tokenTypeHint: form.get("token_type_hint")?.trim() || null,
+            error: result.error,
+            status: result.status,
+          },
+        });
         return json(
           {
             error: result.error,
@@ -712,6 +1019,14 @@ export const createIdpRoutes = (
           },
         );
       }
+
+      await writeAuditEvent(request, {
+        event_type: "oidc_revoke_succeeded",
+        metadata: {
+          clientId: form.get("client_id")?.trim() || "basic-auth",
+          tokenTypeHint: form.get("token_type_hint")?.trim() || null,
+        },
+      });
 
       return json({ ok: true }, 200, NO_STORE_HEADERS);
     },

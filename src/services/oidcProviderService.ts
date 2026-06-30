@@ -121,6 +121,16 @@ export type TokenExchangeSuccess = {
     id_token: string;
     refresh_token?: string;
   };
+  audit: {
+    clientDbId: string;
+    clientId: string;
+    userId: string;
+    authSessionId: string | null;
+    authorizationRequestId: string;
+    grantId: string;
+    scopes: string[];
+    issuedRefreshToken: boolean;
+  };
 };
 
 export type TokenExchangeFailure = {
@@ -1111,6 +1121,7 @@ export const createOidcProviderService = (
         expiresAt: new Date(expiresAtSeconds * 1000).toISOString(),
       });
 
+      let issuedRefreshToken = false;
       if (authorizationCode.scopes.includes("offline_access")) {
         const refreshToken = createRandomToken(
           randomBytesForService,
@@ -1129,11 +1140,22 @@ export const createOidcProviderService = (
           ).toISOString(),
         });
         tokenResponse.refresh_token = refreshToken;
+        issuedRefreshToken = true;
       }
 
       return {
         success: true,
         body: tokenResponse,
+        audit: {
+          clientDbId: client.id,
+          clientId: client.client_id,
+          userId: user.id,
+          authSessionId: authorizationCode.auth_session_id,
+          authorizationRequestId: authorizationCode.authorization_request_id,
+          grantId: grant.id,
+          scopes: authorizationCode.scopes,
+          issuedRefreshToken,
+        },
       };
     },
 
