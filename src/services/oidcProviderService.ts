@@ -169,6 +169,7 @@ export type TokenRevocationResult =
 type AuthorizationQrTransactionStatus =
   | { status: "pending"; expiresAt: string }
   | { status: "approved"; redirectTo: string; expiresAt: string }
+  | { status: "denied"; redirectTo: string; expiresAt: string }
   | { status: "expired" }
   | { status: "not_found" };
 
@@ -179,9 +180,42 @@ type AuthorizationQrTransaction = {
   request: ValidatedAuthorizationRequest;
   createdAtMs: number;
   expiresAtMs: number;
-  status: "pending" | "approved";
+  status: "pending" | "approved" | "denied";
   redirectTo?: string;
 };
+
+type ShareableClaimKey =
+  | "nickname"
+  | "profile_completed"
+  | "passport_verified"
+  | "face_verified";
+
+const SHAREABLE_CLAIMS: Array<{
+  key: ShareableClaimKey;
+  label: string;
+  description: string;
+}> = [
+  {
+    key: "nickname",
+    label: "Public nickname",
+    description: "Share your public CivicOS nickname.",
+  },
+  {
+    key: "profile_completed",
+    label: "Profile completion proof",
+    description: "Share whether your CivicOS profile is complete.",
+  },
+  {
+    key: "passport_verified",
+    label: "Passport verification proof",
+    description: "Share whether your passport verification is complete.",
+  },
+  {
+    key: "face_verified",
+    label: "Face verification proof",
+    description: "Share whether your face verification is complete.",
+  },
+];
 
 const toBase64Url = (value: Buffer | string): string =>
   Buffer.isBuffer(value)
@@ -327,16 +361,63 @@ const firstPartyClaimsForUser = (
   const faceVerified = Boolean(profile?.face_verified_at);
   const profileCompleted =
     user.onboarding_status === "completed" || (passportVerified && faceVerified);
-  const publicName =
-    user.public_nickname || user.display_name || user.username || user.id;
+  const publicName = user.public_nickname || user.display_name || user.username || null;
 
   return {
-    nickname: publicName,
-    preferred_username: publicName,
+    ...(publicName
+      ? {
+          nickname: publicName,
+          preferred_username: publicName,
+        }
+      : {}),
     profile_completed: profileCompleted,
     passport_verified: passportVerified,
     face_verified: faceVerified,
   };
+};
+
+const selectApprovedClaims = (
+  availableClaims: Record<string, unknown>,
+  approvedClaims?: Record<string, unknown> | null,
+): Record<string, unknown> => {
+  if (!approvedClaims) {
+    return availableClaims;
+  }
+
+  const selected: Record<string, unknown> = {};
+  for (const claim of SHAREABLE_CLAIMS) {
+    if (
+      approvedClaims[claim.key] === true &&
+      availableClaims[claim.key] !== undefined &&
+      availableClaims[claim.key] !== null
+    ) {
+      selected[claim.key] = availableClaims[claim.key];
+    }
+  }
+
+  // Keep preferred_username aligned with nickname only when nickname is shared.
+  if (selected.nickname && availableClaims.preferred_username) {
+    selected.preferred_username = availableClaims.preferred_username;
+  }
+
+  return selected;
+};
+
+const appendAuthorizeError = (input: {
+  redirectUri: string;
+  error: string;
+  errorDescription?: string;
+  state?: string | null;
+}): string => {
+  const redirectUrl = new URL(input.redirectUri);
+  redirectUrl.searchParams.set("error", input.error);
+  if (input.errorDescription) {
+    redirectUrl.searchParams.set("error_description", input.errorDescription);
+  }
+  if (input.state) {
+    redirectUrl.searchParams.set("state", input.state);
+  }
+  return redirectUrl.toString();
 };
 
 export const createOidcProviderService = (
@@ -401,6 +482,7 @@ export const createOidcProviderService = (
     request: ValidatedAuthorizationRequest;
     viewer: ViewerContext;
     authSessionId?: string | null;
+    approvedClaims?: Record<string, unknown> | null;
   }): Promise<{ redirectTo: string }> => {
     const effectiveNow = now();
     const expiresAt = new Date(
@@ -411,10 +493,11 @@ export const createOidcProviderService = (
       input.viewer.userId,
       input.request.client,
     );
-    const claims = firstPartyClaimsForUser(
+    const availableClaims = firstPartyClaimsForUser(
       input.viewer.user,
       await identityProfileRepository.getByUserId(input.viewer.userId),
     );
+    const claims = selectApprovedClaims(availableClaims, input.approvedClaims);
     await oidcProviderRepository.upsertGrant({
       userId: input.viewer.userId,
       clientDbId: input.request.client.id,
@@ -584,6 +667,7 @@ export const createOidcProviderService = (
       request: ValidatedAuthorizationRequest;
       viewer: ViewerContext;
       authSessionId?: string | null;
+      approvedClaims?: Record<string, unknown> | null;
     }): Promise<{ redirectTo: string }> {
       return approveValidatedAuthorizationRequest(input);
     },
@@ -663,10 +747,118 @@ export const createOidcProviderService = (
         };
       }
 
+      if (transaction.status === "denied" && transaction.redirectTo) {
+        return {
+          status: "denied",
+          redirectTo: transaction.redirectTo,
+          expiresAt: new Date(transaction.expiresAtMs).toISOString(),
+        };
+      }
+
       return {
         status: "pending",
         expiresAt: new Date(transaction.expiresAtMs).toISOString(),
       };
+    },
+
+    async previewAuthorizationQrTransaction(input: {
+      requestId: string;
+      secret: string;
+      viewer: ViewerContext;
+    }): Promise<
+      | {
+          success: true;
+          body: Record<string, unknown>;
+        }
+      | { success: false; status: number; error: string }
+    > {
+      cleanupAuthorizationQrTransactions();
+
+      const transaction = authorizationQrTransactions.get(input.requestId);
+      if (!transaction) {
+        return { success: false, status: 404, error: "authorization_request_not_found" };
+      }
+
+      if (transaction.status !== "pending") {
+        return { success: false, status: 409, error: "authorization_request_already_used" };
+      }
+
+      if (transaction.expiresAtMs <= now().getTime()) {
+        authorizationQrTransactions.delete(input.requestId);
+        return { success: false, status: 410, error: "authorization_request_expired" };
+      }
+
+      if (transaction.secretHash !== sha256Hex(input.secret)) {
+        return { success: false, status: 403, error: "authorization_request_secret_invalid" };
+      }
+
+      const availableClaims = firstPartyClaimsForUser(
+        input.viewer.user,
+        await identityProfileRepository.getByUserId(input.viewer.userId),
+      );
+      const claimOptions = SHAREABLE_CLAIMS.map((claim) => ({
+        key: claim.key,
+        label: claim.label,
+        description: claim.description,
+        value: availableClaims[claim.key],
+        defaultSelected: transaction.request.scopes.includes("profile"),
+      }));
+
+      return {
+        success: true,
+        body: {
+          requestId: transaction.id,
+          expiresAt: new Date(transaction.expiresAtMs).toISOString(),
+          client: {
+            clientId: transaction.request.client.client_id,
+            clientName: transaction.request.client.client_name,
+            sectorIdentifier: transaction.request.client.sector_identifier,
+            clientUri: transaction.request.client.client_uri,
+            logoUri: transaction.request.client.logo_uri,
+            tosUri: transaction.request.client.tos_uri,
+            policyUri: transaction.request.client.policy_uri,
+          },
+          scopes: transaction.request.scopes,
+          claimOptions,
+        },
+      };
+    },
+
+    denyAuthorizationQrTransaction(input: {
+      requestId: string;
+      secret: string;
+    }): { success: true } | { success: false; status: number; error: string } {
+      cleanupAuthorizationQrTransactions();
+
+      const transaction = authorizationQrTransactions.get(input.requestId);
+      if (!transaction) {
+        return { success: false, status: 404, error: "authorization_request_not_found" };
+      }
+
+      if (transaction.status !== "pending") {
+        return { success: false, status: 409, error: "authorization_request_already_used" };
+      }
+
+      if (transaction.expiresAtMs <= now().getTime()) {
+        authorizationQrTransactions.delete(input.requestId);
+        return { success: false, status: 410, error: "authorization_request_expired" };
+      }
+
+      if (transaction.secretHash !== sha256Hex(input.secret)) {
+        return { success: false, status: 403, error: "authorization_request_secret_invalid" };
+      }
+
+      transaction.status = "denied";
+      transaction.redirectTo = appendAuthorizeError({
+        redirectUri: transaction.request.redirectUri,
+        error: "access_denied",
+        errorDescription: "The user denied the authorization request.",
+        state: transaction.request.state,
+      });
+      transaction.expiresAtMs = now().getTime() + OIDC_AUTHORIZE_QR_APPROVED_RESULT_TTL_MS;
+      authorizationQrTransactions.set(transaction.id, transaction);
+
+      return { success: true };
     },
 
     async approveAuthorizationQrTransaction(input: {
@@ -674,6 +866,7 @@ export const createOidcProviderService = (
       secret: string;
       viewer: ViewerContext;
       authSessionId?: string | null;
+      approvedClaims?: Record<string, unknown> | null;
     }): Promise<{ success: true } | { success: false; status: number; error: string }> {
       cleanupAuthorizationQrTransactions();
 
@@ -699,6 +892,7 @@ export const createOidcProviderService = (
         request: transaction.request,
         viewer: input.viewer,
         authSessionId: input.authSessionId ?? null,
+        approvedClaims: input.approvedClaims ?? null,
       });
 
       transaction.status = "approved";
@@ -867,6 +1061,7 @@ export const createOidcProviderService = (
           scopes: authorizationCode.scopes,
           claims: userClaims,
         }));
+      const tokenClaims = grant.claims || userClaims;
       const issuedAtSeconds = Math.floor(now().getTime() / 1000);
       const expiresAtSeconds = issuedAtSeconds + client.access_token_ttl_seconds;
       const accessToken = createOpaqueBearerToken();
@@ -886,7 +1081,7 @@ export const createOidcProviderService = (
             new Date(authorizationCode.created_at).getTime() / 1000,
           ),
           ...(authorizationCode.nonce ? { nonce: authorizationCode.nonce } : {}),
-          ...userClaims,
+          ...tokenClaims,
           amr: ["civicos_app"],
           acr: profile?.face_verified_at
             ? "urn:civicos:verified:passport-face"
@@ -911,7 +1106,7 @@ export const createOidcProviderService = (
         userId: user.id,
         pairwiseSubjectId: pairwiseSubject.id,
         scopes: authorizationCode.scopes,
-        claims: userClaims,
+        claims: tokenClaims,
         authGeneration: user.auth_generation,
         expiresAt: new Date(expiresAtSeconds * 1000).toISOString(),
       });

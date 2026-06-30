@@ -1,6 +1,6 @@
 import { describe, expect, it } from "bun:test";
 
-import { createIdpRoutes } from "./idp";
+import { createIdpRoutes, type IdpRouteDependencies } from "./idp";
 import type { RouteDefinition } from "../types/http";
 
 const service = {
@@ -140,7 +140,11 @@ describe("idp authorize QR approval routes", () => {
     codeChallengeMethod: "S256",
   };
 
-  const createRoutes = (overrides: Record<string, unknown> = {}) =>
+  const createRoutes = (
+    overrides: Record<string, unknown> = {},
+    requireViewerFn: IdpRouteDependencies["requireViewerFn"] = async () =>
+      ({ ok: false }) as any,
+  ) =>
     createIdpRoutes({
       oidcDiscoveryServiceLike: service,
       oidcProviderServiceLike: {
@@ -171,7 +175,22 @@ describe("idp authorize QR approval routes", () => {
           status: "pending",
           expiresAt: "2026-06-30T12:00:00.000Z",
         }),
+        previewAuthorizationQrTransaction: async () => ({
+          success: true,
+          body: {
+            requestId: "request-1",
+            client: {
+              clientId: "codeiland-web",
+              clientName: "Code iLand",
+              sectorIdentifier: "codeiland.com",
+            },
+            scopes: ["openid", "profile"],
+            claimOptions: [],
+            expiresAt: "2026-06-30T12:00:00.000Z",
+          },
+        }),
         approveAuthorizationQrTransaction: async () => ({ success: true }),
+        denyAuthorizationQrTransaction: () => ({ success: true }),
         exchangeAuthorizationCode: async () => ({
           success: false,
           status: 400,
@@ -180,7 +199,7 @@ describe("idp authorize QR approval routes", () => {
         }),
         ...overrides,
       } as any,
-      requireViewerFn: async () => ({ ok: false }) as any,
+      requireViewerFn,
       authSessionRepositoryLike: {
         getByAccessTokenHash: async () => null,
       },
@@ -246,10 +265,32 @@ describe("idp authorize QR approval routes", () => {
           status: "pending",
           expiresAt: "2026-06-30T12:00:00.000Z",
         }),
+        previewAuthorizationQrTransaction: async () => ({
+          success: true,
+          body: {
+            requestId: "request-1",
+            client: {
+              clientId: "codeiland-web",
+              clientName: "Code iLand",
+              sectorIdentifier: "codeiland.com",
+            },
+            scopes: ["openid", "profile"],
+            claimOptions: [
+              {
+                key: "nickname",
+                label: "Public nickname",
+                value: "public-name",
+                defaultSelected: true,
+              },
+            ],
+            expiresAt: "2026-06-30T12:00:00.000Z",
+          },
+        }),
         approveAuthorizationQrTransaction: async (input: Record<string, unknown>) => {
           approvedInput = input;
           return { success: true };
         },
+        denyAuthorizationQrTransaction: () => ({ success: true }),
         exchangeAuthorizationCode: async () => ({
           success: false,
           status: 400,
@@ -286,6 +327,10 @@ describe("idp authorize QR approval routes", () => {
       body: JSON.stringify({
         requestId: "request-1",
         secret: "secret-1",
+        approvedClaims: {
+          nickname: true,
+          passport_verified: false,
+        },
       }),
     });
 
@@ -305,6 +350,113 @@ describe("idp authorize QR approval routes", () => {
       requestId: "request-1",
       secret: "secret-1",
       authSessionId: "session-1",
+      approvedClaims: {
+        nickname: true,
+        passport_verified: false,
+      },
+    });
+  });
+
+  it("lets the CivicOS app preview a pending authorize QR before approval", async () => {
+    const localRoutes = createRoutes({}, async () =>
+      ({
+        ok: true,
+        viewer: {
+          userId: "user-1",
+          user: {
+            id: "user-1",
+            auth_generation: 1,
+            account_status: "active",
+          },
+        },
+      }) as any,
+    );
+    const request = new Request("https://example.com/idp/authorize/preview", {
+      method: "POST",
+      headers: {
+        authorization: "Bearer access-token",
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        requestId: "request-1",
+        secret: "secret-1",
+      }),
+    });
+
+    const response = await findLocalRoute(
+      localRoutes,
+      "POST",
+      "/idp/authorize/preview",
+    ).handler({
+      request,
+      url: new URL(request.url),
+      params: {},
+    });
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({
+      ok: true,
+      requestId: "request-1",
+      client: {
+        clientId: "codeiland-web",
+        clientName: "Code iLand",
+        sectorIdentifier: "codeiland.com",
+      },
+      scopes: ["openid", "profile"],
+    });
+  });
+
+  it("lets the CivicOS app deny a pending authorize QR", async () => {
+    const seen: { denyInput: Record<string, unknown> | null } = {
+      denyInput: null,
+    };
+    const localRoutes = createRoutes(
+      {
+        denyAuthorizationQrTransaction: (input: Record<string, unknown>) => {
+          seen.denyInput = input;
+          return { success: true };
+        },
+      },
+      async () =>
+        ({
+          ok: true,
+          viewer: {
+            userId: "user-1",
+            user: {
+              id: "user-1",
+              auth_generation: 1,
+              account_status: "active",
+            },
+          },
+        }) as any,
+    );
+    const request = new Request("https://example.com/idp/authorize/deny", {
+      method: "POST",
+      headers: {
+        authorization: "Bearer access-token",
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        requestId: "request-1",
+        secret: "secret-1",
+      }),
+    });
+
+    const response = await findLocalRoute(
+      localRoutes,
+      "POST",
+      "/idp/authorize/deny",
+    ).handler({
+      request,
+      url: new URL(request.url),
+      params: {},
+    });
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ ok: true });
+    expect(seen.denyInput).toEqual({
+      requestId: "request-1",
+      secret: "secret-1",
     });
   });
 });

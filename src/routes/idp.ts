@@ -36,7 +36,9 @@ type OidcProviderServiceLike = Pick<
   | "approveAuthorizationRequest"
   | "createAuthorizationQrTransaction"
   | "getAuthorizationQrTransactionStatus"
+  | "previewAuthorizationQrTransaction"
   | "approveAuthorizationQrTransaction"
+  | "denyAuthorizationQrTransaction"
   | "exchangeAuthorizationCode"
   | "getUserInfo"
   | "revokeToken"
@@ -219,6 +221,12 @@ const renderAuthorizeQrPage = async (input: {
             window.location.assign(result.redirectTo);
             return;
           }
+          if (result?.status === "denied" && result?.redirectTo) {
+            stopped = true;
+            statusElement.textContent = "Request denied. Returning to the website…";
+            window.location.assign(result.redirectTo);
+            return;
+          }
           statusElement.textContent = "Waiting for CivicOS approval…";
         } catch (error) {
           statusElement.textContent = "Could not check approval yet. Retrying…";
@@ -394,6 +402,12 @@ export const createIdpRoutes = (
       const body = await parseJsonBody(request);
       const requestId = toNonEmptyString(body?.requestId);
       const secret = toNonEmptyString(body?.secret);
+      const approvedClaims =
+        body?.approvedClaims &&
+        typeof body.approvedClaims === "object" &&
+        !Array.isArray(body.approvedClaims)
+          ? (body.approvedClaims as Record<string, unknown>)
+          : null;
 
       if (!requestId || !secret) {
         return json(
@@ -420,6 +434,114 @@ export const createIdpRoutes = (
         viewer: viewerResult.viewer,
         authSessionId:
           authSession?.user_id === viewerResult.viewer.userId ? authSession.id : null,
+        approvedClaims,
+      });
+
+      if (!result.success) {
+        return json(
+          {
+            ok: false,
+            error: result.error,
+          },
+          result.status,
+          NO_STORE_HEADERS,
+        );
+      }
+
+      return json({ ok: true }, 200, NO_STORE_HEADERS);
+    },
+  };
+
+  const authorizePreviewRoute: RouteDefinition = {
+    method: "POST",
+    path: "/idp/authorize/preview",
+    handler: async ({ request }) => {
+      const viewerResult = await requireViewer(request);
+      if (!viewerResult.ok) {
+        return json(
+          {
+            ok: false,
+            error: "unauthorized",
+            message: "Sign in to CivicOS before reviewing this login request.",
+          },
+          401,
+          NO_STORE_HEADERS,
+        );
+      }
+
+      const body = await parseJsonBody(request);
+      const requestId = toNonEmptyString(body?.requestId);
+      const secret = toNonEmptyString(body?.secret);
+
+      if (!requestId || !secret) {
+        return json(
+          {
+            ok: false,
+            error: "invalid_request",
+            message: "requestId and secret are required.",
+          },
+          400,
+          NO_STORE_HEADERS,
+        );
+      }
+
+      const result = await oidcProviderService.previewAuthorizationQrTransaction({
+        requestId,
+        secret,
+        viewer: viewerResult.viewer,
+      });
+
+      if (!result.success) {
+        return json(
+          {
+            ok: false,
+            error: result.error,
+          },
+          result.status,
+          NO_STORE_HEADERS,
+        );
+      }
+
+      return json({ ok: true, ...result.body }, 200, NO_STORE_HEADERS);
+    },
+  };
+
+  const authorizeDenyRoute: RouteDefinition = {
+    method: "POST",
+    path: "/idp/authorize/deny",
+    handler: async ({ request }) => {
+      const viewerResult = await requireViewer(request);
+      if (!viewerResult.ok) {
+        return json(
+          {
+            ok: false,
+            error: "unauthorized",
+            message: "Sign in to CivicOS before denying this login request.",
+          },
+          401,
+          NO_STORE_HEADERS,
+        );
+      }
+
+      const body = await parseJsonBody(request);
+      const requestId = toNonEmptyString(body?.requestId);
+      const secret = toNonEmptyString(body?.secret);
+
+      if (!requestId || !secret) {
+        return json(
+          {
+            ok: false,
+            error: "invalid_request",
+            message: "requestId and secret are required.",
+          },
+          400,
+          NO_STORE_HEADERS,
+        );
+      }
+
+      const result = oidcProviderService.denyAuthorizationQrTransaction({
+        requestId,
+        secret,
       });
 
       if (!result.success) {
@@ -580,7 +702,9 @@ export const createIdpRoutes = (
     jwksRoute,
     authorizeRoute,
     authorizeStatusRoute,
+    authorizePreviewRoute,
     authorizeApproveRoute,
+    authorizeDenyRoute,
     tokenRoute,
     userInfoGetRoute,
     userInfoPostRoute,
