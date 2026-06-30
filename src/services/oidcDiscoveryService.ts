@@ -99,8 +99,6 @@ export const createOidcDiscoveryService = (
         userinfo_endpoint: endpoint(issuer, "/userinfo"),
         jwks_uri: endpoint(issuer, "/jwks"),
         revocation_endpoint: endpoint(issuer, "/revoke"),
-        introspection_endpoint: endpoint(issuer, "/introspect"),
-        end_session_endpoint: endpoint(issuer, "/logout"),
         response_types_supported: ["code"],
         grant_types_supported: ["authorization_code", "refresh_token"],
         subject_types_supported: ["pairwise"],

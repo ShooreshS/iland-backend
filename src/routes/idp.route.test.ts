@@ -11,8 +11,6 @@ const service = {
     userinfo_endpoint: "https://example.com/idp/userinfo",
     jwks_uri: "https://example.com/idp/jwks",
     revocation_endpoint: "https://example.com/idp/revoke",
-    introspection_endpoint: "https://example.com/idp/introspect",
-    end_session_endpoint: "https://example.com/idp/logout",
     response_types_supported: ["code"],
     grant_types_supported: ["authorization_code", "refresh_token"],
     subject_types_supported: ["pairwise"],
@@ -96,6 +94,10 @@ describe("idp public metadata routes", () => {
       "https://example.com/idp/authorize",
     );
     expect(body.jwks_uri).toBe("https://example.com/idp/jwks");
+    expect(body.userinfo_endpoint).toBe("https://example.com/idp/userinfo");
+    expect(body.revocation_endpoint).toBe("https://example.com/idp/revoke");
+    expect(body.introspection_endpoint).toBeUndefined();
+    expect(body.end_session_endpoint).toBeUndefined();
     expect(body.response_types_supported).toEqual(["code"]);
     expect(body.code_challenge_methods_supported).toEqual(["S256"]);
   });
@@ -119,5 +121,349 @@ describe("idp public metadata routes", () => {
         e: "AQAB",
       },
     ]);
+  });
+});
+
+describe("idp authorize QR approval routes", () => {
+  const authorizationRequest = {
+    client: {
+      id: "client-db-id",
+      client_id: "codeiland-web",
+      client_name: "Code iLand",
+    },
+    redirectUri: "https://codeiland-back.example/auth/callback",
+    responseType: "code",
+    scopes: ["openid", "profile"],
+    state: "state-1",
+    nonce: "nonce-1",
+    codeChallenge: "challenge",
+    codeChallengeMethod: "S256",
+  };
+
+  const createRoutes = (overrides: Record<string, unknown> = {}) =>
+    createIdpRoutes({
+      oidcDiscoveryServiceLike: service,
+      oidcProviderServiceLike: {
+        validateAuthorizationRequest: async () => ({
+          success: true,
+          request: authorizationRequest,
+        }),
+        approveAuthorizationRequest: async () => ({
+          redirectTo: "https://codeiland-back.example/auth/callback?code=direct",
+        }),
+        createAuthorizationQrTransaction: () => ({
+          requestId: "request-1",
+          pollSecret: "poll-secret-1",
+          expiresAt: "2026-06-30T12:00:00.000Z",
+          qrPayload: {
+            type: "civicos.oidc.authorize",
+            version: 1,
+            requestId: "request-1",
+            secret: "qr-secret-1",
+            approveUrl: "https://example.com/idp/authorize/approve",
+            audience: "codeiland-web",
+            clientName: "Code iLand",
+            scopes: ["openid", "profile"],
+            expiresAt: "2026-06-30T12:00:00.000Z",
+          },
+        }),
+        getAuthorizationQrTransactionStatus: () => ({
+          status: "pending",
+          expiresAt: "2026-06-30T12:00:00.000Z",
+        }),
+        approveAuthorizationQrTransaction: async () => ({ success: true }),
+        exchangeAuthorizationCode: async () => ({
+          success: false,
+          status: 400,
+          error: "invalid_request",
+          error_description: "not used",
+        }),
+        ...overrides,
+      } as any,
+      requireViewerFn: async () => ({ ok: false }) as any,
+      authSessionRepositoryLike: {
+        getByAccessTokenHash: async () => null,
+      },
+    });
+
+  const findLocalRoute = (
+    localRoutes: RouteDefinition[],
+    method: string,
+    path: string,
+  ): RouteDefinition => {
+    const route = localRoutes.find(
+      (candidate) => candidate.method === method && candidate.path === path,
+    );
+    if (!route) {
+      throw new Error(`Route not found: ${method} ${path}`);
+    }
+    return route;
+  };
+
+  it("renders a hosted QR approval page when the browser has no CivicOS bearer", async () => {
+    const localRoutes = createRoutes();
+    const request = new Request(
+      "https://example.com/idp/authorize?client_id=codeiland-web",
+    );
+
+    const response = await findLocalRoute(
+      localRoutes,
+      "GET",
+      "/idp/authorize",
+    ).handler({
+      request,
+      url: new URL(request.url),
+      params: {},
+    });
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get("content-type")).toContain("text/html");
+    const html = await response.text();
+    expect(html).toContain("Approve with CivicOS");
+    expect(html).toContain("Code iLand");
+    expect(html).toContain("/idp/authorize/status");
+  });
+
+  it("allows the CivicOS app to approve a pending authorize QR with a bearer session", async () => {
+    let approvedInput: Record<string, unknown> | null = null;
+    const localRoutes = createIdpRoutes({
+      oidcDiscoveryServiceLike: service,
+      oidcProviderServiceLike: {
+        validateAuthorizationRequest: async () => ({
+          success: true,
+          request: authorizationRequest,
+        }),
+        approveAuthorizationRequest: async () => ({
+          redirectTo: "https://codeiland-back.example/auth/callback?code=direct",
+        }),
+        createAuthorizationQrTransaction: () => ({
+          requestId: "request-1",
+          pollSecret: "poll-secret-1",
+          expiresAt: "2026-06-30T12:00:00.000Z",
+          qrPayload: {},
+        }),
+        getAuthorizationQrTransactionStatus: () => ({
+          status: "pending",
+          expiresAt: "2026-06-30T12:00:00.000Z",
+        }),
+        approveAuthorizationQrTransaction: async (input: Record<string, unknown>) => {
+          approvedInput = input;
+          return { success: true };
+        },
+        exchangeAuthorizationCode: async () => ({
+          success: false,
+          status: 400,
+          error: "invalid_request",
+          error_description: "not used",
+        }),
+      } as any,
+      requireViewerFn: async () =>
+        ({
+          ok: true,
+          viewer: {
+            userId: "user-1",
+            user: {
+              id: "user-1",
+              auth_generation: 1,
+              account_status: "active",
+            },
+          },
+        }) as any,
+      authSessionRepositoryLike: {
+        getByAccessTokenHash: async () =>
+          ({
+            id: "session-1",
+            user_id: "user-1",
+          }) as any,
+      },
+    });
+    const request = new Request("https://example.com/idp/authorize/approve", {
+      method: "POST",
+      headers: {
+        authorization: "Bearer access-token",
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        requestId: "request-1",
+        secret: "secret-1",
+      }),
+    });
+
+    const response = await findLocalRoute(
+      localRoutes,
+      "POST",
+      "/idp/authorize/approve",
+    ).handler({
+      request,
+      url: new URL(request.url),
+      params: {},
+    });
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ ok: true });
+    expect(approvedInput).toMatchObject({
+      requestId: "request-1",
+      secret: "secret-1",
+      authSessionId: "session-1",
+    });
+  });
+});
+
+describe("idp UserInfo and revocation routes", () => {
+  const createRoutes = (overrides: Record<string, unknown> = {}) =>
+    createIdpRoutes({
+      oidcDiscoveryServiceLike: service,
+      oidcProviderServiceLike: {
+        validateAuthorizationRequest: async () => ({
+          success: false,
+          error: "invalid_request",
+          message: "not used",
+        }),
+        approveAuthorizationRequest: async () => ({
+          redirectTo: "https://example.com/callback?code=unused",
+        }),
+        createAuthorizationQrTransaction: () => ({
+          requestId: "request-1",
+          pollSecret: "poll-secret-1",
+          expiresAt: "2026-06-30T12:00:00.000Z",
+          qrPayload: {},
+        }),
+        getAuthorizationQrTransactionStatus: () => ({
+          status: "pending",
+          expiresAt: "2026-06-30T12:00:00.000Z",
+        }),
+        approveAuthorizationQrTransaction: async () => ({ success: true }),
+        exchangeAuthorizationCode: async () => ({
+          success: false,
+          status: 400,
+          error: "invalid_request",
+          error_description: "not used",
+        }),
+        getUserInfo: async () => ({
+          success: true,
+          body: {
+            sub: "pairwise-subject",
+            passport_verified: true,
+          },
+        }),
+        revokeToken: async () => ({ success: true }),
+        ...overrides,
+      } as any,
+    });
+
+  const findLocalRoute = (
+    localRoutes: RouteDefinition[],
+    method: string,
+    path: string,
+  ): RouteDefinition => {
+    const route = localRoutes.find(
+      (candidate) => candidate.method === method && candidate.path === path,
+    );
+    if (!route) {
+      throw new Error(`Route not found: ${method} ${path}`);
+    }
+    return route;
+  };
+
+  it("serves UserInfo claims for a valid bearer access token", async () => {
+    const seen: { accessToken?: string } = {};
+    const localRoutes = createRoutes({
+      getUserInfo: async (input: { accessToken: string }) => {
+        seen.accessToken = input.accessToken;
+        return {
+          success: true,
+          body: {
+            sub: "pairwise-subject",
+            nickname: "public-name",
+            passport_verified: true,
+          },
+        };
+      },
+    });
+    const request = new Request("https://example.com/idp/userinfo", {
+      headers: {
+        authorization: "Bearer access-token-1",
+      },
+    });
+
+    const response = await findLocalRoute(
+      localRoutes,
+      "GET",
+      "/idp/userinfo",
+    ).handler({
+      request,
+      url: new URL(request.url),
+      params: {},
+    });
+
+    expect(response.status).toBe(200);
+    expect(seen.accessToken).toBe("access-token-1");
+    expect(await response.json()).toEqual({
+      sub: "pairwise-subject",
+      nickname: "public-name",
+      passport_verified: true,
+    });
+  });
+
+  it("rejects UserInfo without a bearer access token", async () => {
+    const localRoutes = createRoutes();
+    const request = new Request("https://example.com/idp/userinfo");
+
+    const response = await findLocalRoute(
+      localRoutes,
+      "GET",
+      "/idp/userinfo",
+    ).handler({
+      request,
+      url: new URL(request.url),
+      params: {},
+    });
+
+    expect(response.status).toBe(401);
+    expect(response.headers.get("www-authenticate")).toContain("invalid_token");
+  });
+
+  it("revokes a token through the revocation endpoint", async () => {
+    const seen: {
+      form?: URLSearchParams;
+      authorizationHeader?: string | null;
+    } = {};
+    const localRoutes = createRoutes({
+      revokeToken: async (input: {
+        form: URLSearchParams;
+        authorizationHeader: string | null;
+      }) => {
+        seen.form = input.form;
+        seen.authorizationHeader = input.authorizationHeader;
+        return { success: true };
+      },
+    });
+    const request = new Request("https://example.com/idp/revoke", {
+      method: "POST",
+      headers: {
+        authorization: "Basic abc123",
+        "content-type": "application/x-www-form-urlencoded",
+      },
+      body: new URLSearchParams({
+        token: "token-to-revoke",
+        token_type_hint: "refresh_token",
+      }),
+    });
+
+    const response = await findLocalRoute(
+      localRoutes,
+      "POST",
+      "/idp/revoke",
+    ).handler({
+      request,
+      url: new URL(request.url),
+      params: {},
+    });
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ ok: true });
+    expect(seen.form?.get("token")).toBe("token-to-revoke");
+    expect(seen.form?.get("token_type_hint")).toBe("refresh_token");
+    expect(seen.authorizationHeader).toBe("Basic abc123");
   });
 });

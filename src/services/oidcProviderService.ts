@@ -27,6 +27,13 @@ const AUTHORIZATION_REQUEST_ID_BYTES = 18;
 const AUTHORIZATION_CODE_BYTES = 32;
 const PAIRWISE_SUBJECT_BYTES = 32;
 const OIDC_REFRESH_TOKEN_BYTES = 32;
+const OIDC_AUTHORIZE_QR_TYPE = "civicos.oidc.authorize";
+const OIDC_AUTHORIZE_QR_VERSION = 1;
+const OIDC_AUTHORIZE_QR_TRANSACTION_ID_BYTES = 18;
+const OIDC_AUTHORIZE_QR_SECRET_BYTES = 32;
+const OIDC_AUTHORIZE_QR_POLL_SECRET_BYTES = 32;
+const OIDC_AUTHORIZE_QR_TTL_MS = 2 * 60 * 1000;
+const OIDC_AUTHORIZE_QR_APPROVED_RESULT_TTL_MS = 60 * 1000;
 
 type OidcProviderRepositoryLike = Pick<
   typeof defaultOidcProviderRepository,
@@ -46,6 +53,13 @@ type OidcProviderRepositoryLike = Pick<
   | "expireAuthorizationCode"
   | "consumeAuthorizationRequest"
   | "insertRefreshTokenFamily"
+  | "insertAccessToken"
+  | "getAccessTokenByHash"
+  | "touchAccessToken"
+  | "expireAccessToken"
+  | "revokeAccessTokenByHash"
+  | "getRefreshTokenFamilyByTokenHash"
+  | "revokeRefreshTokenFamilyById"
 >;
 
 type OidcSigningKeyRepositoryLike = Pick<
@@ -122,6 +136,52 @@ export type TokenExchangeFailure = {
 };
 
 export type TokenExchangeResult = TokenExchangeSuccess | TokenExchangeFailure;
+
+export type UserInfoSuccess = {
+  success: true;
+  body: Record<string, unknown>;
+};
+
+export type UserInfoFailure = {
+  success: false;
+  status: number;
+  error: "invalid_token" | "server_error";
+  error_description: string;
+};
+
+export type UserInfoResult = UserInfoSuccess | UserInfoFailure;
+
+export type TokenRevocationSuccess = {
+  success: true;
+};
+
+export type TokenRevocationFailure = {
+  success: false;
+  status: number;
+  error: "invalid_request" | "invalid_client";
+  error_description: string;
+};
+
+export type TokenRevocationResult =
+  | TokenRevocationSuccess
+  | TokenRevocationFailure;
+
+type AuthorizationQrTransactionStatus =
+  | { status: "pending"; expiresAt: string }
+  | { status: "approved"; redirectTo: string; expiresAt: string }
+  | { status: "expired" }
+  | { status: "not_found" };
+
+type AuthorizationQrTransaction = {
+  id: string;
+  secretHash: string;
+  pollSecretHash: string;
+  request: ValidatedAuthorizationRequest;
+  createdAtMs: number;
+  expiresAtMs: number;
+  status: "pending" | "approved";
+  redirectTo?: string;
+};
 
 const toBase64Url = (value: Buffer | string): string =>
   Buffer.isBuffer(value)
@@ -237,6 +297,28 @@ const extractBasicClientAuth = (
   }
 };
 
+const filterUserInfoClaims = (
+  scopes: string[],
+  claims: Record<string, unknown>,
+): Record<string, unknown> => {
+  if (!scopes.includes("profile")) {
+    return {};
+  }
+
+  const output: Record<string, unknown> = {};
+  for (const key of [
+    "nickname",
+    "profile_completed",
+    "passport_verified",
+    "face_verified",
+  ]) {
+    if (Object.prototype.hasOwnProperty.call(claims, key)) {
+      output[key] = claims[key];
+    }
+  }
+  return output;
+};
+
 const firstPartyClaimsForUser = (
   user: UserRow,
   profile: IdentityProfileRow | null,
@@ -270,6 +352,16 @@ export const createOidcProviderService = (
   const userRepository = dependencies.userRepositoryLike ?? defaultUserRepository;
   const identityProfileRepository =
     dependencies.identityProfileRepositoryLike ?? defaultIdentityProfileRepository;
+  const authorizationQrTransactions = new Map<string, AuthorizationQrTransaction>();
+
+  const cleanupAuthorizationQrTransactions = () => {
+    const effectiveNowMs = now().getTime();
+    for (const [id, transaction] of authorizationQrTransactions.entries()) {
+      if (transaction.expiresAtMs <= effectiveNowMs) {
+        authorizationQrTransactions.delete(id);
+      }
+    }
+  };
 
   const getOrCreatePairwiseSubject = async (
     userId: string,
@@ -303,6 +395,81 @@ export const createOidcProviderService = (
       }
       throw error;
     }
+  };
+
+  const approveValidatedAuthorizationRequest = async (input: {
+    request: ValidatedAuthorizationRequest;
+    viewer: ViewerContext;
+    authSessionId?: string | null;
+  }): Promise<{ redirectTo: string }> => {
+    const effectiveNow = now();
+    const expiresAt = new Date(
+      effectiveNow.getTime() +
+        input.request.client.authorization_code_ttl_seconds * 1000,
+    ).toISOString();
+    const pairwiseSubject = await getOrCreatePairwiseSubject(
+      input.viewer.userId,
+      input.request.client,
+    );
+    const claims = firstPartyClaimsForUser(
+      input.viewer.user,
+      await identityProfileRepository.getByUserId(input.viewer.userId),
+    );
+    await oidcProviderRepository.upsertGrant({
+      userId: input.viewer.userId,
+      clientDbId: input.request.client.id,
+      pairwiseSubjectId: pairwiseSubject.id,
+      scopes: input.request.scopes,
+      claims,
+    });
+
+    const authorizationRequest =
+      await oidcProviderRepository.insertAuthorizationRequest({
+        requestId: createRandomToken(
+          randomBytesForService,
+          AUTHORIZATION_REQUEST_ID_BYTES,
+        ),
+        clientDbId: input.request.client.id,
+        userId: input.viewer.userId,
+        authSessionId: input.authSessionId ?? null,
+        redirectUri: input.request.redirectUri,
+        scopes: input.request.scopes,
+        state: input.request.state,
+        nonce: input.request.nonce,
+        codeChallenge: input.request.codeChallenge,
+        codeChallengeMethod: input.request.codeChallengeMethod,
+        expiresAt,
+      });
+
+    const authorizationCode = createRandomToken(
+      randomBytesForService,
+      AUTHORIZATION_CODE_BYTES,
+    );
+    await oidcProviderRepository.insertAuthorizationCode({
+      codeHash: hashOpaqueBearerToken(authorizationCode),
+      authorizationRequestId: authorizationRequest.id,
+      clientDbId: input.request.client.id,
+      userId: input.viewer.userId,
+      authSessionId: input.authSessionId ?? null,
+      pairwiseSubjectId: pairwiseSubject.id,
+      redirectUri: input.request.redirectUri,
+      scopes: input.request.scopes,
+      nonce: input.request.nonce,
+      codeChallenge: input.request.codeChallenge,
+      codeChallengeMethod: input.request.codeChallengeMethod,
+      authGeneration: input.viewer.user.auth_generation,
+      expiresAt,
+    });
+
+    const redirectUrl = new URL(input.request.redirectUri);
+    redirectUrl.searchParams.set("code", authorizationCode);
+    if (input.request.state) {
+      redirectUrl.searchParams.set("state", input.request.state);
+    }
+
+    return {
+      redirectTo: redirectUrl.toString(),
+    };
   };
 
   return {
@@ -418,74 +585,131 @@ export const createOidcProviderService = (
       viewer: ViewerContext;
       authSessionId?: string | null;
     }): Promise<{ redirectTo: string }> {
-      const effectiveNow = now();
-      const expiresAt = new Date(
-        effectiveNow.getTime() +
-          input.request.client.authorization_code_ttl_seconds * 1000,
-      ).toISOString();
-      const pairwiseSubject = await getOrCreatePairwiseSubject(
-        input.viewer.userId,
-        input.request.client,
-      );
-      const claims = firstPartyClaimsForUser(
-        input.viewer.user,
-        await identityProfileRepository.getByUserId(input.viewer.userId),
-      );
-      await oidcProviderRepository.upsertGrant({
-        userId: input.viewer.userId,
-        clientDbId: input.request.client.id,
-        pairwiseSubjectId: pairwiseSubject.id,
-        scopes: input.request.scopes,
-        claims,
-      });
+      return approveValidatedAuthorizationRequest(input);
+    },
 
-      const authorizationRequest =
-        await oidcProviderRepository.insertAuthorizationRequest({
-          requestId: createRandomToken(
-            randomBytesForService,
-            AUTHORIZATION_REQUEST_ID_BYTES,
-          ),
-          clientDbId: input.request.client.id,
-          userId: input.viewer.userId,
-          authSessionId: input.authSessionId ?? null,
-          redirectUri: input.request.redirectUri,
-          scopes: input.request.scopes,
-          state: input.request.state,
-          nonce: input.request.nonce,
-          codeChallenge: input.request.codeChallenge,
-          codeChallengeMethod: input.request.codeChallengeMethod,
-          expiresAt,
-        });
+    createAuthorizationQrTransaction(request: ValidatedAuthorizationRequest): {
+      requestId: string;
+      pollSecret: string;
+      expiresAt: string;
+      qrPayload: Record<string, unknown>;
+    } {
+      cleanupAuthorizationQrTransactions();
 
-      const authorizationCode = createRandomToken(
+      const requestId = createRandomToken(
         randomBytesForService,
-        AUTHORIZATION_CODE_BYTES,
+        OIDC_AUTHORIZE_QR_TRANSACTION_ID_BYTES,
       );
-      await oidcProviderRepository.insertAuthorizationCode({
-        codeHash: hashOpaqueBearerToken(authorizationCode),
-        authorizationRequestId: authorizationRequest.id,
-        clientDbId: input.request.client.id,
-        userId: input.viewer.userId,
-        authSessionId: input.authSessionId ?? null,
-        pairwiseSubjectId: pairwiseSubject.id,
-        redirectUri: input.request.redirectUri,
-        scopes: input.request.scopes,
-        nonce: input.request.nonce,
-        codeChallenge: input.request.codeChallenge,
-        codeChallengeMethod: input.request.codeChallengeMethod,
-        authGeneration: input.viewer.user.auth_generation,
-        expiresAt,
+      const secret = createRandomToken(
+        randomBytesForService,
+        OIDC_AUTHORIZE_QR_SECRET_BYTES,
+      );
+      const pollSecret = createRandomToken(
+        randomBytesForService,
+        OIDC_AUTHORIZE_QR_POLL_SECRET_BYTES,
+      );
+      const expiresAtMs = now().getTime() + OIDC_AUTHORIZE_QR_TTL_MS;
+      const expiresAt = new Date(expiresAtMs).toISOString();
+
+      authorizationQrTransactions.set(requestId, {
+        id: requestId,
+        secretHash: sha256Hex(secret),
+        pollSecretHash: sha256Hex(pollSecret),
+        request,
+        createdAtMs: now().getTime(),
+        expiresAtMs,
+        status: "pending",
       });
 
-      const redirectUrl = new URL(input.request.redirectUri);
-      redirectUrl.searchParams.set("code", authorizationCode);
-      if (input.request.state) {
-        redirectUrl.searchParams.set("state", input.request.state);
+      return {
+        requestId,
+        pollSecret,
+        expiresAt,
+        qrPayload: {
+          type: OIDC_AUTHORIZE_QR_TYPE,
+          version: OIDC_AUTHORIZE_QR_VERSION,
+          requestId,
+          secret,
+          approveUrl: `${issuer}/authorize/approve`,
+          audience: request.client.client_id,
+          clientName: request.client.client_name,
+          scopes: request.scopes,
+          expiresAt,
+        },
+      };
+    },
+
+    getAuthorizationQrTransactionStatus(input: {
+      requestId: string;
+      pollSecret: string;
+    }): AuthorizationQrTransactionStatus {
+      cleanupAuthorizationQrTransactions();
+
+      const transaction = authorizationQrTransactions.get(input.requestId);
+      if (!transaction || transaction.pollSecretHash !== sha256Hex(input.pollSecret)) {
+        return { status: "not_found" };
+      }
+
+      if (transaction.expiresAtMs <= now().getTime()) {
+        authorizationQrTransactions.delete(input.requestId);
+        return { status: "expired" };
+      }
+
+      if (transaction.status === "approved" && transaction.redirectTo) {
+        return {
+          status: "approved",
+          redirectTo: transaction.redirectTo,
+          expiresAt: new Date(transaction.expiresAtMs).toISOString(),
+        };
       }
 
       return {
-        redirectTo: redirectUrl.toString(),
+        status: "pending",
+        expiresAt: new Date(transaction.expiresAtMs).toISOString(),
       };
+    },
+
+    async approveAuthorizationQrTransaction(input: {
+      requestId: string;
+      secret: string;
+      viewer: ViewerContext;
+      authSessionId?: string | null;
+    }): Promise<{ success: true } | { success: false; status: number; error: string }> {
+      cleanupAuthorizationQrTransactions();
+
+      const transaction = authorizationQrTransactions.get(input.requestId);
+      if (!transaction) {
+        return { success: false, status: 404, error: "authorization_request_not_found" };
+      }
+
+      if (transaction.status !== "pending") {
+        return { success: false, status: 409, error: "authorization_request_already_used" };
+      }
+
+      if (transaction.expiresAtMs <= now().getTime()) {
+        authorizationQrTransactions.delete(input.requestId);
+        return { success: false, status: 410, error: "authorization_request_expired" };
+      }
+
+      if (transaction.secretHash !== sha256Hex(input.secret)) {
+        return { success: false, status: 403, error: "authorization_request_secret_invalid" };
+      }
+
+      const approval = await approveValidatedAuthorizationRequest({
+        request: transaction.request,
+        viewer: input.viewer,
+        authSessionId: input.authSessionId ?? null,
+      });
+
+      transaction.status = "approved";
+      transaction.redirectTo = approval.redirectTo;
+      // Keep approved transactions briefly so the browser polling the hosted
+      // authorize page can receive the redirect. They are not reusable because
+      // status is no longer pending.
+      transaction.expiresAtMs = now().getTime() + OIDC_AUTHORIZE_QR_APPROVED_RESULT_TTL_MS;
+      authorizationQrTransactions.set(transaction.id, transaction);
+
+      return { success: true };
     },
 
     async exchangeAuthorizationCode(input: {
@@ -631,8 +855,21 @@ export const createOidcProviderService = (
 
       const profile = await identityProfileRepository.getByUserId(user.id);
       const userClaims = firstPartyClaimsForUser(user, profile);
+      const grant =
+        (await oidcProviderRepository.getGrantByUserAndClient({
+          userId: user.id,
+          clientDbId: client.id,
+        })) ||
+        (await oidcProviderRepository.upsertGrant({
+          userId: user.id,
+          clientDbId: client.id,
+          pairwiseSubjectId: pairwiseSubject.id,
+          scopes: authorizationCode.scopes,
+          claims: userClaims,
+        }));
       const issuedAtSeconds = Math.floor(now().getTime() / 1000);
       const expiresAtSeconds = issuedAtSeconds + client.access_token_ttl_seconds;
+      const accessToken = createOpaqueBearerToken();
       const idToken = signJwtRs256(
         {
           alg: "RS256",
@@ -659,30 +896,31 @@ export const createOidcProviderService = (
       );
 
       const tokenResponse: TokenExchangeSuccess["body"] = {
-        access_token: createOpaqueBearerToken().token,
+        access_token: accessToken.token,
         token_type: "Bearer",
         expires_in: client.access_token_ttl_seconds,
         scope: authorizationCode.scopes.join(" "),
         id_token: idToken,
       };
 
+      await oidcProviderRepository.insertAccessToken({
+        tokenHash: accessToken.tokenHash,
+        grantId: grant.id,
+        authSessionId: authorizationCode.auth_session_id,
+        clientDbId: client.id,
+        userId: user.id,
+        pairwiseSubjectId: pairwiseSubject.id,
+        scopes: authorizationCode.scopes,
+        claims: userClaims,
+        authGeneration: user.auth_generation,
+        expiresAt: new Date(expiresAtSeconds * 1000).toISOString(),
+      });
+
       if (authorizationCode.scopes.includes("offline_access")) {
         const refreshToken = createRandomToken(
           randomBytesForService,
           OIDC_REFRESH_TOKEN_BYTES,
         );
-        const grant =
-          (await oidcProviderRepository.getGrantByUserAndClient({
-            userId: user.id,
-            clientDbId: client.id,
-          })) ||
-          (await oidcProviderRepository.upsertGrant({
-            userId: user.id,
-            clientDbId: client.id,
-            pairwiseSubjectId: pairwiseSubject.id,
-            scopes: authorizationCode.scopes,
-            claims: userClaims,
-          }));
 
         await oidcProviderRepository.insertRefreshTokenFamily({
           grantId: grant.id,
@@ -702,6 +940,186 @@ export const createOidcProviderService = (
         success: true,
         body: tokenResponse,
       };
+    },
+
+    async getUserInfo(input: {
+      accessToken: string;
+    }): Promise<UserInfoResult> {
+      const accessToken = await oidcProviderRepository.getAccessTokenByHash(
+        hashOpaqueBearerToken(input.accessToken),
+      );
+
+      if (!accessToken || accessToken.status !== "active") {
+        return {
+          success: false,
+          status: 401,
+          error: "invalid_token",
+          error_description: "Access token is not active or does not exist.",
+        };
+      }
+
+      if (new Date(accessToken.expires_at).getTime() <= now().getTime()) {
+        await oidcProviderRepository.expireAccessToken(accessToken.id);
+        return {
+          success: false,
+          status: 401,
+          error: "invalid_token",
+          error_description: "Access token has expired.",
+        };
+      }
+
+      const user = await userRepository.getById(accessToken.user_id);
+      if (!user || user.account_status !== "active") {
+        return {
+          success: false,
+          status: 401,
+          error: "invalid_token",
+          error_description: "Access token user is not active.",
+        };
+      }
+
+      if (user.auth_generation !== accessToken.auth_generation) {
+        return {
+          success: false,
+          status: 401,
+          error: "invalid_token",
+          error_description: "Access token is stale for the current auth generation.",
+        };
+      }
+
+      const pairwiseSubject = await oidcProviderRepository.getPairwiseSubjectById(
+        accessToken.pairwise_subject_id,
+      );
+      if (!pairwiseSubject) {
+        return {
+          success: false,
+          status: 500,
+          error: "server_error",
+          error_description: "Pairwise subject was not found.",
+        };
+      }
+
+      await oidcProviderRepository.touchAccessToken(accessToken.id);
+
+      // UserInfo is intentionally treated as a claims/proofs endpoint. It
+      // returns the pairwise subject and consent-filtered claims only; it must
+      // never return raw identity evidence or internal CivicOS identifiers.
+      return {
+        success: true,
+        body: {
+          sub: pairwiseSubject.subject_identifier,
+          ...filterUserInfoClaims(accessToken.scopes, accessToken.claims),
+        },
+      };
+    },
+
+    async revokeToken(input: {
+      form: URLSearchParams;
+      authorizationHeader: string | null;
+    }): Promise<TokenRevocationResult> {
+      const token = input.form.get("token")?.trim() || "";
+      const tokenTypeHint = input.form.get("token_type_hint")?.trim() || "";
+      const clientIdFromBody = input.form.get("client_id")?.trim() || "";
+      const clientSecretFromBody = input.form.get("client_secret") || "";
+      const basicAuth = extractBasicClientAuth(input.authorizationHeader);
+      const clientId = basicAuth?.clientId || clientIdFromBody;
+      const clientSecret = basicAuth?.clientSecret || clientSecretFromBody;
+
+      if (!token) {
+        return {
+          success: false,
+          status: 400,
+          error: "invalid_request",
+          error_description: "token is required.",
+        };
+      }
+
+      if (!clientId) {
+        return {
+          success: false,
+          status: 401,
+          error: "invalid_client",
+          error_description: "Client authentication is required.",
+        };
+      }
+
+      if (basicAuth && clientIdFromBody && basicAuth.clientId !== clientIdFromBody) {
+        return {
+          success: false,
+          status: 401,
+          error: "invalid_client",
+          error_description: "Basic-auth client_id does not match request client_id.",
+        };
+      }
+
+      const client = await oidcProviderRepository.getClientByClientId(clientId);
+      if (!client || client.status !== "active") {
+        return {
+          success: false,
+          status: 401,
+          error: "invalid_client",
+          error_description: "Client was not found.",
+        };
+      }
+
+      if (client.client_type === "confidential") {
+        if (!clientSecret) {
+          return {
+            success: false,
+            status: 401,
+            error: "invalid_client",
+            error_description: "Confidential client authentication is required.",
+          };
+        }
+
+        const secretRow = await oidcProviderRepository.getActiveSecretByHash({
+          clientDbId: client.id,
+          secretHash: sha256Hex(clientSecret),
+        });
+        if (!secretRow) {
+          return {
+            success: false,
+            status: 401,
+            error: "invalid_client",
+            error_description: "Client secret is invalid.",
+          };
+        }
+        await oidcProviderRepository.touchClientSecret(secretRow.id);
+      }
+
+      const tokenHash = hashOpaqueBearerToken(token);
+      const revokeAccessToken = async () =>
+        oidcProviderRepository.revokeAccessTokenByHash({
+          tokenHash,
+          clientDbId: client.id,
+          revocationReason: "rp_token_revocation",
+        });
+
+      const revokeRefreshToken = async () => {
+        const refreshFamily =
+          await oidcProviderRepository.getRefreshTokenFamilyByTokenHash({
+            tokenHash,
+            clientDbId: client.id,
+          });
+        if (refreshFamily) {
+          await oidcProviderRepository.revokeRefreshTokenFamilyById({
+            familyId: refreshFamily.id,
+            status: "revoked",
+            revocationReason: "rp_token_revocation",
+          });
+        }
+      };
+
+      if (tokenTypeHint === "refresh_token") {
+        await revokeRefreshToken();
+        await revokeAccessToken();
+      } else {
+        await revokeAccessToken();
+        await revokeRefreshToken();
+      }
+
+      // RFC 7009-compatible behavior: do not reveal whether the token existed.
+      return { success: true };
     },
   };
 };

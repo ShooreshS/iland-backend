@@ -29,6 +29,9 @@ const OIDC_GRANT_COLUMNS =
 const OIDC_REFRESH_TOKEN_FAMILY_COLUMNS =
   "id,grant_id,auth_session_id,client_id,user_id,status,current_token_hash,previous_token_hash,rotation_counter,auth_generation,last_rotated_at,last_used_at,expires_at,revoked_at,revocation_reason,created_at,updated_at";
 
+const OIDC_ACCESS_TOKEN_COLUMNS =
+  "id,token_hash,grant_id,auth_session_id,client_id,user_id,pairwise_subject_id,status,scopes,claims,auth_generation,last_used_at,expires_at,revoked_at,revocation_reason,created_at,updated_at";
+
 export type OidcAuthorizationRequestRow = {
   id: string;
   request_id: string;
@@ -122,6 +125,26 @@ export type OidcRefreshTokenFamilyRow = {
   rotation_counter: number;
   auth_generation: number;
   last_rotated_at: string;
+  last_used_at: string | null;
+  expires_at: string;
+  revoked_at: string | null;
+  revocation_reason: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type OidcAccessTokenRow = {
+  id: string;
+  token_hash: string;
+  grant_id: string | null;
+  auth_session_id: string | null;
+  client_id: string;
+  user_id: string;
+  pairwise_subject_id: string;
+  status: "active" | "revoked" | "expired";
+  scopes: string[];
+  claims: Record<string, unknown>;
+  auth_generation: number;
   last_used_at: string | null;
   expires_at: string;
   revoked_at: string | null;
@@ -537,6 +560,177 @@ export const oidcProviderRepository = {
     }
 
     return data;
+  },
+
+  async insertAccessToken(input: {
+    tokenHash: string;
+    grantId: string | null;
+    authSessionId: string | null;
+    clientDbId: string;
+    userId: string;
+    pairwiseSubjectId: string;
+    scopes: string[];
+    claims: Record<string, unknown>;
+    authGeneration: number;
+    expiresAt: string;
+  }): Promise<OidcAccessTokenRow> {
+    const supabase = requireSupabaseAdminClient();
+
+    const { data, error } = await supabase
+      .from("oidc_access_tokens")
+      .insert({
+        token_hash: input.tokenHash,
+        grant_id: input.grantId,
+        auth_session_id: input.authSessionId,
+        client_id: input.clientDbId,
+        user_id: input.userId,
+        pairwise_subject_id: input.pairwiseSubjectId,
+        status: "active",
+        scopes: input.scopes,
+        claims: input.claims,
+        auth_generation: input.authGeneration,
+        expires_at: input.expiresAt,
+      })
+      .select(OIDC_ACCESS_TOKEN_COLUMNS)
+      .single<OidcAccessTokenRow>();
+
+    if (error) {
+      throw error;
+    }
+
+    return data;
+  },
+
+  async getAccessTokenByHash(
+    tokenHash: string,
+  ): Promise<OidcAccessTokenRow | null> {
+    const supabase = requireSupabaseAdminClient();
+
+    const { data, error } = await supabase
+      .from("oidc_access_tokens")
+      .select(OIDC_ACCESS_TOKEN_COLUMNS)
+      .eq("token_hash", tokenHash)
+      .maybeSingle<OidcAccessTokenRow>();
+
+    if (error) {
+      throw error;
+    }
+
+    return data || null;
+  },
+
+  async touchAccessToken(accessTokenId: string): Promise<void> {
+    const supabase = requireSupabaseAdminClient();
+
+    const { error } = await supabase
+      .from("oidc_access_tokens")
+      .update({
+        last_used_at: new Date().toISOString(),
+      })
+      .eq("id", accessTokenId);
+
+    if (error) {
+      throw error;
+    }
+  },
+
+  async expireAccessToken(
+    accessTokenId: string,
+  ): Promise<OidcAccessTokenRow | null> {
+    const supabase = requireSupabaseAdminClient();
+
+    const { data, error } = await supabase
+      .from("oidc_access_tokens")
+      .update({
+        status: "expired",
+        revoked_at: new Date().toISOString(),
+        revocation_reason: "access_token_expired",
+      })
+      .eq("id", accessTokenId)
+      .eq("status", "active")
+      .select(OIDC_ACCESS_TOKEN_COLUMNS)
+      .maybeSingle<OidcAccessTokenRow>();
+
+    if (error) {
+      throw error;
+    }
+
+    return data || null;
+  },
+
+  async revokeAccessTokenByHash(input: {
+    tokenHash: string;
+    clientDbId: string;
+    revocationReason: string;
+  }): Promise<OidcAccessTokenRow | null> {
+    const supabase = requireSupabaseAdminClient();
+
+    const { data, error } = await supabase
+      .from("oidc_access_tokens")
+      .update({
+        status: "revoked",
+        revoked_at: new Date().toISOString(),
+        revocation_reason: input.revocationReason,
+      })
+      .eq("token_hash", input.tokenHash)
+      .eq("client_id", input.clientDbId)
+      .eq("status", "active")
+      .select(OIDC_ACCESS_TOKEN_COLUMNS)
+      .maybeSingle<OidcAccessTokenRow>();
+
+    if (error) {
+      throw error;
+    }
+
+    return data || null;
+  },
+
+  async getRefreshTokenFamilyByTokenHash(input: {
+    tokenHash: string;
+    clientDbId: string;
+  }): Promise<OidcRefreshTokenFamilyRow | null> {
+    const supabase = requireSupabaseAdminClient();
+
+    const { data, error } = await supabase
+      .from("oidc_refresh_token_families")
+      .select(OIDC_REFRESH_TOKEN_FAMILY_COLUMNS)
+      .eq("client_id", input.clientDbId)
+      .or(
+        `current_token_hash.eq.${input.tokenHash},previous_token_hash.eq.${input.tokenHash}`,
+      )
+      .maybeSingle<OidcRefreshTokenFamilyRow>();
+
+    if (error) {
+      throw error;
+    }
+
+    return data || null;
+  },
+
+  async revokeRefreshTokenFamilyById(input: {
+    familyId: string;
+    status: "revoked" | "reused" | "expired";
+    revocationReason: string;
+  }): Promise<OidcRefreshTokenFamilyRow | null> {
+    const supabase = requireSupabaseAdminClient();
+
+    const { data, error } = await supabase
+      .from("oidc_refresh_token_families")
+      .update({
+        status: input.status,
+        revoked_at: new Date().toISOString(),
+        revocation_reason: input.revocationReason,
+      })
+      .eq("id", input.familyId)
+      .eq("status", "active")
+      .select(OIDC_REFRESH_TOKEN_FAMILY_COLUMNS)
+      .maybeSingle<OidcRefreshTokenFamilyRow>();
+
+    if (error) {
+      throw error;
+    }
+
+    return data || null;
   },
 };
 

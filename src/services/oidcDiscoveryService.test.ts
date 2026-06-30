@@ -43,6 +43,11 @@ describe("oidcDiscoveryService", () => {
     expect(metadata.token_endpoint).toBe("https://example.com/idp/token");
     expect(metadata.userinfo_endpoint).toBe("https://example.com/idp/userinfo");
     expect(metadata.jwks_uri).toBe("https://example.com/idp/jwks");
+    expect(metadata.revocation_endpoint).toBe("https://example.com/idp/revoke");
+    expect(
+      (metadata as Record<string, unknown>).introspection_endpoint,
+    ).toBeUndefined();
+    expect((metadata as Record<string, unknown>).end_session_endpoint).toBeUndefined();
     expect(metadata.response_types_supported).toEqual(["code"]);
     expect(metadata.grant_types_supported).toEqual([
       "authorization_code",
