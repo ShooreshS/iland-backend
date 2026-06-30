@@ -328,7 +328,15 @@ export const createIdpRoutes = (
         // back to the RP with a normal authorization code.
         const qrTransaction =
           oidcProviderService.createAuthorizationQrTransaction(validation.request);
-        const statusUrl = new URL("/idp/authorize/status", url.origin);
+        const issuer = oidcDiscoveryService.getOpenIdConfiguration().issuer;
+        // Railway may pass the upstream request URL to Bun as http:// even when
+        // the public browser URL is https://. Build browser-visible IdP URLs
+        // from the configured issuer so the QR page never performs mixed-content
+        // polling from an HTTPS iframe.
+        const statusUrl = new URL(
+          "authorize/status",
+          issuer.endsWith("/") ? issuer : `${issuer}/`,
+        );
         statusUrl.searchParams.set("requestId", qrTransaction.requestId);
         statusUrl.searchParams.set("pollSecret", qrTransaction.pollSecret);
 
