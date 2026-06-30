@@ -218,12 +218,24 @@ const renderAuthorizeQrPage = async (input: {
           if (result?.status === "approved" && result?.redirectTo) {
             stopped = true;
             statusElement.textContent = "Approved. Returning to the website…";
+            if (window.parent && window.parent !== window) {
+              window.parent.postMessage({
+                type: "civicos.oidc.authorize.redirect",
+                redirectTo: result.redirectTo
+              }, "*");
+            }
             window.location.assign(result.redirectTo);
             return;
           }
           if (result?.status === "denied" && result?.redirectTo) {
             stopped = true;
             statusElement.textContent = "Request denied. Returning to the website…";
+            if (window.parent && window.parent !== window) {
+              window.parent.postMessage({
+                type: "civicos.oidc.authorize.redirect",
+                redirectTo: result.redirectTo
+              }, "*");
+            }
             window.location.assign(result.redirectTo);
             return;
           }
