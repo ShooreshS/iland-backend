@@ -266,9 +266,12 @@ const renderAuthorizeQrPage = async (input: {
 }): Promise<Response> => {
   const qrPayloadText = JSON.stringify(input.qrPayload);
   const qrSvgDataUrl = await createQrSvgDataUrl(qrPayloadText);
+  const appLinkUrl = new URL("com.shooresh.iland://oidc/authorize");
+  appLinkUrl.searchParams.set("payload", qrPayloadText);
   const escapedClientName = escapeHtml(input.clientName);
   const escapedScopes = escapeHtml(input.scopes.join(" "));
   const escapedExpiresAt = escapeHtml(input.expiresAt);
+  const escapedAppLinkUrl = escapeHtml(appLinkUrl.toString());
   const statusUrlJson = JSON.stringify(input.statusUrl);
 
   return new Response(
@@ -285,6 +288,7 @@ const renderAuthorizeQrPage = async (input: {
       h1 { margin: 0 0 8px; font-size: 26px; }
       p { line-height: 1.45; }
       .qr { width: 280px; height: 280px; margin: 20px auto; border-radius: 18px; background: #fff; padding: 12px; border: 1px solid #e4e7ec; }
+      .app-link { display: inline-flex; align-items: center; justify-content: center; min-height: 48px; margin: 6px auto 10px; padding: 0 18px; border-radius: 999px; background: #155eef; color: #fff; text-decoration: none; font-weight: 700; }
       .status { margin-top: 18px; color: #475467; }
       .meta { margin-top: 18px; padding-top: 18px; border-top: 1px solid #eaecf0; font-size: 13px; color: #667085; text-align: left; }
       code { overflow-wrap: anywhere; }
@@ -300,7 +304,8 @@ const renderAuthorizeQrPage = async (input: {
       <h1>Approve with CivicOS</h1>
       <p><strong>${escapedClientName}</strong> is requesting CivicOS login.</p>
       <img class="qr" src="${qrSvgDataUrl}" alt="CivicOS authorization QR code" />
-      <p>Open CivicOS, go to Profile, tap the QR scanner icon, and scan this code.</p>
+      <p>Scan this code from CivicOS on another device, or continue on this device.</p>
+      <a class="app-link" href="${escapedAppLinkUrl}" target="_top" rel="noopener">Open CivicOS app</a>
       <p id="status" class="status" aria-live="polite">Waiting for approval…</p>
       <div class="meta">
         <div>Scopes: <code>${escapedScopes}</code></div>

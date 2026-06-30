@@ -241,6 +241,8 @@ describe("idp authorize QR approval routes", () => {
     expect(html).toContain("Approve with CivicOS");
     expect(html).toContain("Code iLand");
     expect(html).toContain("/idp/authorize/status");
+    expect(html).toContain("Open CivicOS app");
+    expect(html).toContain("com.shooresh.iland://oidc/authorize");
   });
 
   it("allows the CivicOS app to approve a pending authorize QR with a bearer session", async () => {
