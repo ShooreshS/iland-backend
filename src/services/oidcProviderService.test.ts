@@ -125,6 +125,35 @@ const makeAuthorizationCodeRow = (overrides: Record<string, unknown> = {}) =>
     ...overrides,
   }) as any;
 
+const makeAccessTokenRow = (overrides: Record<string, unknown> = {}) =>
+  ({
+    id: "access-token-db-id",
+    token_hash: "access-token-hash",
+    grant_id: "grant-1",
+    auth_session_id: "auth-session-1",
+    client_id: "client-db-id",
+    user_id: "user-1",
+    pairwise_subject_id: "pairwise-1",
+    status: "active",
+    scopes: ["openid", "profile"],
+    claims: {
+      nickname: "public-name",
+      preferred_username: "public-name",
+      profile_completed: true,
+      passport_verified: true,
+      face_verified: true,
+      internal_user_id: "must-not-leak",
+    },
+    auth_generation: 3,
+    last_used_at: null,
+    expires_at: new Date(BASE_TIME_MS + 60_000).toISOString(),
+    revoked_at: null,
+    revocation_reason: null,
+    created_at: BASE_TIME_ISO,
+    updated_at: BASE_TIME_ISO,
+    ...overrides,
+  }) as any;
+
 const makeTokenForm = (overrides: Record<string, string> = {}) =>
   new URLSearchParams({
     grant_type: "authorization_code",
@@ -450,6 +479,44 @@ const createTokenTestService = (
   };
 };
 
+const createUserInfoTestService = (
+  accessTokenOverrides: Record<string, unknown> = {},
+) => {
+  const accessToken = makeAccessTokenRow(accessTokenOverrides);
+  let touchedAccessTokenId: string | null = null;
+
+  const service = createOidcProviderService({
+    issuer: "https://iland.example/idp",
+    now: () => new Date(BASE_TIME_MS),
+    randomBytesFn: (size) => Buffer.alloc(size, 9),
+    oidcProviderRepositoryLike: {
+      getAccessTokenByHash: async () => accessToken,
+      expireAccessToken: async () => null,
+      getPairwiseSubjectById: async () =>
+        makePairwiseSubject({
+          id: accessToken.pairwise_subject_id,
+        }),
+      touchAccessToken: async (accessTokenId: string) => {
+        touchedAccessTokenId = accessTokenId;
+      },
+    } as any,
+    oidcSigningKeyRepositoryLike: { listPublicSigningKeys: async () => [] } as any,
+    userRepositoryLike: {
+      getById: async () => makeViewer().user,
+    } as any,
+    identityProfileRepositoryLike: {
+      getByUserId: async () => makeIdentityProfile(),
+    } as any,
+  });
+
+  return {
+    service,
+    get touchedAccessTokenId() {
+      return touchedAccessTokenId;
+    },
+  };
+};
+
 describe("oidcProviderService QR authorize transactions", () => {
   it("persists QR authorize transactions across service instances", async () => {
     const shared = createSharedQrRepository();
@@ -663,6 +730,46 @@ describe("oidcProviderService QR authorize transactions", () => {
       expect(status.redirectTo).toContain("error=access_denied");
       expect(status.redirectTo).toContain("state=state-1");
     }
+  });
+});
+
+describe("oidcProviderService UserInfo claim contract", () => {
+  it("returns only consent-filtered profile claims for the profile scope", async () => {
+    const context = createUserInfoTestService();
+
+    const result = await context.service.getUserInfo({
+      accessToken: "access-token-1",
+    });
+
+    expect(result).toEqual({
+      success: true,
+      body: {
+        sub: "pairwise-subject-1",
+        nickname: "public-name",
+        preferred_username: "public-name",
+        profile_completed: true,
+        passport_verified: true,
+        face_verified: true,
+      },
+    });
+    expect(context.touchedAccessTokenId).toBe("access-token-db-id");
+  });
+
+  it("returns only sub when the access token lacks the profile scope", async () => {
+    const context = createUserInfoTestService({
+      scopes: ["openid"],
+    });
+
+    const result = await context.service.getUserInfo({
+      accessToken: "access-token-1",
+    });
+
+    expect(result).toEqual({
+      success: true,
+      body: {
+        sub: "pairwise-subject-1",
+      },
+    });
   });
 });
 

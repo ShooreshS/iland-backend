@@ -1,6 +1,10 @@
 import authPolicy from "../auth/policy";
 import defaultOidcSigningKeyRepository from "../repositories/oidcSigningKeyRepository";
 import type { OidcSigningKeyRow } from "../types/db";
+import {
+  OIDC_SUPPORTED_CLAIMS,
+  OIDC_SUPPORTED_SCOPES,
+} from "./oidcClaimContract";
 
 type PublicJwk = Record<string, unknown>;
 
@@ -108,23 +112,8 @@ export const createOidcDiscoveryService = (
           "client_secret_post",
           "none",
         ],
-        scopes_supported: ["openid", "profile", "offline_access"],
-        claims_supported: [
-          "sub",
-          "iss",
-          "aud",
-          "exp",
-          "iat",
-          "auth_time",
-          "nonce",
-          "nickname",
-          "preferred_username",
-          "profile_completed",
-          "passport_verified",
-          "face_verified",
-          "amr",
-          "acr",
-        ],
+        scopes_supported: [...OIDC_SUPPORTED_SCOPES] as string[],
+        claims_supported: [...OIDC_SUPPORTED_CLAIMS] as string[],
         code_challenge_methods_supported: ["S256"],
         claims_parameter_supported: false,
         request_parameter_supported: false,

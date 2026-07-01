@@ -24,6 +24,10 @@ import type {
 } from "../types/db";
 import type { ViewerContext } from "../types/auth";
 import authPolicy from "../auth/policy";
+import {
+  OIDC_SHAREABLE_CLAIMS,
+  OIDC_USERINFO_PROFILE_CLAIMS,
+} from "./oidcClaimContract";
 
 const AUTHORIZATION_REQUEST_ID_BYTES = 18;
 const AUTHORIZATION_CODE_BYTES = 32;
@@ -194,39 +198,6 @@ type AuthorizationQrTransactionStatus =
   | { status: "expired" }
   | { status: "not_found" };
 
-type ShareableClaimKey =
-  | "nickname"
-  | "profile_completed"
-  | "passport_verified"
-  | "face_verified";
-
-const SHAREABLE_CLAIMS: Array<{
-  key: ShareableClaimKey;
-  label: string;
-  description: string;
-}> = [
-  {
-    key: "nickname",
-    label: "Public nickname",
-    description: "Share your public CivicOS nickname.",
-  },
-  {
-    key: "profile_completed",
-    label: "Profile completion proof",
-    description: "Share whether your CivicOS profile is complete.",
-  },
-  {
-    key: "passport_verified",
-    label: "Passport verification proof",
-    description: "Share whether your passport verification is complete.",
-  },
-  {
-    key: "face_verified",
-    label: "Face verification proof",
-    description: "Share whether your face verification is complete.",
-  },
-];
-
 const toBase64Url = (value: Buffer | string): string =>
   Buffer.isBuffer(value)
     ? value.toString("base64url")
@@ -350,12 +321,7 @@ const filterUserInfoClaims = (
   }
 
   const output: Record<string, unknown> = {};
-  for (const key of [
-    "nickname",
-    "profile_completed",
-    "passport_verified",
-    "face_verified",
-  ]) {
+  for (const key of OIDC_USERINFO_PROFILE_CLAIMS) {
     if (Object.prototype.hasOwnProperty.call(claims, key)) {
       output[key] = claims[key];
     }
@@ -395,7 +361,7 @@ const selectApprovedClaims = (
   }
 
   const selected: Record<string, unknown> = {};
-  for (const claim of SHAREABLE_CLAIMS) {
+  for (const claim of OIDC_SHAREABLE_CLAIMS) {
     if (
       approvedClaims[claim.key] === true &&
       availableClaims[claim.key] !== undefined &&
@@ -960,7 +926,7 @@ export const createOidcProviderService = (
         input.viewer.user,
         await identityProfileRepository.getByUserId(input.viewer.userId),
       );
-      const claimOptions = SHAREABLE_CLAIMS.map((claim) => ({
+      const claimOptions = OIDC_SHAREABLE_CLAIMS.map((claim) => ({
         key: claim.key,
         label: claim.label,
         description: claim.description,

@@ -2,6 +2,11 @@ import { describe, expect, it } from "bun:test";
 
 import { createOidcDiscoveryService } from "./oidcDiscoveryService";
 import type { OidcSigningKeyRow } from "../types/db";
+import {
+  OIDC_FORBIDDEN_PUBLIC_CLAIMS,
+  OIDC_SUPPORTED_CLAIMS,
+  OIDC_SUPPORTED_SCOPES,
+} from "./oidcClaimContract";
 
 const signingKey = (
   overrides: Partial<OidcSigningKeyRow> = {},
@@ -54,6 +59,11 @@ describe("oidcDiscoveryService", () => {
       "refresh_token",
     ]);
     expect(metadata.subject_types_supported).toEqual(["pairwise"]);
+    expect(metadata.scopes_supported).toEqual([...OIDC_SUPPORTED_SCOPES]);
+    expect(metadata.claims_supported).toEqual([...OIDC_SUPPORTED_CLAIMS]);
+    for (const forbiddenClaim of OIDC_FORBIDDEN_PUBLIC_CLAIMS) {
+      expect(metadata.claims_supported).not.toContain(forbiddenClaim);
+    }
     expect(metadata.code_challenge_methods_supported).toEqual(["S256"]);
     expect(metadata.pkce_required).toBe(true);
   });
