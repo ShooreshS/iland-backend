@@ -498,7 +498,9 @@ export const createIdpRoutes = (
         // first-party session, then this page polls and redirects the browser
         // back to the RP with a normal authorization code.
         const qrTransaction =
-          oidcProviderService.createAuthorizationQrTransaction(validation.request);
+          await oidcProviderService.createAuthorizationQrTransaction(
+            validation.request,
+          );
         const issuer = oidcDiscoveryService.getOpenIdConfiguration().issuer;
         // Railway may pass the upstream request URL to Bun as http:// even when
         // the public browser URL is https://. Build browser-visible IdP URLs
@@ -563,7 +565,7 @@ export const createIdpRoutes = (
   const authorizeStatusRoute: RouteDefinition = {
     method: "GET",
     path: "/idp/authorize/status",
-    handler: ({ url }) => {
+    handler: async ({ url }) => {
       const requestId = url.searchParams.get("requestId")?.trim() || "";
       const pollSecret = url.searchParams.get("pollSecret")?.trim() || "";
 
@@ -578,7 +580,7 @@ export const createIdpRoutes = (
         );
       }
 
-      const status = oidcProviderService.getAuthorizationQrTransactionStatus({
+      const status = await oidcProviderService.getAuthorizationQrTransactionStatus({
         requestId,
         pollSecret,
       });
@@ -807,7 +809,7 @@ export const createIdpRoutes = (
         );
       }
 
-      const result = oidcProviderService.denyAuthorizationQrTransaction({
+      const result = await oidcProviderService.denyAuthorizationQrTransaction({
         requestId,
         secret,
       });

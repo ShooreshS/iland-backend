@@ -32,6 +32,9 @@ const OIDC_REFRESH_TOKEN_FAMILY_COLUMNS =
 const OIDC_ACCESS_TOKEN_COLUMNS =
   "id,token_hash,grant_id,auth_session_id,client_id,user_id,pairwise_subject_id,status,scopes,claims,auth_generation,last_used_at,expires_at,revoked_at,revocation_reason,created_at,updated_at";
 
+const OIDC_AUTHORIZE_QR_TRANSACTION_COLUMNS =
+  "id,request_id,authorization_request_id,client_id,secret_hash,poll_secret_hash,status,user_id,auth_session_id,pairwise_subject_id,grant_id,approved_auth_generation,approved_claims,approved_at,denied_at,code_delivered_at,expires_at,result_expires_at,created_at,updated_at";
+
 export type OidcAuthorizationRequestRow = {
   id: string;
   request_id: string;
@@ -153,6 +156,44 @@ export type OidcAccessTokenRow = {
   updated_at: string;
 };
 
+export type OidcAuthorizeQrTransactionRow = {
+  id: string;
+  request_id: string;
+  authorization_request_id: string;
+  client_id: string;
+  secret_hash: string;
+  poll_secret_hash: string;
+  status: "pending" | "approved" | "denied" | "expired";
+  user_id: string | null;
+  auth_session_id: string | null;
+  pairwise_subject_id: string | null;
+  grant_id: string | null;
+  approved_auth_generation: number | null;
+  approved_claims: Record<string, unknown>;
+  approved_at: string | null;
+  denied_at: string | null;
+  code_delivered_at: string | null;
+  expires_at: string;
+  result_expires_at: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type OidcAuthorizeQrCodeDeliveryRow = {
+  authorization_request_id: string;
+  client_id: string;
+  user_id: string;
+  auth_session_id: string | null;
+  pairwise_subject_id: string;
+  redirect_uri: string;
+  scopes: string[];
+  state: string | null;
+  nonce: string | null;
+  code_challenge: string;
+  code_challenge_method: "S256";
+  auth_generation: number;
+};
+
 export const oidcProviderRepository = {
   async getClientByClientId(clientId: string): Promise<OidcClientRow | null> {
     const supabase = requireSupabaseAdminClient();
@@ -161,6 +202,22 @@ export const oidcProviderRepository = {
       .from("oidc_clients")
       .select(OIDC_CLIENT_COLUMNS)
       .eq("client_id", clientId)
+      .maybeSingle<OidcClientRow>();
+
+    if (error) {
+      throw error;
+    }
+
+    return data || null;
+  },
+
+  async getClientById(clientDbId: string): Promise<OidcClientRow | null> {
+    const supabase = requireSupabaseAdminClient();
+
+    const { data, error } = await supabase
+      .from("oidc_clients")
+      .select(OIDC_CLIENT_COLUMNS)
+      .eq("id", clientDbId)
       .maybeSingle<OidcClientRow>();
 
     if (error) {
@@ -277,6 +334,239 @@ export const oidcProviderRepository = {
     }
 
     return data;
+  },
+
+  async insertPendingAuthorizationRequest(input: {
+    requestId: string;
+    clientDbId: string;
+    redirectUri: string;
+    scopes: string[];
+    state: string | null;
+    nonce: string | null;
+    codeChallenge: string;
+    codeChallengeMethod: "S256";
+    expiresAt: string;
+  }): Promise<OidcAuthorizationRequestRow> {
+    const supabase = requireSupabaseAdminClient();
+
+    const { data, error } = await supabase
+      .from("oidc_authorization_requests")
+      .insert({
+        request_id: input.requestId,
+        client_id: input.clientDbId,
+        user_id: null,
+        auth_session_id: null,
+        status: "pending",
+        response_type: "code",
+        redirect_uri: input.redirectUri,
+        scopes: input.scopes,
+        state: input.state,
+        nonce: input.nonce,
+        code_challenge: input.codeChallenge,
+        code_challenge_method: input.codeChallengeMethod,
+        prompt: [],
+        ui_locales: [],
+        consent_required: true,
+        expires_at: input.expiresAt,
+      })
+      .select(OIDC_AUTHORIZATION_REQUEST_COLUMNS)
+      .single<OidcAuthorizationRequestRow>();
+
+    if (error) {
+      throw error;
+    }
+
+    return data;
+  },
+
+  async getAuthorizationRequestById(
+    authorizationRequestId: string,
+  ): Promise<OidcAuthorizationRequestRow | null> {
+    const supabase = requireSupabaseAdminClient();
+
+    const { data, error } = await supabase
+      .from("oidc_authorization_requests")
+      .select(OIDC_AUTHORIZATION_REQUEST_COLUMNS)
+      .eq("id", authorizationRequestId)
+      .maybeSingle<OidcAuthorizationRequestRow>();
+
+    if (error) {
+      throw error;
+    }
+
+    return data || null;
+  },
+
+  async insertAuthorizeQrTransaction(input: {
+    requestId: string;
+    authorizationRequestId: string;
+    clientDbId: string;
+    secretHash: string;
+    pollSecretHash: string;
+    expiresAt: string;
+  }): Promise<OidcAuthorizeQrTransactionRow> {
+    const supabase = requireSupabaseAdminClient();
+
+    const { data, error } = await supabase
+      .from("oidc_authorize_qr_transactions")
+      .insert({
+        request_id: input.requestId,
+        authorization_request_id: input.authorizationRequestId,
+        client_id: input.clientDbId,
+        secret_hash: input.secretHash,
+        poll_secret_hash: input.pollSecretHash,
+        status: "pending",
+        expires_at: input.expiresAt,
+      })
+      .select(OIDC_AUTHORIZE_QR_TRANSACTION_COLUMNS)
+      .single<OidcAuthorizeQrTransactionRow>();
+
+    if (error) {
+      throw error;
+    }
+
+    return data;
+  },
+
+  async getAuthorizeQrTransactionByRequestId(
+    requestId: string,
+  ): Promise<OidcAuthorizeQrTransactionRow | null> {
+    const supabase = requireSupabaseAdminClient();
+
+    const { data, error } = await supabase
+      .from("oidc_authorize_qr_transactions")
+      .select(OIDC_AUTHORIZE_QR_TRANSACTION_COLUMNS)
+      .eq("request_id", requestId)
+      .maybeSingle<OidcAuthorizeQrTransactionRow>();
+
+    if (error) {
+      throw error;
+    }
+
+    return data || null;
+  },
+
+  async expireAuthorizeQrTransaction(
+    requestId: string,
+  ): Promise<OidcAuthorizeQrTransactionRow | null> {
+    const supabase = requireSupabaseAdminClient();
+
+    const { data, error } = await supabase
+      .from("oidc_authorize_qr_transactions")
+      .update({
+        status: "expired",
+      })
+      .eq("request_id", requestId)
+      .in("status", ["pending", "approved"])
+      .select(OIDC_AUTHORIZE_QR_TRANSACTION_COLUMNS)
+      .maybeSingle<OidcAuthorizeQrTransactionRow>();
+
+    if (error) {
+      throw error;
+    }
+
+    if (data?.authorization_request_id) {
+      const { error: requestError } = await supabase
+        .from("oidc_authorization_requests")
+        .update({
+          status: "expired",
+        })
+        .eq("id", data.authorization_request_id)
+        .in("status", ["pending", "approved"]);
+
+      if (requestError) {
+        throw requestError;
+      }
+    }
+
+    return data || null;
+  },
+
+  async approveAuthorizeQrTransaction(input: {
+    requestId: string;
+    secretHash: string;
+    userId: string;
+    authSessionId: string | null;
+    pairwiseSubjectId: string;
+    grantId: string;
+    approvedAuthGeneration: number;
+    approvedClaims: Record<string, unknown>;
+    resultExpiresAt: string;
+    now: string;
+  }): Promise<OidcAuthorizeQrTransactionRow | null> {
+    const supabase = requireSupabaseAdminClient();
+
+    const { data, error } = await supabase.rpc(
+      "approve_oidc_authorize_qr_transaction",
+      {
+        p_request_id: input.requestId,
+        p_secret_hash: input.secretHash,
+        p_user_id: input.userId,
+        p_auth_session_id: input.authSessionId,
+        p_pairwise_subject_id: input.pairwiseSubjectId,
+        p_grant_id: input.grantId,
+        p_approved_auth_generation: input.approvedAuthGeneration,
+        p_approved_claims: input.approvedClaims,
+        p_result_expires_at: input.resultExpiresAt,
+        p_now: input.now,
+      },
+    );
+
+    if (error) {
+      throw error;
+    }
+
+    return (data as OidcAuthorizeQrTransactionRow | null) || null;
+  },
+
+  async denyAuthorizeQrTransaction(input: {
+    requestId: string;
+    secretHash: string;
+    resultExpiresAt: string;
+    now: string;
+  }): Promise<OidcAuthorizeQrTransactionRow | null> {
+    const supabase = requireSupabaseAdminClient();
+
+    const { data, error } = await supabase.rpc(
+      "deny_oidc_authorize_qr_transaction",
+      {
+        p_request_id: input.requestId,
+        p_secret_hash: input.secretHash,
+        p_result_expires_at: input.resultExpiresAt,
+        p_now: input.now,
+      },
+    );
+
+    if (error) {
+      throw error;
+    }
+
+    return (data as OidcAuthorizeQrTransactionRow | null) || null;
+  },
+
+  async deliverAuthorizeQrCode(input: {
+    requestId: string;
+    pollSecretHash: string;
+    codeHash: string;
+    codeExpiresAt: string;
+    now: string;
+  }): Promise<OidcAuthorizeQrCodeDeliveryRow | null> {
+    const supabase = requireSupabaseAdminClient();
+
+    const { data, error } = await supabase.rpc("deliver_oidc_authorize_qr_code", {
+      p_request_id: input.requestId,
+      p_poll_secret_hash: input.pollSecretHash,
+      p_code_hash: input.codeHash,
+      p_code_expires_at: input.codeExpiresAt,
+      p_now: input.now,
+    });
+
+    if (error) {
+      throw error;
+    }
+
+    const rows = data as OidcAuthorizeQrCodeDeliveryRow[] | null;
+    return rows?.[0] || null;
   },
 
   async getPairwiseSubject(input: {

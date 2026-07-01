@@ -10,6 +10,8 @@ import {
 } from "../auth/tokens";
 import defaultIdentityProfileRepository from "../repositories/identityProfileRepository";
 import defaultOidcProviderRepository, {
+  type OidcAuthorizationRequestRow,
+  type OidcAuthorizeQrTransactionRow,
   type OidcPairwiseSubjectRow,
 } from "../repositories/oidcProviderRepository";
 import defaultOidcSigningKeyRepository from "../repositories/oidcSigningKeyRepository";
@@ -38,10 +40,19 @@ const OIDC_AUTHORIZE_QR_APPROVED_RESULT_TTL_MS = 60 * 1000;
 type OidcProviderRepositoryLike = Pick<
   typeof defaultOidcProviderRepository,
   | "getClientByClientId"
+  | "getClientById"
   | "getRedirectUri"
   | "getActiveSecretByHash"
   | "touchClientSecret"
   | "insertAuthorizationRequest"
+  | "insertPendingAuthorizationRequest"
+  | "getAuthorizationRequestById"
+  | "insertAuthorizeQrTransaction"
+  | "getAuthorizeQrTransactionByRequestId"
+  | "expireAuthorizeQrTransaction"
+  | "approveAuthorizeQrTransaction"
+  | "denyAuthorizeQrTransaction"
+  | "deliverAuthorizeQrCode"
   | "getPairwiseSubject"
   | "insertPairwiseSubject"
   | "getPairwiseSubjectById"
@@ -182,17 +193,6 @@ type AuthorizationQrTransactionStatus =
   | { status: "denied"; redirectTo: string; expiresAt: string }
   | { status: "expired" }
   | { status: "not_found" };
-
-type AuthorizationQrTransaction = {
-  id: string;
-  secretHash: string;
-  pollSecretHash: string;
-  request: ValidatedAuthorizationRequest;
-  createdAtMs: number;
-  expiresAtMs: number;
-  status: "pending" | "approved" | "denied";
-  redirectTo?: string;
-};
 
 type ShareableClaimKey =
   | "nickname"
@@ -443,16 +443,6 @@ export const createOidcProviderService = (
   const userRepository = dependencies.userRepositoryLike ?? defaultUserRepository;
   const identityProfileRepository =
     dependencies.identityProfileRepositoryLike ?? defaultIdentityProfileRepository;
-  const authorizationQrTransactions = new Map<string, AuthorizationQrTransaction>();
-
-  const cleanupAuthorizationQrTransactions = () => {
-    const effectiveNowMs = now().getTime();
-    for (const [id, transaction] of authorizationQrTransactions.entries()) {
-      if (transaction.expiresAtMs <= effectiveNowMs) {
-        authorizationQrTransactions.delete(id);
-      }
-    }
-  };
 
   const getOrCreatePairwiseSubject = async (
     userId: string,
@@ -486,6 +476,98 @@ export const createOidcProviderService = (
       }
       throw error;
     }
+  };
+
+  const getQrValidatedRequest = async (
+    transaction: OidcAuthorizeQrTransactionRow,
+  ): Promise<ValidatedAuthorizationRequest | null> => {
+    const [authorizationRequest, client] = await Promise.all([
+      oidcProviderRepository.getAuthorizationRequestById(
+        transaction.authorization_request_id,
+      ),
+      oidcProviderRepository.getClientById(transaction.client_id),
+    ]);
+
+    if (!authorizationRequest || !client || client.status !== "active") {
+      return null;
+    }
+
+    return {
+      client,
+      redirectUri: authorizationRequest.redirect_uri,
+      responseType: authorizationRequest.response_type,
+      scopes: authorizationRequest.scopes,
+      state: authorizationRequest.state,
+      nonce: authorizationRequest.nonce,
+      codeChallenge: authorizationRequest.code_challenge,
+      codeChallengeMethod: authorizationRequest.code_challenge_method,
+    };
+  };
+
+  const isQrTransactionExpired = (
+    transaction: OidcAuthorizeQrTransactionRow,
+    effectiveNow: Date,
+  ): boolean => {
+    if (transaction.status === "pending") {
+      return new Date(transaction.expires_at).getTime() <= effectiveNow.getTime();
+    }
+
+    if (
+      (transaction.status === "approved" || transaction.status === "denied") &&
+      transaction.result_expires_at
+    ) {
+      return (
+        new Date(transaction.result_expires_at).getTime() <= effectiveNow.getTime()
+      );
+    }
+
+    return false;
+  };
+
+  const classifyQrSecretFailure = async (input: {
+    transaction: OidcAuthorizeQrTransactionRow | null;
+    secretHash: string;
+    effectiveNow: Date;
+  }): Promise<{ success: false; status: number; error: string } | null> => {
+    if (!input.transaction) {
+      return {
+        success: false,
+        status: 404,
+        error: "authorization_request_not_found",
+      };
+    }
+
+    if (
+      input.transaction.status === "expired" ||
+      isQrTransactionExpired(input.transaction, input.effectiveNow)
+    ) {
+      await oidcProviderRepository.expireAuthorizeQrTransaction(
+        input.transaction.request_id,
+      );
+      return {
+        success: false,
+        status: 410,
+        error: "authorization_request_expired",
+      };
+    }
+
+    if (input.transaction.status !== "pending") {
+      return {
+        success: false,
+        status: 409,
+        error: "authorization_request_already_used",
+      };
+    }
+
+    if (input.transaction.secret_hash !== input.secretHash) {
+      return {
+        success: false,
+        status: 403,
+        error: "authorization_request_secret_invalid",
+      };
+    }
+
+    return null;
   };
 
   const approveValidatedAuthorizationRequest = async (input: {
@@ -682,14 +764,13 @@ export const createOidcProviderService = (
       return approveValidatedAuthorizationRequest(input);
     },
 
-    createAuthorizationQrTransaction(request: ValidatedAuthorizationRequest): {
+    async createAuthorizationQrTransaction(request: ValidatedAuthorizationRequest): Promise<{
       requestId: string;
       pollSecret: string;
       expiresAt: string;
       qrPayload: Record<string, unknown>;
-    } {
-      cleanupAuthorizationQrTransactions();
-
+    }> {
+      const effectiveNow = now();
       const requestId = createRandomToken(
         randomBytesForService,
         OIDC_AUTHORIZE_QR_TRANSACTION_ID_BYTES,
@@ -702,17 +783,29 @@ export const createOidcProviderService = (
         randomBytesForService,
         OIDC_AUTHORIZE_QR_POLL_SECRET_BYTES,
       );
-      const expiresAtMs = now().getTime() + OIDC_AUTHORIZE_QR_TTL_MS;
+      const expiresAtMs = effectiveNow.getTime() + OIDC_AUTHORIZE_QR_TTL_MS;
       const expiresAt = new Date(expiresAtMs).toISOString();
 
-      authorizationQrTransactions.set(requestId, {
-        id: requestId,
+      const authorizationRequest =
+        await oidcProviderRepository.insertPendingAuthorizationRequest({
+          requestId,
+          clientDbId: request.client.id,
+          redirectUri: request.redirectUri,
+          scopes: request.scopes,
+          state: request.state,
+          nonce: request.nonce,
+          codeChallenge: request.codeChallenge,
+          codeChallengeMethod: request.codeChallengeMethod,
+          expiresAt,
+        });
+
+      await oidcProviderRepository.insertAuthorizeQrTransaction({
+        requestId,
+        authorizationRequestId: authorizationRequest.id,
+        clientDbId: request.client.id,
         secretHash: sha256Hex(secret),
         pollSecretHash: sha256Hex(pollSecret),
-        request,
-        createdAtMs: now().getTime(),
-        expiresAtMs,
-        status: "pending",
+        expiresAt,
       });
 
       return {
@@ -733,40 +826,98 @@ export const createOidcProviderService = (
       };
     },
 
-    getAuthorizationQrTransactionStatus(input: {
+    async getAuthorizationQrTransactionStatus(input: {
       requestId: string;
       pollSecret: string;
-    }): AuthorizationQrTransactionStatus {
-      const transaction = authorizationQrTransactions.get(input.requestId);
-      if (!transaction || transaction.pollSecretHash !== sha256Hex(input.pollSecret)) {
-        cleanupAuthorizationQrTransactions();
+    }): Promise<AuthorizationQrTransactionStatus> {
+      const effectiveNow = now();
+      const transaction =
+        await oidcProviderRepository.getAuthorizeQrTransactionByRequestId(
+          input.requestId,
+        );
+      if (!transaction || transaction.poll_secret_hash !== sha256Hex(input.pollSecret)) {
         return { status: "not_found" };
       }
 
-      if (transaction.expiresAtMs <= now().getTime()) {
-        authorizationQrTransactions.delete(input.requestId);
+      if (isQrTransactionExpired(transaction, effectiveNow)) {
+        await oidcProviderRepository.expireAuthorizeQrTransaction(
+          transaction.request_id,
+        );
         return { status: "expired" };
       }
 
-      if (transaction.status === "approved" && transaction.redirectTo) {
+      if (transaction.status === "expired") {
+        return { status: "expired" };
+      }
+
+      if (transaction.status === "approved") {
+        if (transaction.code_delivered_at) {
+          return { status: "not_found" };
+        }
+
+        const client = await oidcProviderRepository.getClientById(
+          transaction.client_id,
+        );
+        if (!client || client.status !== "active") {
+          return { status: "not_found" };
+        }
+
+        const authorizationCode = createRandomToken(
+          randomBytesForService,
+          AUTHORIZATION_CODE_BYTES,
+        );
+        const codeExpiresAt = new Date(
+          effectiveNow.getTime() + client.authorization_code_ttl_seconds * 1000,
+        ).toISOString();
+        const delivery = await oidcProviderRepository.deliverAuthorizeQrCode({
+          requestId: input.requestId,
+          pollSecretHash: sha256Hex(input.pollSecret),
+          codeHash: hashOpaqueBearerToken(authorizationCode),
+          codeExpiresAt,
+          now: effectiveNow.toISOString(),
+        });
+
+        if (!delivery) {
+          return { status: "not_found" };
+        }
+
+        const redirectUrl = new URL(delivery.redirect_uri);
+        redirectUrl.searchParams.set("code", authorizationCode);
+        if (delivery.state) {
+          redirectUrl.searchParams.set("state", delivery.state);
+        }
+
         return {
           status: "approved",
-          redirectTo: transaction.redirectTo,
-          expiresAt: new Date(transaction.expiresAtMs).toISOString(),
+          redirectTo: redirectUrl.toString(),
+          expiresAt: codeExpiresAt,
         };
       }
 
-      if (transaction.status === "denied" && transaction.redirectTo) {
+      if (transaction.status === "denied") {
+        const authorizationRequest =
+          await oidcProviderRepository.getAuthorizationRequestById(
+            transaction.authorization_request_id,
+          );
+        if (!authorizationRequest) {
+          return { status: "not_found" };
+        }
+
         return {
           status: "denied",
-          redirectTo: transaction.redirectTo,
-          expiresAt: new Date(transaction.expiresAtMs).toISOString(),
+          redirectTo: appendAuthorizeError({
+            redirectUri: authorizationRequest.redirect_uri,
+            error: "access_denied",
+            errorDescription: "The user denied the authorization request.",
+            state: authorizationRequest.state,
+          }),
+          expiresAt: transaction.result_expires_at || transaction.expires_at,
         };
       }
 
       return {
         status: "pending",
-        expiresAt: new Date(transaction.expiresAtMs).toISOString(),
+        expiresAt: transaction.expires_at,
       };
     },
 
@@ -781,23 +932,28 @@ export const createOidcProviderService = (
         }
       | { success: false; status: number; error: string }
     > {
-      const transaction = authorizationQrTransactions.get(input.requestId);
-      if (!transaction) {
-        cleanupAuthorizationQrTransactions();
-        return { success: false, status: 404, error: "authorization_request_not_found" };
+      const effectiveNow = now();
+      const secretHash = sha256Hex(input.secret);
+      const transaction =
+        await oidcProviderRepository.getAuthorizeQrTransactionByRequestId(
+          input.requestId,
+        );
+      const failure = await classifyQrSecretFailure({
+        transaction,
+        secretHash,
+        effectiveNow,
+      });
+      if (failure) {
+        return failure;
       }
 
-      if (transaction.status !== "pending") {
-        return { success: false, status: 409, error: "authorization_request_already_used" };
-      }
-
-      if (transaction.expiresAtMs <= now().getTime()) {
-        authorizationQrTransactions.delete(input.requestId);
-        return { success: false, status: 410, error: "authorization_request_expired" };
-      }
-
-      if (transaction.secretHash !== sha256Hex(input.secret)) {
-        return { success: false, status: 403, error: "authorization_request_secret_invalid" };
+      const request = transaction ? await getQrValidatedRequest(transaction) : null;
+      if (!transaction || !request) {
+        return {
+          success: false,
+          status: 404,
+          error: "authorization_request_not_found",
+        };
       }
 
       const availableClaims = firstPartyClaimsForUser(
@@ -809,61 +965,75 @@ export const createOidcProviderService = (
         label: claim.label,
         description: claim.description,
         value: availableClaims[claim.key],
-        defaultSelected: transaction.request.scopes.includes("profile"),
+        defaultSelected: request.scopes.includes("profile"),
       }));
 
       return {
         success: true,
         body: {
-          requestId: transaction.id,
-          expiresAt: new Date(transaction.expiresAtMs).toISOString(),
+          requestId: transaction.request_id,
+          expiresAt: transaction.expires_at,
           client: {
-            clientId: transaction.request.client.client_id,
-            clientName: transaction.request.client.client_name,
-            sectorIdentifier: transaction.request.client.sector_identifier,
-            clientUri: transaction.request.client.client_uri,
-            logoUri: transaction.request.client.logo_uri,
-            tosUri: transaction.request.client.tos_uri,
-            policyUri: transaction.request.client.policy_uri,
+            clientId: request.client.client_id,
+            clientName: request.client.client_name,
+            sectorIdentifier: request.client.sector_identifier,
+            clientUri: request.client.client_uri,
+            logoUri: request.client.logo_uri,
+            tosUri: request.client.tos_uri,
+            policyUri: request.client.policy_uri,
           },
-          scopes: transaction.request.scopes,
+          scopes: request.scopes,
           claimOptions,
         },
       };
     },
 
-    denyAuthorizationQrTransaction(input: {
+    async denyAuthorizationQrTransaction(input: {
       requestId: string;
       secret: string;
-    }): { success: true } | { success: false; status: number; error: string } {
-      const transaction = authorizationQrTransactions.get(input.requestId);
-      if (!transaction) {
-        cleanupAuthorizationQrTransactions();
-        return { success: false, status: 404, error: "authorization_request_not_found" };
-      }
-
-      if (transaction.status !== "pending") {
-        return { success: false, status: 409, error: "authorization_request_already_used" };
-      }
-
-      if (transaction.expiresAtMs <= now().getTime()) {
-        authorizationQrTransactions.delete(input.requestId);
-        return { success: false, status: 410, error: "authorization_request_expired" };
-      }
-
-      if (transaction.secretHash !== sha256Hex(input.secret)) {
-        return { success: false, status: 403, error: "authorization_request_secret_invalid" };
-      }
-
-      transaction.status = "denied";
-      transaction.redirectTo = appendAuthorizeError({
-        redirectUri: transaction.request.redirectUri,
-        error: "access_denied",
-        errorDescription: "The user denied the authorization request.",
-        state: transaction.request.state,
+    }): Promise<{ success: true } | { success: false; status: number; error: string }> {
+      const effectiveNow = now();
+      const secretHash = sha256Hex(input.secret);
+      const transaction =
+        await oidcProviderRepository.getAuthorizeQrTransactionByRequestId(
+          input.requestId,
+        );
+      const failure = await classifyQrSecretFailure({
+        transaction,
+        secretHash,
+        effectiveNow,
       });
-      transaction.expiresAtMs = now().getTime() + OIDC_AUTHORIZE_QR_APPROVED_RESULT_TTL_MS;
-      authorizationQrTransactions.set(transaction.id, transaction);
+      if (failure) {
+        return failure;
+      }
+
+      const resultExpiresAt = new Date(
+        effectiveNow.getTime() + OIDC_AUTHORIZE_QR_APPROVED_RESULT_TTL_MS,
+      ).toISOString();
+      const denied = await oidcProviderRepository.denyAuthorizeQrTransaction({
+        requestId: input.requestId,
+        secretHash,
+        resultExpiresAt,
+        now: effectiveNow.toISOString(),
+      });
+
+      if (!denied) {
+        const latest =
+          await oidcProviderRepository.getAuthorizeQrTransactionByRequestId(
+            input.requestId,
+          );
+        return (
+          (await classifyQrSecretFailure({
+            transaction: latest,
+            secretHash,
+            effectiveNow,
+          })) || {
+            success: false,
+            status: 409,
+            error: "authorization_request_already_used",
+          }
+        );
+      }
 
       return { success: true };
     },
@@ -875,39 +1045,82 @@ export const createOidcProviderService = (
       authSessionId?: string | null;
       approvedClaims?: Record<string, unknown> | null;
     }): Promise<{ success: true } | { success: false; status: number; error: string }> {
-      const transaction = authorizationQrTransactions.get(input.requestId);
-      if (!transaction) {
-        cleanupAuthorizationQrTransactions();
-        return { success: false, status: 404, error: "authorization_request_not_found" };
+      const effectiveNow = now();
+      const secretHash = sha256Hex(input.secret);
+      const transaction =
+        await oidcProviderRepository.getAuthorizeQrTransactionByRequestId(
+          input.requestId,
+        );
+      const failure = await classifyQrSecretFailure({
+        transaction,
+        secretHash,
+        effectiveNow,
+      });
+      if (failure) {
+        return failure;
       }
 
-      if (transaction.status !== "pending") {
-        return { success: false, status: 409, error: "authorization_request_already_used" };
+      const request = transaction ? await getQrValidatedRequest(transaction) : null;
+      if (!request) {
+        return {
+          success: false,
+          status: 404,
+          error: "authorization_request_not_found",
+        };
       }
 
-      if (transaction.expiresAtMs <= now().getTime()) {
-        authorizationQrTransactions.delete(input.requestId);
-        return { success: false, status: 410, error: "authorization_request_expired" };
-      }
-
-      if (transaction.secretHash !== sha256Hex(input.secret)) {
-        return { success: false, status: 403, error: "authorization_request_secret_invalid" };
-      }
-
-      const approval = await approveValidatedAuthorizationRequest({
-        request: transaction.request,
-        viewer: input.viewer,
+      const pairwiseSubject = await getOrCreatePairwiseSubject(
+        input.viewer.userId,
+        request.client,
+      );
+      const availableClaims = firstPartyClaimsForUser(
+        input.viewer.user,
+        await identityProfileRepository.getByUserId(input.viewer.userId),
+      );
+      const claims = selectApprovedClaims(
+        availableClaims,
+        input.approvedClaims ?? null,
+      );
+      const grant = await oidcProviderRepository.upsertGrant({
+        userId: input.viewer.userId,
+        clientDbId: request.client.id,
+        pairwiseSubjectId: pairwiseSubject.id,
+        scopes: request.scopes,
+        claims,
+      });
+      const resultExpiresAt = new Date(
+        effectiveNow.getTime() + OIDC_AUTHORIZE_QR_APPROVED_RESULT_TTL_MS,
+      ).toISOString();
+      const approved = await oidcProviderRepository.approveAuthorizeQrTransaction({
+        requestId: input.requestId,
+        secretHash,
+        userId: input.viewer.userId,
         authSessionId: input.authSessionId ?? null,
-        approvedClaims: input.approvedClaims ?? null,
+        pairwiseSubjectId: pairwiseSubject.id,
+        grantId: grant.id,
+        approvedAuthGeneration: input.viewer.user.auth_generation,
+        approvedClaims: claims,
+        resultExpiresAt,
+        now: effectiveNow.toISOString(),
       });
 
-      transaction.status = "approved";
-      transaction.redirectTo = approval.redirectTo;
-      // Keep approved transactions briefly so the browser polling the hosted
-      // authorize page can receive the redirect. They are not reusable because
-      // status is no longer pending.
-      transaction.expiresAtMs = now().getTime() + OIDC_AUTHORIZE_QR_APPROVED_RESULT_TTL_MS;
-      authorizationQrTransactions.set(transaction.id, transaction);
+      if (!approved) {
+        const latest =
+          await oidcProviderRepository.getAuthorizeQrTransactionByRequestId(
+            input.requestId,
+          );
+        return (
+          (await classifyQrSecretFailure({
+            transaction: latest,
+            secretHash,
+            effectiveNow,
+          })) || {
+            success: false,
+            status: 409,
+            error: "authorization_request_already_used",
+          }
+        );
+      }
 
       return { success: true };
     },
