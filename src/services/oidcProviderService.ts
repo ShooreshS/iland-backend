@@ -61,6 +61,7 @@ type OidcProviderRepositoryLike = Pick<
   | "insertPairwiseSubject"
   | "getPairwiseSubjectById"
   | "upsertGrant"
+  | "getGrantById"
   | "getGrantByUserAndClient"
   | "insertAuthorizationCode"
   | "getAuthorizationCodeByHash"
@@ -75,6 +76,7 @@ type OidcProviderRepositoryLike = Pick<
   | "revokeAccessTokenByHash"
   | "getRefreshTokenFamilyByTokenHash"
   | "revokeRefreshTokenFamilyById"
+  | "rotateRefreshTokenFamily"
 >;
 
 type OidcSigningKeyRepositoryLike = Pick<
@@ -141,7 +143,7 @@ export type TokenExchangeSuccess = {
     clientId: string;
     userId: string;
     authSessionId: string | null;
-    authorizationRequestId: string;
+    authorizationRequestId: string | null;
     grantId: string;
     scopes: string[];
     issuedRefreshToken: boolean;
@@ -1095,248 +1097,456 @@ export const createOidcProviderService = (
       form: URLSearchParams;
       authorizationHeader: string | null;
     }): Promise<TokenExchangeResult> {
-      const grantType = input.form.get("grant_type");
-      if (grantType !== "authorization_code") {
-        return buildFailure(
-          "unsupported_grant_type",
-          "Only grant_type=authorization_code is supported.",
-        );
-      }
-
-      const code = input.form.get("code")?.trim() || "";
-      const redirectUri = input.form.get("redirect_uri")?.trim() || "";
-      const codeVerifier = input.form.get("code_verifier")?.trim() || "";
+      const grantType = input.form.get("grant_type")?.trim() || "";
       const clientIdFromBody = input.form.get("client_id")?.trim() || "";
       const clientSecretFromBody = input.form.get("client_secret") || "";
       const basicAuth = extractBasicClientAuth(input.authorizationHeader);
       const clientId = basicAuth?.clientId || clientIdFromBody;
       const clientSecret = basicAuth?.clientSecret || clientSecretFromBody;
 
-      if (!code || !redirectUri || !codeVerifier || !clientId) {
-        return buildFailure(
-          "invalid_request",
-          "code, redirect_uri, code_verifier, and client_id are required.",
-        );
-      }
-
-      if (basicAuth && clientIdFromBody && basicAuth.clientId !== clientIdFromBody) {
-        return buildFailure(
-          "invalid_client",
-          "Basic-auth client_id does not match request client_id.",
-          401,
-        );
-      }
-
-      const client = await oidcProviderRepository.getClientByClientId(clientId);
-      if (!client || client.status !== "active") {
-        return buildFailure("invalid_client", "Client was not found.", 401);
-      }
-
-      if (client.client_type === "confidential") {
-        if (!clientSecret) {
+      const authenticateClient = async (): Promise<
+        | { success: true; client: OidcClientRow }
+        | TokenExchangeFailure
+      > => {
+        if (!clientId) {
           return buildFailure(
             "invalid_client",
-            "Confidential client authentication is required.",
+            "Client authentication is required.",
             401,
           );
         }
 
-        const secretRow = await oidcProviderRepository.getActiveSecretByHash({
-          clientDbId: client.id,
-          secretHash: sha256Hex(clientSecret),
-        });
-        if (!secretRow) {
-          return buildFailure("invalid_client", "Client secret is invalid.", 401);
+        if (
+          basicAuth &&
+          clientIdFromBody &&
+          basicAuth.clientId !== clientIdFromBody
+        ) {
+          return buildFailure(
+            "invalid_client",
+            "Basic-auth client_id does not match request client_id.",
+            401,
+          );
         }
-        await oidcProviderRepository.touchClientSecret(secretRow.id);
-      }
 
-      const authorizationCode =
-        await oidcProviderRepository.getAuthorizationCodeByHash(
-          hashOpaqueBearerToken(code),
-        );
-      if (!authorizationCode || authorizationCode.status !== "active") {
-        return buildFailure(
-          "invalid_grant",
-          "Authorization code is not active or does not exist.",
-        );
-      }
+        const client = await oidcProviderRepository.getClientByClientId(clientId);
+        if (!client || client.status !== "active") {
+          return buildFailure("invalid_client", "Client was not found.", 401);
+        }
 
-      if (authorizationCode.client_id !== client.id) {
-        return buildFailure(
-          "invalid_grant",
-          "Authorization code was not issued to this client.",
-        );
-      }
+        if (client.client_type === "confidential") {
+          if (!clientSecret) {
+            return buildFailure(
+              "invalid_client",
+              "Confidential client authentication is required.",
+              401,
+            );
+          }
 
-      if (authorizationCode.redirect_uri !== redirectUri) {
-        return buildFailure(
-          "invalid_grant",
-          "redirect_uri does not match the authorization request.",
-        );
-      }
+          const secretRow = await oidcProviderRepository.getActiveSecretByHash({
+            clientDbId: client.id,
+            secretHash: sha256Hex(clientSecret),
+          });
+          if (!secretRow) {
+            return buildFailure("invalid_client", "Client secret is invalid.", 401);
+          }
+          await oidcProviderRepository.touchClientSecret(secretRow.id);
+        }
 
-      if (new Date(authorizationCode.expires_at).getTime() <= now().getTime()) {
-        await oidcProviderRepository.expireAuthorizationCode(authorizationCode.id);
-        return buildFailure("invalid_grant", "Authorization code has expired.");
-      }
-
-      if (authorizationCode.code_challenge_method !== "S256") {
-        return buildFailure("invalid_grant", "Unsupported PKCE method on code.");
-      }
-
-      if (sha256Base64Url(codeVerifier) !== authorizationCode.code_challenge) {
-        return buildFailure("invalid_grant", "PKCE verification failed.");
-      }
-
-      const user = await userRepository.getById(authorizationCode.user_id);
-      if (!user || user.account_status !== "active") {
-        return buildFailure("invalid_grant", "Authorization user is not active.");
-      }
-
-      if (user.auth_generation !== authorizationCode.auth_generation) {
-        return buildFailure(
-          "invalid_grant",
-          "Authorization code is stale for the current auth generation.",
-        );
-      }
-
-      const pairwiseSubject = await oidcProviderRepository.getPairwiseSubjectById(
-        authorizationCode.pairwise_subject_id,
-      );
-      if (!pairwiseSubject) {
-        return buildFailure("server_error", "Pairwise subject was not found.", 500);
-      }
-
-      const signingKeys = await oidcSigningKeyRepository.listPublicSigningKeys();
-      const signingKey = signingKeys.find((row) => isUsableSigningKey(row, now()));
-      const privateKeyPem = signingKey ? loadPrivateKeyForSigningKey(signingKey) : null;
-      if (!signingKey || !privateKeyPem) {
-        return buildFailure(
-          "server_error",
-          "No active OIDC RS256 signing key is configured for token issuance.",
-          500,
-        );
-      }
-
-      const consumedCode = await oidcProviderRepository.consumeAuthorizationCode(
-        authorizationCode.id,
-      );
-      if (!consumedCode) {
-        return buildFailure(
-          "invalid_grant",
-          "Authorization code was already consumed.",
-        );
-      }
-      await oidcProviderRepository.consumeAuthorizationRequest(
-        authorizationCode.authorization_request_id,
-      );
-
-      const profile = await identityProfileRepository.getByUserId(user.id);
-      const userClaims = firstPartyClaimsForUser(user, profile);
-      const grant =
-        (await oidcProviderRepository.getGrantByUserAndClient({
-          userId: user.id,
-          clientDbId: client.id,
-        })) ||
-        (await oidcProviderRepository.upsertGrant({
-          userId: user.id,
-          clientDbId: client.id,
-          pairwiseSubjectId: pairwiseSubject.id,
-          scopes: authorizationCode.scopes,
-          claims: userClaims,
-        }));
-      const tokenClaims = grant.claims || userClaims;
-      // Phase 2 security decision:
-      // ID tokens are authentication/assurance artifacts only. Mutable public
-      // profile and verification proof claims stay in the opaque access-token
-      // snapshot and are released through UserInfo after RP/user consent. This
-      // keeps the RP integration aligned with future proof/ZKP presentation
-      // flows instead of training RPs to treat ID tokens as proof containers.
-      const issuedAtSeconds = Math.floor(now().getTime() / 1000);
-      const expiresAtSeconds = issuedAtSeconds + client.access_token_ttl_seconds;
-      const accessToken = createOpaqueBearerToken();
-      const idToken = signJwtRs256(
-        {
-          alg: "RS256",
-          kid: signingKey.kid,
-          typ: "JWT",
-        },
-        {
-          iss: issuer,
-          sub: pairwiseSubject.subject_identifier,
-          aud: client.client_id,
-          exp: expiresAtSeconds,
-          iat: issuedAtSeconds,
-          auth_time: Math.floor(
-            new Date(authorizationCode.created_at).getTime() / 1000,
-          ),
-          ...(authorizationCode.nonce ? { nonce: authorizationCode.nonce } : {}),
-          amr: ["civicos_app"],
-          acr: profile?.face_verified_at
-            ? "urn:civicos:verified:passport-face"
-            : "urn:civicos:verified:app-session",
-        },
-        privateKeyPem,
-      );
-
-      const tokenResponse: TokenExchangeSuccess["body"] = {
-        access_token: accessToken.token,
-        token_type: "Bearer",
-        expires_in: client.access_token_ttl_seconds,
-        scope: authorizationCode.scopes.join(" "),
-        id_token: idToken,
+        return { success: true, client };
       };
 
-      await oidcProviderRepository.insertAccessToken({
-        tokenHash: accessToken.tokenHash,
-        grantId: grant.id,
-        authSessionId: authorizationCode.auth_session_id,
-        clientDbId: client.id,
-        userId: user.id,
-        pairwiseSubjectId: pairwiseSubject.id,
-        scopes: authorizationCode.scopes,
-        claims: tokenClaims,
-        authGeneration: user.auth_generation,
-        expiresAt: new Date(expiresAtSeconds * 1000).toISOString(),
-      });
+      if (grantType === "authorization_code") {
+        const code = input.form.get("code")?.trim() || "";
+        const redirectUri = input.form.get("redirect_uri")?.trim() || "";
+        const codeVerifier = input.form.get("code_verifier")?.trim() || "";
 
-      let issuedRefreshToken = false;
-      if (authorizationCode.scopes.includes("offline_access")) {
-        const refreshToken = createRandomToken(
+        if (!code || !redirectUri || !codeVerifier || !clientId) {
+          return buildFailure(
+            "invalid_request",
+            "code, redirect_uri, code_verifier, and client_id are required.",
+          );
+        }
+
+        const clientResult = await authenticateClient();
+        if (!clientResult.success) {
+          return clientResult;
+        }
+        const { client } = clientResult;
+
+        const authorizationCode =
+          await oidcProviderRepository.getAuthorizationCodeByHash(
+            hashOpaqueBearerToken(code),
+          );
+        if (!authorizationCode || authorizationCode.status !== "active") {
+          return buildFailure(
+            "invalid_grant",
+            "Authorization code is not active or does not exist.",
+          );
+        }
+
+        if (authorizationCode.client_id !== client.id) {
+          return buildFailure(
+            "invalid_grant",
+            "Authorization code was not issued to this client.",
+          );
+        }
+
+        if (authorizationCode.redirect_uri !== redirectUri) {
+          return buildFailure(
+            "invalid_grant",
+            "redirect_uri does not match the authorization request.",
+          );
+        }
+
+        if (new Date(authorizationCode.expires_at).getTime() <= now().getTime()) {
+          await oidcProviderRepository.expireAuthorizationCode(authorizationCode.id);
+          return buildFailure("invalid_grant", "Authorization code has expired.");
+        }
+
+        if (authorizationCode.code_challenge_method !== "S256") {
+          return buildFailure("invalid_grant", "Unsupported PKCE method on code.");
+        }
+
+        if (sha256Base64Url(codeVerifier) !== authorizationCode.code_challenge) {
+          return buildFailure("invalid_grant", "PKCE verification failed.");
+        }
+
+        const user = await userRepository.getById(authorizationCode.user_id);
+        if (!user || user.account_status !== "active") {
+          return buildFailure("invalid_grant", "Authorization user is not active.");
+        }
+
+        if (user.auth_generation !== authorizationCode.auth_generation) {
+          return buildFailure(
+            "invalid_grant",
+            "Authorization code is stale for the current auth generation.",
+          );
+        }
+
+        const pairwiseSubject = await oidcProviderRepository.getPairwiseSubjectById(
+          authorizationCode.pairwise_subject_id,
+        );
+        if (!pairwiseSubject) {
+          return buildFailure("server_error", "Pairwise subject was not found.", 500);
+        }
+
+        const signingKeys = await oidcSigningKeyRepository.listPublicSigningKeys();
+        const signingKey = signingKeys.find((row) => isUsableSigningKey(row, now()));
+        const privateKeyPem = signingKey
+          ? loadPrivateKeyForSigningKey(signingKey)
+          : null;
+        if (!signingKey || !privateKeyPem) {
+          return buildFailure(
+            "server_error",
+            "No active OIDC RS256 signing key is configured for token issuance.",
+            500,
+          );
+        }
+
+        const consumedCode = await oidcProviderRepository.consumeAuthorizationCode(
+          authorizationCode.id,
+        );
+        if (!consumedCode) {
+          return buildFailure(
+            "invalid_grant",
+            "Authorization code was already consumed.",
+          );
+        }
+        await oidcProviderRepository.consumeAuthorizationRequest(
+          authorizationCode.authorization_request_id,
+        );
+
+        const profile = await identityProfileRepository.getByUserId(user.id);
+        const userClaims = firstPartyClaimsForUser(user, profile);
+        const grant =
+          (await oidcProviderRepository.getGrantByUserAndClient({
+            userId: user.id,
+            clientDbId: client.id,
+          })) ||
+          (await oidcProviderRepository.upsertGrant({
+            userId: user.id,
+            clientDbId: client.id,
+            pairwiseSubjectId: pairwiseSubject.id,
+            scopes: authorizationCode.scopes,
+            claims: userClaims,
+          }));
+        const tokenClaims = grant.claims || userClaims;
+        // Phase 2 security decision:
+        // ID tokens are authentication/assurance artifacts only. Mutable public
+        // profile and verification proof claims stay in the opaque access-token
+        // snapshot and are released through UserInfo after RP/user consent. This
+        // keeps the RP integration aligned with future proof/ZKP presentation
+        // flows instead of training RPs to treat ID tokens as proof containers.
+        const issuedAtSeconds = Math.floor(now().getTime() / 1000);
+        const expiresAtSeconds = issuedAtSeconds + client.access_token_ttl_seconds;
+        const accessToken = createOpaqueBearerToken();
+        const idToken = signJwtRs256(
+          {
+            alg: "RS256",
+            kid: signingKey.kid,
+            typ: "JWT",
+          },
+          {
+            iss: issuer,
+            sub: pairwiseSubject.subject_identifier,
+            aud: client.client_id,
+            exp: expiresAtSeconds,
+            iat: issuedAtSeconds,
+            auth_time: Math.floor(
+              new Date(authorizationCode.created_at).getTime() / 1000,
+            ),
+            ...(authorizationCode.nonce ? { nonce: authorizationCode.nonce } : {}),
+            amr: ["civicos_app"],
+            acr: profile?.face_verified_at
+              ? "urn:civicos:verified:passport-face"
+              : "urn:civicos:verified:app-session",
+          },
+          privateKeyPem,
+        );
+
+        const tokenResponse: TokenExchangeSuccess["body"] = {
+          access_token: accessToken.token,
+          token_type: "Bearer",
+          expires_in: client.access_token_ttl_seconds,
+          scope: authorizationCode.scopes.join(" "),
+          id_token: idToken,
+        };
+
+        await oidcProviderRepository.insertAccessToken({
+          tokenHash: accessToken.tokenHash,
+          grantId: grant.id,
+          authSessionId: authorizationCode.auth_session_id,
+          clientDbId: client.id,
+          userId: user.id,
+          pairwiseSubjectId: pairwiseSubject.id,
+          scopes: authorizationCode.scopes,
+          claims: tokenClaims,
+          authGeneration: user.auth_generation,
+          expiresAt: new Date(expiresAtSeconds * 1000).toISOString(),
+        });
+
+        let issuedRefreshToken = false;
+        if (authorizationCode.scopes.includes("offline_access")) {
+          const refreshToken = createRandomToken(
+            randomBytesForService,
+            OIDC_REFRESH_TOKEN_BYTES,
+          );
+
+          await oidcProviderRepository.insertRefreshTokenFamily({
+            grantId: grant.id,
+            authSessionId: authorizationCode.auth_session_id,
+            clientDbId: client.id,
+            userId: user.id,
+            currentTokenHash: hashOpaqueBearerToken(refreshToken),
+            authGeneration: user.auth_generation,
+            expiresAt: new Date(
+              now().getTime() +
+                client.refresh_token_ttl_days * 24 * 60 * 60 * 1000,
+            ).toISOString(),
+          });
+          tokenResponse.refresh_token = refreshToken;
+          issuedRefreshToken = true;
+        }
+
+        return {
+          success: true,
+          body: tokenResponse,
+          audit: {
+            clientDbId: client.id,
+            clientId: client.client_id,
+            userId: user.id,
+            authSessionId: authorizationCode.auth_session_id,
+            authorizationRequestId: authorizationCode.authorization_request_id,
+            grantId: grant.id,
+            scopes: authorizationCode.scopes,
+            issuedRefreshToken,
+          },
+        };
+      }
+
+      if (grantType === "refresh_token") {
+        const refreshToken = input.form.get("refresh_token")?.trim() || "";
+        if (!refreshToken || !clientId) {
+          return buildFailure(
+            "invalid_request",
+            "refresh_token and client_id are required.",
+          );
+        }
+
+        const clientResult = await authenticateClient();
+        if (!clientResult.success) {
+          return clientResult;
+        }
+        const { client } = clientResult;
+        const tokenHash = hashOpaqueBearerToken(refreshToken);
+        const refreshFamily =
+          await oidcProviderRepository.getRefreshTokenFamilyByTokenHash({
+            tokenHash,
+            clientDbId: client.id,
+          });
+
+        if (!refreshFamily) {
+          return buildFailure(
+            "invalid_grant",
+            "Refresh token is not active or does not exist.",
+          );
+        }
+
+        if (refreshFamily.current_token_hash !== tokenHash) {
+          if (
+            refreshFamily.status === "active" &&
+            refreshFamily.previous_token_hash === tokenHash
+          ) {
+            // Rotation is single-use. Reuse of the previous token is treated as
+            // replay and revokes the whole family, forcing a fresh CivicOS QR
+            // login before the RP can obtain more tokens.
+            await oidcProviderRepository.revokeRefreshTokenFamilyById({
+              familyId: refreshFamily.id,
+              status: "reused",
+              revocationReason: "refresh_token_reuse_detected",
+            });
+          }
+
+          return buildFailure("invalid_grant", "Refresh token was already used.");
+        }
+
+        if (refreshFamily.status !== "active") {
+          return buildFailure(
+            "invalid_grant",
+            "Refresh token family is not active.",
+          );
+        }
+
+        if (new Date(refreshFamily.expires_at).getTime() <= now().getTime()) {
+          await oidcProviderRepository.revokeRefreshTokenFamilyById({
+            familyId: refreshFamily.id,
+            status: "expired",
+            revocationReason: "refresh_token_expired",
+          });
+          return buildFailure("invalid_grant", "Refresh token has expired.");
+        }
+
+        const user = await userRepository.getById(refreshFamily.user_id);
+        if (!user || user.account_status !== "active") {
+          return buildFailure("invalid_grant", "Refresh token user is not active.");
+        }
+
+        if (user.auth_generation !== refreshFamily.auth_generation) {
+          return buildFailure(
+            "invalid_grant",
+            "Refresh token is stale for the current auth generation.",
+          );
+        }
+
+        const grant = await oidcProviderRepository.getGrantById(
+          refreshFamily.grant_id,
+        );
+        if (!grant || grant.status !== "active" || grant.client_id !== client.id) {
+          return buildFailure("invalid_grant", "Refresh token grant is not active.");
+        }
+
+        const pairwiseSubject = await oidcProviderRepository.getPairwiseSubjectById(
+          grant.pairwise_subject_id,
+        );
+        if (!pairwiseSubject) {
+          return buildFailure("server_error", "Pairwise subject was not found.", 500);
+        }
+
+        const signingKeys = await oidcSigningKeyRepository.listPublicSigningKeys();
+        const signingKey = signingKeys.find((row) => isUsableSigningKey(row, now()));
+        const privateKeyPem = signingKey
+          ? loadPrivateKeyForSigningKey(signingKey)
+          : null;
+        if (!signingKey || !privateKeyPem) {
+          return buildFailure(
+            "server_error",
+            "No active OIDC RS256 signing key is configured for token issuance.",
+            500,
+          );
+        }
+
+        const profile = await identityProfileRepository.getByUserId(user.id);
+        const issuedAtSeconds = Math.floor(now().getTime() / 1000);
+        const expiresAtSeconds = issuedAtSeconds + client.access_token_ttl_seconds;
+        const accessToken = createOpaqueBearerToken();
+        const idToken = signJwtRs256(
+          {
+            alg: "RS256",
+            kid: signingKey.kid,
+            typ: "JWT",
+          },
+          {
+            iss: issuer,
+            sub: pairwiseSubject.subject_identifier,
+            aud: client.client_id,
+            exp: expiresAtSeconds,
+            iat: issuedAtSeconds,
+            auth_time: Math.floor(
+              new Date(refreshFamily.created_at).getTime() / 1000,
+            ),
+            amr: ["civicos_app"],
+            acr: profile?.face_verified_at
+              ? "urn:civicos:verified:passport-face"
+              : "urn:civicos:verified:app-session",
+          },
+          privateKeyPem,
+        );
+
+        const nextRefreshToken = createRandomToken(
           randomBytesForService,
           OIDC_REFRESH_TOKEN_BYTES,
         );
-
-        await oidcProviderRepository.insertRefreshTokenFamily({
-          grantId: grant.id,
-          authSessionId: authorizationCode.auth_session_id,
-          clientDbId: client.id,
-          userId: user.id,
-          currentTokenHash: hashOpaqueBearerToken(refreshToken),
-          authGeneration: user.auth_generation,
-          expiresAt: new Date(
-            now().getTime() + client.refresh_token_ttl_days * 24 * 60 * 60 * 1000,
-          ).toISOString(),
+        const rotatedFamily = await oidcProviderRepository.rotateRefreshTokenFamily({
+          familyId: refreshFamily.id,
+          previousTokenHash: tokenHash,
+          currentTokenHash: hashOpaqueBearerToken(nextRefreshToken),
+          rotationCounter: refreshFamily.rotation_counter + 1,
         });
-        tokenResponse.refresh_token = refreshToken;
-        issuedRefreshToken = true;
+
+        if (!rotatedFamily) {
+          return buildFailure("invalid_grant", "Refresh token was already used.");
+        }
+
+        await oidcProviderRepository.insertAccessToken({
+          tokenHash: accessToken.tokenHash,
+          userId: user.id,
+          grantId: grant.id,
+          authSessionId: refreshFamily.auth_session_id,
+          clientDbId: client.id,
+          pairwiseSubjectId: pairwiseSubject.id,
+          scopes: grant.scopes,
+          claims: grant.claims,
+          authGeneration: user.auth_generation,
+          expiresAt: new Date(expiresAtSeconds * 1000).toISOString(),
+        });
+
+        return {
+          success: true,
+          body: {
+            access_token: accessToken.token,
+            token_type: "Bearer",
+            expires_in: client.access_token_ttl_seconds,
+            scope: grant.scopes.join(" "),
+            id_token: idToken,
+            refresh_token: nextRefreshToken,
+          },
+          audit: {
+            clientDbId: client.id,
+            clientId: client.client_id,
+            userId: user.id,
+            authSessionId: refreshFamily.auth_session_id,
+            authorizationRequestId: null,
+            grantId: grant.id,
+            scopes: grant.scopes,
+            issuedRefreshToken: true,
+          },
+        };
       }
 
-      return {
-        success: true,
-        body: tokenResponse,
-        audit: {
-          clientDbId: client.id,
-          clientId: client.client_id,
-          userId: user.id,
-          authSessionId: authorizationCode.auth_session_id,
-          authorizationRequestId: authorizationCode.authorization_request_id,
-          grantId: grant.id,
-          scopes: authorizationCode.scopes,
-          issuedRefreshToken,
-        },
-      };
+      return buildFailure(
+        "unsupported_grant_type",
+        "Only grant_type=authorization_code and grant_type=refresh_token are supported.",
+      );
     },
 
     async getUserInfo(input: {

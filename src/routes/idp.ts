@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import { createRequire } from "node:module";
 
 import { json } from "../middleware/json";
@@ -8,6 +8,7 @@ import defaultAuthSessionRepository from "../repositories/authSessionRepository"
 import defaultOidcAuditEventRepository, {
   type NewOidcAuditEventRow,
 } from "../repositories/oidcAuditEventRepository";
+import defaultOidcRateLimitRepository from "../repositories/oidcRateLimitRepository";
 import defaultOidcDiscoveryService from "../services/oidcDiscoveryService";
 import defaultOidcProviderService from "../services/oidcProviderService";
 import type { RouteDefinition } from "../types/http";
@@ -55,6 +56,10 @@ export type IdpRouteDependencies = {
     typeof defaultOidcAuditEventRepository,
     "insert"
   > | null;
+  oidcRateLimitRepositoryLike?: Pick<
+    typeof defaultOidcRateLimitRepository,
+    "consume"
+  > | null;
   requireViewerFn?: typeof defaultRequireViewer;
   authSessionRepositoryLike?: Pick<
     typeof defaultAuthSessionRepository,
@@ -68,20 +73,17 @@ const NO_STORE_HEADERS = {
 };
 
 const OIDC_RATE_LIMITS = {
-  authorize: { limit: 80, windowMs: 60_000 },
-  authorizeApprove: { limit: 30, windowMs: 60_000 },
-  token: { limit: 40, windowMs: 60_000 },
+  authorize: { limit: 80, windowSeconds: 60 },
+  authorizeStatus: { limit: 180, windowSeconds: 60 },
+  authorizePreview: { limit: 60, windowSeconds: 60 },
+  authorizeApprove: { limit: 30, windowSeconds: 60 },
+  authorizeDeny: { limit: 30, windowSeconds: 60 },
+  token: { limit: 40, windowSeconds: 60 },
+  userInfo: { limit: 120, windowSeconds: 60 },
+  revoke: { limit: 60, windowSeconds: 60 },
 } as const;
 
 type OidcRateLimitName = keyof typeof OIDC_RATE_LIMITS;
-
-type RateLimitBucket = {
-  count: number;
-  resetAtMs: number;
-};
-
-const rateLimitBuckets = new Map<string, RateLimitBucket>();
-let lastRateLimitPruneMs = 0;
 
 const hashAuditValue = (value: string | null): string | null => {
   const normalized = value?.trim();
@@ -104,56 +106,56 @@ const getAuditHashes = (request: Request) => ({
   user_agent_hash: hashAuditValue(request.headers.get("user-agent")),
 });
 
-const consumeRateLimit = (input: {
+type RateLimitAllowed = { allowed: true };
+type RateLimitDenied = {
+  allowed: false;
+  retryAfterSeconds: number;
+  limit: number;
+  resetAtMs: number;
+};
+type RateLimitDecision = RateLimitAllowed | RateLimitDenied;
+
+const consumeRateLimit = async (input: {
+  repository: Pick<typeof defaultOidcRateLimitRepository, "consume"> | null;
   request: Request;
   name: OidcRateLimitName;
   subject?: string | null;
-}):
-  | { allowed: true }
-  | {
-      allowed: false;
-      retryAfterSeconds: number;
-      limit: number;
-      resetAtMs: number;
-    } => {
-  const policy = OIDC_RATE_LIMITS[input.name];
-  const subject = input.subject?.trim() || "unknown";
-  const key = `${input.name}:${getClientAddress(input.request)}:${subject}`;
-  const nowMs = Date.now();
-
-  if (nowMs - lastRateLimitPruneMs > 60_000) {
-    lastRateLimitPruneMs = nowMs;
-    for (const [bucketKey, bucket] of rateLimitBuckets.entries()) {
-      if (bucket.resetAtMs <= nowMs) {
-        rateLimitBuckets.delete(bucketKey);
-      }
-    }
-  }
-
-  const existing = rateLimitBuckets.get(key);
-
-  if (!existing || existing.resetAtMs <= nowMs) {
-    rateLimitBuckets.set(key, {
-      count: 1,
-      resetAtMs: nowMs + policy.windowMs,
-    });
+}): Promise<RateLimitDecision> => {
+  if (!input.repository) {
+    // Unit tests can explicitly disable persistence. Production routes use the
+    // default DB-backed repository so Railway replicas share the same buckets.
     return { allowed: true };
   }
 
-  if (existing.count >= policy.limit) {
-    return {
-      allowed: false,
-      retryAfterSeconds: Math.max(1, Math.ceil((existing.resetAtMs - nowMs) / 1000)),
-      limit: policy.limit,
-      resetAtMs: existing.resetAtMs,
-    };
+  const policy = OIDC_RATE_LIMITS[input.name];
+  const subject = input.subject?.trim() || "unknown";
+  const ipHash = hashAuditValue(getClientAddress(input.request)) || "unknown";
+  const subjectHash = hashAuditValue(subject) || "unknown";
+  const bucketKey = `oidc:${input.name}:${ipHash}:${subjectHash}`;
+  const decision = await input.repository.consume({
+    bucketKey,
+    limit: policy.limit,
+    windowSeconds: policy.windowSeconds,
+  });
+
+  if (decision.allowed) {
+    return { allowed: true };
   }
 
-  existing.count += 1;
-  return { allowed: true };
+  const resetAtMs = Date.parse(decision.resetAt);
+
+  return {
+    allowed: false,
+    retryAfterSeconds: Math.max(
+      1,
+      Math.ceil(((Number.isFinite(resetAtMs) ? resetAtMs : Date.now()) - Date.now()) / 1000),
+    ),
+    limit: policy.limit,
+    resetAtMs: Number.isFinite(resetAtMs) ? resetAtMs : Date.now() + policy.windowSeconds * 1000,
+  };
 };
 
-const rateLimitResponse = (decision: Exclude<ReturnType<typeof consumeRateLimit>, { allowed: true }>) =>
+const rateLimitResponse = (decision: RateLimitDenied) =>
   json(
     {
       error: "rate_limited",
@@ -257,12 +259,25 @@ const createQrSvgDataUrl = async (value: string): Promise<string> => {
   return `data:image/svg+xml;base64,${Buffer.from(svg, "utf8").toString("base64")}`;
 };
 
+const originFromUrl = (value: string | null | undefined): string | null => {
+  if (!value) {
+    return null;
+  }
+
+  try {
+    return new URL(value).origin;
+  } catch {
+    return null;
+  }
+};
+
 const renderAuthorizeQrPage = async (input: {
   clientName: string;
   scopes: string[];
   expiresAt: string;
   qrPayload: Record<string, unknown>;
   statusUrl: string;
+  frameTargetOrigin: string;
 }): Promise<Response> => {
   const qrPayloadText = JSON.stringify(input.qrPayload);
   const qrSvgDataUrl = await createQrSvgDataUrl(qrPayloadText);
@@ -273,6 +288,19 @@ const renderAuthorizeQrPage = async (input: {
   const escapedExpiresAt = escapeHtml(input.expiresAt);
   const escapedAppLinkUrl = escapeHtml(appLinkUrl.toString());
   const statusUrlJson = JSON.stringify(input.statusUrl);
+  const frameTargetOriginJson = JSON.stringify(input.frameTargetOrigin);
+  const issuerOrigin = originFromUrl(input.statusUrl) || "'self'";
+  const cspNonce = randomBytes(16).toString("base64");
+  const csp = [
+    "default-src 'none'",
+    `connect-src ${issuerOrigin}`,
+    "img-src data:",
+    `style-src 'nonce-${cspNonce}'`,
+    `script-src 'nonce-${cspNonce}'`,
+    `frame-ancestors ${input.frameTargetOrigin}`,
+    "base-uri 'none'",
+    "form-action 'none'",
+  ].join("; ");
 
   return new Response(
     `<!doctype html>
@@ -281,7 +309,7 @@ const renderAuthorizeQrPage = async (input: {
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>CivicOS authorization</title>
-    <style>
+    <style nonce="${cspNonce}">
       :root { color-scheme: light dark; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
       body { margin: 0; min-height: 100vh; display: grid; place-items: center; background: #f4f6fb; color: #101828; }
       main { width: min(92vw, 440px); padding: 28px; border-radius: 24px; background: #fff; box-shadow: 0 24px 80px rgba(16, 24, 40, 0.14); text-align: center; }
@@ -312,9 +340,10 @@ const renderAuthorizeQrPage = async (input: {
         <div>Expires: <code>${escapedExpiresAt}</code></div>
       </div>
     </main>
-    <script>
+    <script nonce="${cspNonce}">
       const statusElement = document.getElementById("status");
       const statusUrl = ${statusUrlJson};
+      const frameTargetOrigin = ${frameTargetOriginJson};
       let stopped = false;
       async function poll() {
         if (stopped) return;
@@ -336,7 +365,7 @@ const renderAuthorizeQrPage = async (input: {
               window.parent.postMessage({
                 type: "civicos.oidc.authorize.redirect",
                 redirectTo: result.redirectTo
-              }, "*");
+              }, frameTargetOrigin);
             }
             window.location.assign(result.redirectTo);
             return;
@@ -348,7 +377,7 @@ const renderAuthorizeQrPage = async (input: {
               window.parent.postMessage({
                 type: "civicos.oidc.authorize.redirect",
                 redirectTo: result.redirectTo
-              }, "*");
+              }, frameTargetOrigin);
             }
             window.location.assign(result.redirectTo);
             return;
@@ -367,6 +396,11 @@ const renderAuthorizeQrPage = async (input: {
       status: 200,
       headers: {
         "content-type": "text/html; charset=utf-8",
+        "content-security-policy": csp,
+        "referrer-policy": "no-referrer",
+        "x-content-type-options": "nosniff",
+        "permissions-policy":
+          "camera=(), microphone=(), geolocation=(), payment=(), usb=()",
         ...NO_STORE_HEADERS,
       },
     },
@@ -387,6 +421,10 @@ export const createIdpRoutes = (
     dependencies.oidcAuditEventRepositoryLike === undefined
       ? defaultOidcAuditEventRepository
       : dependencies.oidcAuditEventRepositoryLike;
+  const oidcRateLimitRepository =
+    dependencies.oidcRateLimitRepositoryLike === undefined
+      ? defaultOidcRateLimitRepository
+      : dependencies.oidcRateLimitRepositoryLike;
 
   const writeAuditEvent = async (
     request: Request,
@@ -438,7 +476,8 @@ export const createIdpRoutes = (
     path: "/idp/authorize",
     handler: async ({ request, url }) => {
       const requestedClientId = url.searchParams.get("client_id")?.trim() || null;
-      const authorizeLimit = consumeRateLimit({
+      const authorizeLimit = await consumeRateLimit({
+        repository: oidcRateLimitRepository,
         request,
         name: "authorize",
         subject: requestedClientId,
@@ -489,87 +528,85 @@ export const createIdpRoutes = (
         );
       }
 
-      const viewerResult = await requireViewer(request);
-      if (!viewerResult.ok) {
-        // Hosted authorize UI:
-        // Browser requests from relying parties do not carry the app bearer
-        // token. We therefore render a short-lived QR challenge. The CivicOS app
-        // scans it and approves through /idp/authorize/approve with the current
-        // first-party session, then this page polls and redirects the browser
-        // back to the RP with a normal authorization code.
-        const qrTransaction =
-          await oidcProviderService.createAuthorizationQrTransaction(
-            validation.request,
-          );
-        const issuer = oidcDiscoveryService.getOpenIdConfiguration().issuer;
-        // Railway may pass the upstream request URL to Bun as http:// even when
-        // the public browser URL is https://. Build browser-visible IdP URLs
-        // from the configured issuer so the QR page never performs mixed-content
-        // polling from an HTTPS iframe.
-        const statusUrl = new URL(
-          "authorize/status",
-          issuer.endsWith("/") ? issuer : `${issuer}/`,
+      // Hosted authorize UI:
+      // Even if a browser sends a first-party bearer token, RP authorization must
+      // not silently approve claims. Every RP login creates a short-lived QR/app
+      // handoff so the CivicOS app shows the explicit consent and claim-selection
+      // screen before issuing an authorization code.
+      const qrTransaction =
+        await oidcProviderService.createAuthorizationQrTransaction(
+          validation.request,
         );
-        statusUrl.searchParams.set("requestId", qrTransaction.requestId);
-        statusUrl.searchParams.set("pollSecret", qrTransaction.pollSecret);
-
-        await writeAuditEvent(request, {
-          client_id: validation.request.client.id,
-          event_type: "oidc_authorize_qr_created",
-          metadata: {
-            clientId: validation.request.client.client_id,
-            requestId: qrTransaction.requestId,
-            scopes: validation.request.scopes,
-          },
-        });
-
-        return renderAuthorizeQrPage({
-          clientName: validation.request.client.client_name,
-          scopes: validation.request.scopes,
-          expiresAt: qrTransaction.expiresAt,
-          qrPayload: qrTransaction.qrPayload,
-          statusUrl: statusUrl.toString(),
-        });
-      }
-
-      const rawAccessToken = parseBearerToken(request);
-      const authSession = rawAccessToken
-        ? await authSessionRepository.getByAccessTokenHash(
-            hashOpaqueBearerToken(rawAccessToken),
-          )
-        : null;
-
-      const result = await oidcProviderService.approveAuthorizationRequest({
-        request: validation.request,
-        viewer: viewerResult.viewer,
-        authSessionId:
-          authSession?.user_id === viewerResult.viewer.userId ? authSession.id : null,
-      });
+      const issuer = oidcDiscoveryService.getOpenIdConfiguration().issuer;
+      // Railway may pass the upstream request URL to Bun as http:// even when
+      // the public browser URL is https://. Build browser-visible IdP URLs
+      // from the configured issuer so the QR page never performs mixed-content
+      // polling from an HTTPS iframe.
+      const statusUrl = new URL(
+        "authorize/status",
+        issuer.endsWith("/") ? issuer : `${issuer}/`,
+      );
+      statusUrl.searchParams.set("requestId", qrTransaction.requestId);
+      statusUrl.searchParams.set("pollSecret", qrTransaction.pollSecret);
 
       await writeAuditEvent(request, {
-        user_id: viewerResult.viewer.userId,
         client_id: validation.request.client.id,
-        auth_session_id:
-          authSession?.user_id === viewerResult.viewer.userId ? authSession.id : null,
-        event_type: "oidc_authorize_direct_approved",
+        event_type: "oidc_authorize_qr_created",
         metadata: {
           clientId: validation.request.client.client_id,
+          requestId: qrTransaction.requestId,
           scopes: validation.request.scopes,
         },
       });
 
-      return redirect(result.redirectTo);
+      const frameTargetOrigin =
+        originFromUrl(validation.request.client.client_uri) ||
+        originFromUrl(validation.request.redirectUri) ||
+        new URL(validation.request.redirectUri).origin;
+
+      return renderAuthorizeQrPage({
+        clientName: validation.request.client.client_name,
+        scopes: validation.request.scopes,
+        expiresAt: qrTransaction.expiresAt,
+        qrPayload: qrTransaction.qrPayload,
+        statusUrl: statusUrl.toString(),
+        frameTargetOrigin,
+      });
     },
   };
 
   const authorizeStatusRoute: RouteDefinition = {
     method: "GET",
     path: "/idp/authorize/status",
-    handler: async ({ url }) => {
+    handler: async ({ request, url }) => {
       const requestId = url.searchParams.get("requestId")?.trim() || "";
       const pollSecret = url.searchParams.get("pollSecret")?.trim() || "";
+      const statusLimit = await consumeRateLimit({
+        repository: oidcRateLimitRepository,
+        request,
+        name: "authorizeStatus",
+        subject: requestId || "missing-request-id",
+      });
+      if (!statusLimit.allowed) {
+        await writeAuditEvent(request, {
+          event_type: "oidc_authorize_status_rate_limited",
+          metadata: {
+            requestId: requestId || null,
+            path: "/idp/authorize/status",
+          },
+        });
+        return rateLimitResponse(statusLimit);
+      }
 
       if (!requestId || !pollSecret) {
+        await writeAuditEvent(request, {
+          event_type: "oidc_authorize_status_failed",
+          metadata: {
+            error: "invalid_request",
+            hasRequestId: Boolean(requestId),
+            hasPollSecret: Boolean(pollSecret),
+          },
+        });
         return json(
           {
             status: "not_found",
@@ -586,11 +623,36 @@ export const createIdpRoutes = (
       });
 
       if (status.status === "not_found") {
+        await writeAuditEvent(request, {
+          event_type: "oidc_authorize_status_failed",
+          metadata: {
+            requestId,
+            error: "not_found",
+          },
+        });
         return json(status, 404, NO_STORE_HEADERS);
       }
 
       if (status.status === "expired") {
+        await writeAuditEvent(request, {
+          event_type: "oidc_authorize_status_expired",
+          metadata: {
+            requestId,
+          },
+        });
         return json(status, 410, NO_STORE_HEADERS);
+      }
+
+      if (status.status === "approved" || status.status === "denied") {
+        await writeAuditEvent(request, {
+          event_type:
+            status.status === "approved"
+              ? "oidc_authorize_status_approved"
+              : "oidc_authorize_status_denied",
+          metadata: {
+            requestId,
+          },
+        });
       }
 
       return json(status, 200, NO_STORE_HEADERS);
@@ -611,7 +673,8 @@ export const createIdpRoutes = (
           ? (body.approvedClaims as Record<string, unknown>)
           : null;
 
-      const approveLimit = consumeRateLimit({
+      const approveLimit = await consumeRateLimit({
+        repository: oidcRateLimitRepository,
         request,
         name: "authorizeApprove",
         subject: requestId,
@@ -726,8 +789,34 @@ export const createIdpRoutes = (
     method: "POST",
     path: "/idp/authorize/preview",
     handler: async ({ request }) => {
+      const body = await parseJsonBody(request);
+      const requestId = toNonEmptyString(body?.requestId);
+      const secret = toNonEmptyString(body?.secret);
+      const previewLimit = await consumeRateLimit({
+        repository: oidcRateLimitRepository,
+        request,
+        name: "authorizePreview",
+        subject: requestId,
+      });
+      if (!previewLimit.allowed) {
+        await writeAuditEvent(request, {
+          event_type: "oidc_authorize_preview_rate_limited",
+          metadata: {
+            requestId,
+            path: "/idp/authorize/preview",
+          },
+        });
+        return rateLimitResponse(previewLimit);
+      }
+
       const viewerResult = await requireViewer(request);
       if (!viewerResult.ok) {
+        await writeAuditEvent(request, {
+          event_type: "oidc_authorize_preview_unauthorized",
+          metadata: {
+            requestId,
+          },
+        });
         return json(
           {
             ok: false,
@@ -739,11 +828,16 @@ export const createIdpRoutes = (
         );
       }
 
-      const body = await parseJsonBody(request);
-      const requestId = toNonEmptyString(body?.requestId);
-      const secret = toNonEmptyString(body?.secret);
-
       if (!requestId || !secret) {
+        await writeAuditEvent(request, {
+          user_id: viewerResult.viewer.userId,
+          event_type: "oidc_authorize_preview_failed",
+          metadata: {
+            error: "invalid_request",
+            hasRequestId: Boolean(requestId),
+            hasSecret: Boolean(secret),
+          },
+        });
         return json(
           {
             ok: false,
@@ -762,6 +856,15 @@ export const createIdpRoutes = (
       });
 
       if (!result.success) {
+        await writeAuditEvent(request, {
+          user_id: viewerResult.viewer.userId,
+          event_type: "oidc_authorize_preview_failed",
+          metadata: {
+            requestId,
+            error: result.error,
+            status: result.status,
+          },
+        });
         return json(
           {
             ok: false,
@@ -772,6 +875,21 @@ export const createIdpRoutes = (
         );
       }
 
+      await writeAuditEvent(request, {
+        user_id: viewerResult.viewer.userId,
+        event_type: "oidc_authorize_preview_succeeded",
+        metadata: {
+          requestId,
+          clientId:
+            result.body.client &&
+            typeof result.body.client === "object" &&
+            "clientId" in result.body.client
+              ? result.body.client.clientId
+              : null,
+          scopes: result.body.scopes,
+        },
+      });
+
       return json({ ok: true, ...result.body }, 200, NO_STORE_HEADERS);
     },
   };
@@ -780,8 +898,34 @@ export const createIdpRoutes = (
     method: "POST",
     path: "/idp/authorize/deny",
     handler: async ({ request }) => {
+      const body = await parseJsonBody(request);
+      const requestId = toNonEmptyString(body?.requestId);
+      const secret = toNonEmptyString(body?.secret);
+      const denyLimit = await consumeRateLimit({
+        repository: oidcRateLimitRepository,
+        request,
+        name: "authorizeDeny",
+        subject: requestId,
+      });
+      if (!denyLimit.allowed) {
+        await writeAuditEvent(request, {
+          event_type: "oidc_authorize_deny_rate_limited",
+          metadata: {
+            requestId,
+            path: "/idp/authorize/deny",
+          },
+        });
+        return rateLimitResponse(denyLimit);
+      }
+
       const viewerResult = await requireViewer(request);
       if (!viewerResult.ok) {
+        await writeAuditEvent(request, {
+          event_type: "oidc_authorize_deny_unauthorized",
+          metadata: {
+            requestId,
+          },
+        });
         return json(
           {
             ok: false,
@@ -793,11 +937,16 @@ export const createIdpRoutes = (
         );
       }
 
-      const body = await parseJsonBody(request);
-      const requestId = toNonEmptyString(body?.requestId);
-      const secret = toNonEmptyString(body?.secret);
-
       if (!requestId || !secret) {
+        await writeAuditEvent(request, {
+          user_id: viewerResult.viewer.userId,
+          event_type: "oidc_authorize_deny_failed",
+          metadata: {
+            error: "invalid_request",
+            hasRequestId: Boolean(requestId),
+            hasSecret: Boolean(secret),
+          },
+        });
         return json(
           {
             ok: false,
@@ -815,6 +964,15 @@ export const createIdpRoutes = (
       });
 
       if (!result.success) {
+        await writeAuditEvent(request, {
+          user_id: viewerResult.viewer.userId,
+          event_type: "oidc_authorize_deny_failed",
+          metadata: {
+            requestId,
+            error: result.error,
+            status: result.status,
+          },
+        });
         return json(
           {
             ok: false,
@@ -824,6 +982,14 @@ export const createIdpRoutes = (
           NO_STORE_HEADERS,
         );
       }
+
+      await writeAuditEvent(request, {
+        user_id: viewerResult.viewer.userId,
+        event_type: "oidc_authorize_deny_succeeded",
+        metadata: {
+          requestId,
+        },
+      });
 
       return json({ ok: true }, 200, NO_STORE_HEADERS);
     },
@@ -853,7 +1019,8 @@ export const createIdpRoutes = (
       }
 
       const tokenClientId = form.get("client_id")?.trim() || "basic-auth";
-      const tokenLimit = consumeRateLimit({
+      const tokenLimit = await consumeRateLimit({
+        repository: oidcRateLimitRepository,
         request,
         name: "token",
         subject: tokenClientId,
@@ -920,7 +1087,30 @@ export const createIdpRoutes = (
 
   const userInfoHandler = async (request: Request): Promise<Response> => {
     const accessToken = parseBearerToken(request);
+    const userInfoLimit = await consumeRateLimit({
+      repository: oidcRateLimitRepository,
+      request,
+      name: "userInfo",
+      subject: accessToken ? hashAuditValue(accessToken) : "missing-token",
+    });
+    if (!userInfoLimit.allowed) {
+      await writeAuditEvent(request, {
+        event_type: "oidc_userinfo_rate_limited",
+        metadata: {
+          hasAccessToken: Boolean(accessToken),
+        },
+      });
+      return rateLimitResponse(userInfoLimit);
+    }
+
     if (!accessToken) {
+      await writeAuditEvent(request, {
+        event_type: "oidc_userinfo_failed",
+        metadata: {
+          error: "invalid_token",
+          reason: "missing_bearer",
+        },
+      });
       return json(
         {
           error: "invalid_token",
@@ -939,6 +1129,13 @@ export const createIdpRoutes = (
 
     const result = await oidcProviderService.getUserInfo({ accessToken });
     if (!result.success) {
+      await writeAuditEvent(request, {
+        event_type: "oidc_userinfo_failed",
+        metadata: {
+          error: result.error,
+          status: result.status,
+        },
+      });
       return json(
         {
           error: result.error,
@@ -958,6 +1155,13 @@ export const createIdpRoutes = (
         },
       );
     }
+
+    await writeAuditEvent(request, {
+      event_type: "oidc_userinfo_succeeded",
+      metadata: {
+        claimKeys: Object.keys(result.body).filter((key) => key !== "sub"),
+      },
+    });
 
     return json(result.body, 200, NO_STORE_HEADERS);
   };
@@ -997,6 +1201,24 @@ export const createIdpRoutes = (
         );
       }
 
+      const revokeClientId = form.get("client_id")?.trim() || "basic-auth";
+      const revokeLimit = await consumeRateLimit({
+        repository: oidcRateLimitRepository,
+        request,
+        name: "revoke",
+        subject: revokeClientId,
+      });
+      if (!revokeLimit.allowed) {
+        await writeAuditEvent(request, {
+          event_type: "oidc_revoke_rate_limited",
+          metadata: {
+            clientId: revokeClientId,
+            tokenTypeHint: form.get("token_type_hint")?.trim() || null,
+          },
+        });
+        return rateLimitResponse(revokeLimit);
+      }
+
       const result = await oidcProviderService.revokeToken({
         form,
         authorizationHeader: request.headers.get("authorization"),
@@ -1006,7 +1228,7 @@ export const createIdpRoutes = (
         await writeAuditEvent(request, {
           event_type: "oidc_revoke_failed",
           metadata: {
-            clientId: form.get("client_id")?.trim() || "basic-auth",
+            clientId: revokeClientId,
             tokenTypeHint: form.get("token_type_hint")?.trim() || null,
             error: result.error,
             status: result.status,
@@ -1030,7 +1252,7 @@ export const createIdpRoutes = (
       await writeAuditEvent(request, {
         event_type: "oidc_revoke_succeeded",
         metadata: {
-          clientId: form.get("client_id")?.trim() || "basic-auth",
+          clientId: revokeClientId,
           tokenTypeHint: form.get("token_type_hint")?.trim() || null,
         },
       });

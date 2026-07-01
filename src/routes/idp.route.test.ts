@@ -57,6 +57,14 @@ const routes = createIdpRoutes({
   oidcDiscoveryServiceLike: service,
 });
 
+const allowRateLimitRepository = {
+  consume: async () => ({
+    allowed: true,
+    requestCount: 1,
+    resetAt: new Date(Date.now() + 60_000).toISOString(),
+  }),
+};
+
 const findRoute = (method: string, path: string): RouteDefinition => {
   const route = routes.find(
     (candidate) => candidate.method === method && candidate.path === path,
@@ -130,6 +138,7 @@ describe("idp authorize QR approval routes", () => {
       id: "client-db-id",
       client_id: "codeiland-web",
       client_name: "Code iLand",
+      client_uri: "https://www.codeiland.com",
     },
     redirectUri: "https://codeiland-back.example/auth/callback",
     responseType: "code",
@@ -147,6 +156,7 @@ describe("idp authorize QR approval routes", () => {
   ) =>
     createIdpRoutes({
       oidcDiscoveryServiceLike: service,
+      oidcRateLimitRepositoryLike: allowRateLimitRepository,
       oidcProviderServiceLike: {
         validateAuthorizationRequest: async () => ({
           success: true,
@@ -237,12 +247,68 @@ describe("idp authorize QR approval routes", () => {
 
     expect(response.status).toBe(200);
     expect(response.headers.get("content-type")).toContain("text/html");
+    expect(response.headers.get("content-security-policy")).toContain(
+      "frame-ancestors https://www.codeiland.com",
+    );
+    expect(response.headers.get("referrer-policy")).toBe("no-referrer");
+    expect(response.headers.get("x-content-type-options")).toBe("nosniff");
     const html = await response.text();
     expect(html).toContain("Approve with CivicOS");
     expect(html).toContain("Code iLand");
     expect(html).toContain("/idp/authorize/status");
     expect(html).toContain("Open CivicOS app");
     expect(html).toContain("com.shooresh.iland://oidc/authorize");
+    expect(html).toContain('const frameTargetOrigin = "https://www.codeiland.com"');
+    expect(html).not.toContain('postMessage({\n                type: "civicos.oidc.authorize.redirect",\n                redirectTo: result.redirectTo\n              }, "*")');
+  });
+
+  it("does not silently approve authorize requests that include a CivicOS bearer", async () => {
+    let directApprovalCalled = false;
+    const localRoutes = createRoutes(
+      {
+        approveAuthorizationRequest: async () => {
+          directApprovalCalled = true;
+          return {
+            redirectTo: "https://codeiland-back.example/auth/callback?code=direct",
+          };
+        },
+      },
+      async () =>
+        ({
+          ok: true,
+          viewer: {
+            userId: "user-1",
+            user: {
+              id: "user-1",
+              auth_generation: 1,
+              account_status: "active",
+            },
+          },
+        }) as any,
+    );
+    const request = new Request(
+      "https://example.com/idp/authorize?client_id=codeiland-web",
+      {
+        headers: {
+          authorization: "Bearer first-party-access-token",
+        },
+      },
+    );
+
+    const response = await findLocalRoute(
+      localRoutes,
+      "GET",
+      "/idp/authorize",
+    ).handler({
+      request,
+      url: new URL(request.url),
+      params: {},
+    });
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get("content-type")).toContain("text/html");
+    expect(await response.text()).toContain("Approve with CivicOS");
+    expect(directApprovalCalled).toBe(false);
   });
 
   it("allows the CivicOS app to approve a pending authorize QR with a bearer session", async () => {
@@ -250,6 +316,7 @@ describe("idp authorize QR approval routes", () => {
     const auditEvents: Array<Record<string, unknown>> = [];
     const localRoutes = createIdpRoutes({
       oidcDiscoveryServiceLike: service,
+      oidcRateLimitRepositoryLike: allowRateLimitRepository,
       oidcProviderServiceLike: {
         validateAuthorizationRequest: async () => ({
           success: true,
@@ -478,9 +545,13 @@ describe("idp authorize QR approval routes", () => {
 });
 
 describe("idp UserInfo and revocation routes", () => {
-  const createRoutes = (overrides: Record<string, unknown> = {}) =>
+  const createRoutes = (
+    overrides: Record<string, unknown> = {},
+    oidcRateLimitRepositoryLike = allowRateLimitRepository,
+  ) =>
     createIdpRoutes({
       oidcDiscoveryServiceLike: service,
+      oidcRateLimitRepositoryLike,
       oidcProviderServiceLike: {
         validateAuthorizationRequest: async () => ({
           success: false,
@@ -636,7 +707,17 @@ describe("idp UserInfo and revocation routes", () => {
   });
 
   it("rate limits excessive token endpoint attempts", async () => {
-    const localRoutes = createRoutes();
+    let count = 0;
+    const localRoutes = createRoutes({}, {
+      consume: async () => {
+        count += 1;
+        return {
+          allowed: count <= 40,
+          requestCount: count,
+          resetAt: new Date(Date.now() + 60_000).toISOString(),
+        };
+      },
+    });
     const route = findLocalRoute(localRoutes, "POST", "/idp/token");
     let lastResponse: Response | null = null;
 

@@ -2,6 +2,7 @@ import { createHash, generateKeyPairSync } from "node:crypto";
 
 import { describe, expect, it } from "bun:test";
 
+import { hashOpaqueBearerToken } from "../auth/tokens";
 import { createOidcProviderService } from "./oidcProviderService";
 
 const BASE_TIME_MS = Date.parse("2026-07-01T10:00:00.000Z");
@@ -158,6 +159,28 @@ const makeAccessTokenRow = (overrides: Record<string, unknown> = {}) =>
     auth_generation: 3,
     last_used_at: null,
     expires_at: new Date(BASE_TIME_MS + 60_000).toISOString(),
+    revoked_at: null,
+    revocation_reason: null,
+    created_at: BASE_TIME_ISO,
+    updated_at: BASE_TIME_ISO,
+    ...overrides,
+  }) as any;
+
+const makeRefreshTokenFamilyRow = (overrides: Record<string, unknown> = {}) =>
+  ({
+    id: "refresh-family-1",
+    grant_id: "grant-1",
+    auth_session_id: "auth-session-1",
+    client_id: "client-db-id",
+    user_id: "user-1",
+    status: "active",
+    current_token_hash: hashOpaqueBearerToken("refresh-token-1"),
+    previous_token_hash: null,
+    rotation_counter: 0,
+    auth_generation: 3,
+    last_rotated_at: BASE_TIME_ISO,
+    last_used_at: null,
+    expires_at: new Date(BASE_TIME_MS + 30 * 24 * 60 * 60 * 1000).toISOString(),
     revoked_at: null,
     revocation_reason: null,
     created_at: BASE_TIME_ISO,
@@ -462,10 +485,21 @@ const createTokenTestService = (
     consumeAuthorizationCode: async () => makeAuthorizationCodeRow(),
     consumeAuthorizationRequest: async () => null,
     getPairwiseSubjectById: async () => makePairwiseSubject(),
+    getGrantById: async () =>
+      makeGrant({
+        userId: "user-1",
+        clientDbId: "client-db-id",
+        pairwiseSubjectId: "pairwise-1",
+        scopes: ["openid", "profile"],
+        claims: {},
+      }),
     getGrantByUserAndClient: async () => null,
     upsertGrant: async (input: any) => makeGrant(input),
     insertRefreshTokenFamily: async () => null,
     insertAccessToken: async () => null,
+    getRefreshTokenFamilyByTokenHash: async () => null,
+    revokeRefreshTokenFamilyById: async () => null,
+    rotateRefreshTokenFamily: async () => null,
     ...repositoryOverrides,
   };
 
@@ -588,6 +622,144 @@ const createSuccessfulTokenExchangeService = () => {
     service,
     get capturedAccessTokenInput() {
       return capturedAccessTokenInput;
+    },
+    advance: (milliseconds: number) => {
+      nowMs += milliseconds;
+    },
+  };
+};
+
+const createSuccessfulRefreshTokenExchangeService = (
+  refreshFamilyOverrides: Record<string, unknown> = {},
+  repositoryOverrides: Record<string, unknown> = {},
+) => {
+  let nowMs = BASE_TIME_MS;
+  const client = makeClient();
+  const { privateKey, publicKey } = generateKeyPairSync("rsa", {
+    modulusLength: 2048,
+  });
+  const privateKeyEnvName = "OIDC_TEST_REFRESH_RS256_PRIVATE_KEY";
+  process.env[privateKeyEnvName] = privateKey
+    .export({ format: "pem", type: "pkcs8" })
+    .toString();
+  const publicJwk = publicKey.export({ format: "jwk" }) as Record<string, unknown>;
+  const refreshFamily = makeRefreshTokenFamilyRow(refreshFamilyOverrides);
+  const existingGrant = makeGrant(
+    {
+      userId: "user-1",
+      clientDbId: "client-db-id",
+      pairwiseSubjectId: "pairwise-1",
+      scopes: ["openid", "profile", "offline_access"],
+      claims: {
+        nickname: "public-name",
+        preferred_username: "public-name",
+        profile_completed: true,
+        passport_verified: true,
+        face_verified: true,
+      },
+    },
+    {
+      id: refreshFamily.grant_id,
+    },
+  );
+  let capturedAccessTokenInput: any = null;
+  let capturedRotationInput: any = null;
+  let capturedRevocationInput: any = null;
+
+  const service = createOidcProviderService({
+    issuer: "https://iland.example/idp",
+    now: () => new Date(nowMs),
+    randomBytesFn: (size) => Buffer.alloc(size, 8),
+    oidcProviderRepositoryLike: {
+      getClientByClientId: async (clientId: string) =>
+        clientId === client.client_id ? client : null,
+      getActiveSecretByHash: async () => null,
+      touchClientSecret: async () => null,
+      getRefreshTokenFamilyByTokenHash: async () => refreshFamily,
+      revokeRefreshTokenFamilyById: async (input: any) => {
+        capturedRevocationInput = input;
+        return makeRefreshTokenFamilyRow({
+          ...refreshFamily,
+          status: input.status,
+          revoked_at: BASE_TIME_ISO,
+          revocation_reason: input.revocationReason,
+        });
+      },
+      rotateRefreshTokenFamily: async (input: any) => {
+        capturedRotationInput = input;
+        if (input.previousTokenHash !== refreshFamily.current_token_hash) {
+          return null;
+        }
+        return makeRefreshTokenFamilyRow({
+          ...refreshFamily,
+          previous_token_hash: input.previousTokenHash,
+          current_token_hash: input.currentTokenHash,
+          rotation_counter: input.rotationCounter,
+        });
+      },
+      getGrantById: async () => existingGrant,
+      getPairwiseSubjectById: async () => makePairwiseSubject(),
+      insertAccessToken: async (input: any) => {
+        capturedAccessTokenInput = input;
+        return makeAccessTokenRow({
+          token_hash: input.tokenHash,
+          grant_id: input.grantId,
+          auth_session_id: input.authSessionId,
+          client_id: input.clientDbId,
+          user_id: input.userId,
+          pairwise_subject_id: input.pairwiseSubjectId,
+          scopes: input.scopes,
+          claims: input.claims,
+          auth_generation: input.authGeneration,
+          expires_at: input.expiresAt,
+        });
+      },
+      ...repositoryOverrides,
+    } as any,
+    oidcSigningKeyRepositoryLike: {
+      listPublicSigningKeys: async () => [
+        {
+          id: "signing-key-1",
+          kid: "kid-1",
+          key_use: "sig",
+          algorithm: "RS256",
+          status: "active",
+          public_jwk: {
+            ...publicJwk,
+            kid: "kid-1",
+            use: "sig",
+            alg: "RS256",
+          },
+          private_key_ref: privateKeyEnvName,
+          not_before: BASE_TIME_ISO,
+          not_after: null,
+          activated_at: BASE_TIME_ISO,
+          retired_at: null,
+          revoked_at: null,
+          created_at: BASE_TIME_ISO,
+          updated_at: BASE_TIME_ISO,
+        },
+      ],
+    } as any,
+    userRepositoryLike: {
+      getById: async () => makeViewer().user,
+    } as any,
+    identityProfileRepositoryLike: {
+      getByUserId: async () => makeIdentityProfile(),
+    } as any,
+  });
+
+  return {
+    service,
+    refreshFamily,
+    get capturedAccessTokenInput() {
+      return capturedAccessTokenInput;
+    },
+    get capturedRotationInput() {
+      return capturedRotationInput;
+    },
+    get capturedRevocationInput() {
+      return capturedRevocationInput;
     },
     advance: (milliseconds: number) => {
       nowMs += milliseconds;
@@ -928,11 +1100,89 @@ describe("oidcProviderService token claim placement", () => {
   });
 });
 
+describe("oidcProviderService refresh token grant", () => {
+  it("rotates refresh tokens and issues a new access token", async () => {
+    const context = createSuccessfulRefreshTokenExchangeService();
+
+    const result = await context.service.exchangeAuthorizationCode({
+      form: new URLSearchParams({
+        grant_type: "refresh_token",
+        refresh_token: "refresh-token-1",
+        client_id: "codeiland-web",
+      }),
+      authorizationHeader: null,
+    });
+
+    expect(result.success).toBe(true);
+    if (!result.success) {
+      throw new Error(result.error_description);
+    }
+
+    expect(result.body.access_token).toBeTruthy();
+    expect(result.body.refresh_token).toBeTruthy();
+    expect(result.body.scope).toBe("openid profile offline_access");
+    expect(context.capturedRotationInput).toMatchObject({
+      familyId: "refresh-family-1",
+      previousTokenHash: hashOpaqueBearerToken("refresh-token-1"),
+      rotationCounter: 1,
+    });
+    expect(context.capturedAccessTokenInput).toMatchObject({
+      grantId: "grant-1",
+      authSessionId: "auth-session-1",
+      clientDbId: "client-db-id",
+      userId: "user-1",
+      pairwiseSubjectId: "pairwise-1",
+      scopes: ["openid", "profile", "offline_access"],
+      authGeneration: 3,
+    });
+    expect(result.audit).toMatchObject({
+      clientDbId: "client-db-id",
+      clientId: "codeiland-web",
+      userId: "user-1",
+      authSessionId: "auth-session-1",
+      authorizationRequestId: null,
+      grantId: "grant-1",
+      scopes: ["openid", "profile", "offline_access"],
+      issuedRefreshToken: true,
+    });
+  });
+
+  it("revokes the refresh-token family when the previous token is replayed", async () => {
+    const context = createSuccessfulRefreshTokenExchangeService({
+      current_token_hash: hashOpaqueBearerToken("newer-refresh-token"),
+      previous_token_hash: hashOpaqueBearerToken("refresh-token-1"),
+      rotation_counter: 1,
+    });
+
+    const result = await context.service.exchangeAuthorizationCode({
+      form: new URLSearchParams({
+        grant_type: "refresh_token",
+        refresh_token: "refresh-token-1",
+        client_id: "codeiland-web",
+      }),
+      authorizationHeader: null,
+    });
+
+    expect(result).toMatchObject({
+      success: false,
+      status: 400,
+      error: "invalid_grant",
+      error_description: "Refresh token was already used.",
+    });
+    expect(context.capturedRevocationInput).toEqual({
+      familyId: "refresh-family-1",
+      status: "reused",
+      revocationReason: "refresh_token_reuse_detected",
+    });
+    expect(context.capturedAccessTokenInput).toBeNull();
+  });
+});
+
 describe("oidcProviderService token exchange failures", () => {
   it("rejects unsupported token grant types", async () => {
     const { service } = createTokenTestService();
     const result = await service.exchangeAuthorizationCode({
-      form: makeTokenForm({ grant_type: "refresh_token" }),
+      form: makeTokenForm({ grant_type: "password" }),
       authorizationHeader: null,
     });
 

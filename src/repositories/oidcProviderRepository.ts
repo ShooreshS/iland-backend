@@ -691,6 +691,22 @@ export const oidcProviderRepository = {
     return data || null;
   },
 
+  async getGrantById(grantId: string): Promise<OidcGrantRow | null> {
+    const supabase = requireSupabaseAdminClient();
+
+    const { data, error } = await supabase
+      .from("oidc_grants")
+      .select(OIDC_GRANT_COLUMNS)
+      .eq("id", grantId)
+      .maybeSingle<OidcGrantRow>();
+
+    if (error) {
+      throw error;
+    }
+
+    return data || null;
+  },
+
   async insertAuthorizationCode(input: {
     codeHash: string;
     authorizationRequestId: string;
@@ -1013,6 +1029,36 @@ export const oidcProviderRepository = {
       })
       .eq("id", input.familyId)
       .eq("status", "active")
+      .select(OIDC_REFRESH_TOKEN_FAMILY_COLUMNS)
+      .maybeSingle<OidcRefreshTokenFamilyRow>();
+
+    if (error) {
+      throw error;
+    }
+
+    return data || null;
+  },
+
+  async rotateRefreshTokenFamily(input: {
+    familyId: string;
+    previousTokenHash: string;
+    currentTokenHash: string;
+    rotationCounter: number;
+  }): Promise<OidcRefreshTokenFamilyRow | null> {
+    const supabase = requireSupabaseAdminClient();
+
+    const { data, error } = await supabase
+      .from("oidc_refresh_token_families")
+      .update({
+        previous_token_hash: input.previousTokenHash,
+        current_token_hash: input.currentTokenHash,
+        rotation_counter: input.rotationCounter,
+        last_rotated_at: new Date().toISOString(),
+        last_used_at: new Date().toISOString(),
+      })
+      .eq("id", input.familyId)
+      .eq("status", "active")
+      .eq("current_token_hash", input.previousTokenHash)
       .select(OIDC_REFRESH_TOKEN_FAMILY_COLUMNS)
       .maybeSingle<OidcRefreshTokenFamilyRow>();
 
