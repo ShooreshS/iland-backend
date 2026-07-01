@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { createHash, generateKeyPairSync } from "node:crypto";
 
 import { describe, expect, it } from "bun:test";
 
@@ -10,6 +10,17 @@ const REDIRECT_URI = "https://codeiland-back.example/auth/callback";
 
 const pkceChallengeFor = (verifier: string): string =>
   createHash("sha256").update(verifier, "utf8").digest("base64url");
+
+const decodeJwtPayload = (jwt: string): Record<string, unknown> => {
+  const [, payload] = jwt.split(".");
+  if (!payload) {
+    throw new Error("JWT payload segment is missing.");
+  }
+  return JSON.parse(Buffer.from(payload, "base64url").toString("utf8")) as Record<
+    string,
+    unknown
+  >;
+};
 
 const makeClient = (overrides: Record<string, unknown> = {}) =>
   ({
@@ -479,6 +490,111 @@ const createTokenTestService = (
   };
 };
 
+const createSuccessfulTokenExchangeService = () => {
+  let nowMs = BASE_TIME_MS;
+  const client = makeClient();
+  const authorizationCode = makeAuthorizationCodeRow();
+  const { privateKey, publicKey } = generateKeyPairSync("rsa", {
+    modulusLength: 2048,
+  });
+  const privateKeyEnvName = "OIDC_TEST_RS256_PRIVATE_KEY";
+  process.env[privateKeyEnvName] = privateKey
+    .export({ format: "pem", type: "pkcs8" })
+    .toString();
+  const publicJwk = publicKey.export({ format: "jwk" }) as Record<string, unknown>;
+  let capturedAccessTokenInput: any = null;
+
+  const existingGrant = makeGrant({
+    userId: "user-1",
+    clientDbId: "client-db-id",
+    pairwiseSubjectId: "pairwise-1",
+    scopes: ["openid", "profile"],
+    claims: {
+      nickname: "public-name",
+      preferred_username: "public-name",
+      profile_completed: true,
+      passport_verified: true,
+      face_verified: true,
+    },
+  });
+
+  const service = createOidcProviderService({
+    issuer: "https://iland.example/idp",
+    now: () => new Date(nowMs),
+    randomBytesFn: (size) => Buffer.alloc(size, 7),
+    oidcProviderRepositoryLike: {
+      getClientByClientId: async (clientId: string) =>
+        clientId === client.client_id ? client : null,
+      getActiveSecretByHash: async () => null,
+      touchClientSecret: async () => null,
+      getAuthorizationCodeByHash: async () => authorizationCode,
+      expireAuthorizationCode: async () => null,
+      consumeAuthorizationCode: async () => authorizationCode,
+      consumeAuthorizationRequest: async () => null,
+      getPairwiseSubjectById: async () => makePairwiseSubject(),
+      getGrantByUserAndClient: async () => existingGrant,
+      upsertGrant: async (input: any) => makeGrant(input),
+      insertRefreshTokenFamily: async () => null,
+      insertAccessToken: async (input: any) => {
+        capturedAccessTokenInput = input;
+        return makeAccessTokenRow({
+          token_hash: input.tokenHash,
+          grant_id: input.grantId,
+          auth_session_id: input.authSessionId,
+          client_id: input.clientDbId,
+          user_id: input.userId,
+          pairwise_subject_id: input.pairwiseSubjectId,
+          scopes: input.scopes,
+          claims: input.claims,
+          auth_generation: input.authGeneration,
+          expires_at: input.expiresAt,
+        });
+      },
+    } as any,
+    oidcSigningKeyRepositoryLike: {
+      listPublicSigningKeys: async () => [
+        {
+          id: "signing-key-1",
+          kid: "kid-1",
+          key_use: "sig",
+          algorithm: "RS256",
+          status: "active",
+          public_jwk: {
+            ...publicJwk,
+            kid: "kid-1",
+            use: "sig",
+            alg: "RS256",
+          },
+          private_key_ref: privateKeyEnvName,
+          not_before: BASE_TIME_ISO,
+          not_after: null,
+          activated_at: BASE_TIME_ISO,
+          retired_at: null,
+          revoked_at: null,
+          created_at: BASE_TIME_ISO,
+          updated_at: BASE_TIME_ISO,
+        },
+      ],
+    } as any,
+    userRepositoryLike: {
+      getById: async () => makeViewer().user,
+    } as any,
+    identityProfileRepositoryLike: {
+      getByUserId: async () => makeIdentityProfile(),
+    } as any,
+  });
+
+  return {
+    service,
+    get capturedAccessTokenInput() {
+      return capturedAccessTokenInput;
+    },
+    advance: (milliseconds: number) => {
+      nowMs += milliseconds;
+    },
+  };
+};
+
 const createUserInfoTestService = (
   accessTokenOverrides: Record<string, unknown> = {},
 ) => {
@@ -769,6 +885,45 @@ describe("oidcProviderService UserInfo claim contract", () => {
       body: {
         sub: "pairwise-subject-1",
       },
+    });
+  });
+});
+
+describe("oidcProviderService token claim placement", () => {
+  it("keeps mutable public profile/proof claims out of ID tokens and in the UserInfo snapshot", async () => {
+    const context = createSuccessfulTokenExchangeService();
+
+    const result = await context.service.exchangeAuthorizationCode({
+      form: makeTokenForm(),
+      authorizationHeader: null,
+    });
+
+    expect(result.success).toBe(true);
+    if (!result.success) {
+      throw new Error(result.error_description);
+    }
+
+    const idTokenPayload = decodeJwtPayload(result.body.id_token);
+    expect(idTokenPayload).toMatchObject({
+      iss: "https://iland.example/idp",
+      sub: "pairwise-subject-1",
+      aud: "codeiland-web",
+      nonce: "nonce-1",
+      amr: ["civicos_app"],
+      acr: "urn:civicos:verified:passport-face",
+    });
+    expect(idTokenPayload.nickname).toBeUndefined();
+    expect(idTokenPayload.preferred_username).toBeUndefined();
+    expect(idTokenPayload.profile_completed).toBeUndefined();
+    expect(idTokenPayload.passport_verified).toBeUndefined();
+    expect(idTokenPayload.face_verified).toBeUndefined();
+
+    expect(context.capturedAccessTokenInput?.claims).toMatchObject({
+      nickname: "public-name",
+      preferred_username: "public-name",
+      profile_completed: true,
+      passport_verified: true,
+      face_verified: true,
     });
   });
 });

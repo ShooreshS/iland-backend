@@ -1247,6 +1247,12 @@ export const createOidcProviderService = (
           claims: userClaims,
         }));
       const tokenClaims = grant.claims || userClaims;
+      // Phase 2 security decision:
+      // ID tokens are authentication/assurance artifacts only. Mutable public
+      // profile and verification proof claims stay in the opaque access-token
+      // snapshot and are released through UserInfo after RP/user consent. This
+      // keeps the RP integration aligned with future proof/ZKP presentation
+      // flows instead of training RPs to treat ID tokens as proof containers.
       const issuedAtSeconds = Math.floor(now().getTime() / 1000);
       const expiresAtSeconds = issuedAtSeconds + client.access_token_ttl_seconds;
       const accessToken = createOpaqueBearerToken();
@@ -1266,7 +1272,6 @@ export const createOidcProviderService = (
             new Date(authorizationCode.created_at).getTime() / 1000,
           ),
           ...(authorizationCode.nonce ? { nonce: authorizationCode.nonce } : {}),
-          ...tokenClaims,
           amr: ["civicos_app"],
           acr: profile?.face_verified_at
             ? "urn:civicos:verified:passport-face"
