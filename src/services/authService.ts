@@ -15,9 +15,11 @@ import authSessionRepository from "../repositories/authSessionRepository";
 import refreshTokenFamilyRepository from "../repositories/refreshTokenFamilyRepository";
 import userRepository from "../repositories/userRepository";
 import type {
+  AuthCredentialRow,
   AuthChallengePurpose,
   AuthCredentialPlatform,
   AuthSessionRow,
+  UserRow,
 } from "../types/db";
 
 const AUTH_CHALLENGE_TTL_MS = 5 * 60 * 1000;
@@ -248,6 +250,90 @@ const pruneInactiveLoginSessions = async (
   return stillActive;
 };
 
+const issueFirstPartyAuthSession = async (input: {
+  user: UserRow;
+  authCredential: AuthCredentialRow;
+  auditEventType: string;
+  auditPlatform: AuthCredentialPlatform;
+  auditMetadata: Record<string, unknown>;
+  assertionRecord?: {
+    lastAssertionNonceHash: string | null;
+    lastCounter?: number | null;
+  };
+}) => {
+  const existingSessions = await authSessionRepository.listByUserId(input.user.id);
+  const activeSessions = await pruneInactiveLoginSessions(
+    input.user.id,
+    existingSessions,
+    input.user.auth_generation,
+    input.authCredential.id,
+  );
+  const activeSessionCount = activeSessions.length;
+  if (activeSessionCount >= authPolicy.maxActiveSessionsPerUser) {
+    return {
+      success: false as const,
+      errorCode: "SESSION_LIMIT_REACHED",
+      message:
+        "Maximum active session limit reached. Revoke an existing session before logging in again.",
+    };
+  }
+
+  const { accessToken, refreshToken } = buildFirstPartySessionTokens();
+  const accessExpiresAt = new Date(
+    Date.now() + authPolicy.accessTokenTtlSeconds * 1000,
+  ).toISOString();
+  const refreshExpiresAt = new Date(
+    Date.now() + authPolicy.refreshTokenTtlDays * 24 * 60 * 60 * 1000,
+  ).toISOString();
+
+  const session = await authSessionRepository.insert({
+    user_id: input.user.id,
+    auth_credential_id: input.authCredential.id,
+    auth_generation: input.user.auth_generation,
+    current_access_token_hash: accessToken.tokenHash,
+    attestation_verified_at: new Date().toISOString(),
+    expires_at: accessExpiresAt,
+  });
+
+  await authCredentialRepository.touchLastAuthenticated(input.authCredential.id);
+  if (input.assertionRecord) {
+    await appAttestationCredentialRepository.recordAssertion(
+      input.authCredential.id,
+      input.assertionRecord,
+    );
+  }
+
+  await refreshTokenFamilyRepository.insert({
+    session_id: session.id,
+    user_id: input.user.id,
+    current_token_hash: refreshToken.tokenHash,
+    expires_at: refreshExpiresAt,
+  });
+
+  await authAuditEventRepository.insert({
+    user_id: input.user.id,
+    auth_credential_id: input.authCredential.id,
+    session_id: session.id,
+    event_type: input.auditEventType,
+    platform: input.auditPlatform,
+    metadata: input.auditMetadata,
+  });
+
+  return {
+    success: true as const,
+    accessToken: accessToken.token,
+    accessTokenType: "Bearer",
+    accessTokenExpiresAt: accessExpiresAt,
+    refreshToken: refreshToken.token,
+    refreshTokenExpiresAt: refreshExpiresAt,
+    session: {
+      id: session.id,
+      userId: session.user_id,
+      authGeneration: session.auth_generation,
+    },
+  };
+};
+
 export const authService = {
   async issueChallenge(input: IssueAuthChallengeInput) {
     const challenge = createOpaqueChallenge();
@@ -389,6 +475,9 @@ export const authService = {
             packageName: appAttestationResult.packageName,
             signingCertDigest: appAttestationResult.signingCertDigest,
             status: "verified",
+            resetAssertionState:
+              existingAttestation.attestation_key_id !== appAttestationResult.attestationKeyId ||
+              existingAttestation.public_key_pem !== appAttestationResult.attestationPublicKeyPem,
           },
         )) || existingAttestation
       : await appAttestationCredentialRepository.insert({
@@ -423,8 +512,29 @@ export const authService = {
       },
     });
 
+    const sessionResult = await issueFirstPartyAuthSession({
+      user,
+      authCredential,
+      auditEventType: "auth_registration_session_created",
+      auditPlatform: input.platform,
+      auditMetadata: {
+        challengeId: input.challengeId,
+        registrationCompleted: true,
+      },
+    });
+
+    if (!sessionResult.success) {
+      return sessionResult;
+    }
+
     return {
       success: true as const,
+      accessToken: sessionResult.accessToken,
+      accessTokenType: sessionResult.accessTokenType,
+      accessTokenExpiresAt: sessionResult.accessTokenExpiresAt,
+      refreshToken: sessionResult.refreshToken,
+      refreshTokenExpiresAt: sessionResult.refreshTokenExpiresAt,
+      session: sessionResult.session,
       user: {
         id: user.id,
         authGeneration: user.auth_generation,
@@ -522,81 +632,38 @@ export const authService = {
       );
     }
 
-    const existingSessions = await authSessionRepository.listByUserId(user.id);
-    const activeSessions = await pruneInactiveLoginSessions(
-      user.id,
-      existingSessions,
-      user.auth_generation,
-      authCredential.id,
-    );
-    const activeSessionCount = activeSessions.length;
-    if (activeSessionCount >= authPolicy.maxActiveSessionsPerUser) {
-      return {
-        success: false as const,
-        errorCode: "SESSION_LIMIT_REACHED",
-        message:
-          "Maximum active session limit reached. Revoke an existing session before logging in again.",
-      };
-    }
-
-    const { accessToken, refreshToken } = buildFirstPartySessionTokens();
-    const accessExpiresAt = new Date(
-      Date.now() + authPolicy.accessTokenTtlSeconds * 1000,
-    ).toISOString();
-    const refreshExpiresAt = new Date(
-      Date.now() + authPolicy.refreshTokenTtlDays * 24 * 60 * 60 * 1000,
-    ).toISOString();
-
-    const session = await authSessionRepository.insert({
-      user_id: user.id,
-      auth_credential_id: authCredential.id,
-      auth_generation: user.auth_generation,
-      current_access_token_hash: accessToken.tokenHash,
-      attestation_verified_at: new Date().toISOString(),
-      expires_at: accessExpiresAt,
-    });
-
-    await authCredentialRepository.touchLastAuthenticated(authCredential.id);
-    await appAttestationCredentialRepository.recordAssertion(authCredential.id, {
-      lastAssertionNonceHash: loginAssertionResult.lastAssertionNonceHash,
-      lastCounter: loginAssertionResult.lastCounter,
-    });
-
-    await refreshTokenFamilyRepository.insert({
-      session_id: session.id,
-      user_id: user.id,
-      current_token_hash: refreshToken.tokenHash,
-      expires_at: refreshExpiresAt,
-    });
-
     await authChallengeRepository.markConsumed(input.challengeId);
-    await authAuditEventRepository.insert({
-      user_id: user.id,
-      auth_credential_id: authCredential.id,
-      session_id: session.id,
-      event_type: "auth_login_completed",
-      platform: authCredential.platform,
-      metadata: {
+
+    const sessionResult = await issueFirstPartyAuthSession({
+      user,
+      authCredential,
+      auditEventType: "auth_login_completed",
+      auditPlatform: authCredential.platform,
+      auditMetadata: {
         challengeId: input.challengeId,
         signatureEncoding: signatureResult.signatureEncoding,
         signaturePayloadVersion: "iland-auth-v1",
         transitionalCryptoBypassUsed:
           loginAssertionResult.transitionalCryptoBypassUsed,
       },
+      assertionRecord: {
+        lastAssertionNonceHash: loginAssertionResult.lastAssertionNonceHash,
+        lastCounter: loginAssertionResult.lastCounter,
+      },
     });
+
+    if (!sessionResult.success) {
+      return sessionResult;
+    }
 
     return {
       success: true as const,
-      accessToken: accessToken.token,
-      accessTokenType: "Bearer",
-      accessTokenExpiresAt: accessExpiresAt,
-      refreshToken: refreshToken.token,
-      refreshTokenExpiresAt: refreshExpiresAt,
-      session: {
-        id: session.id,
-        userId: session.user_id,
-        authGeneration: session.auth_generation,
-      },
+      accessToken: sessionResult.accessToken,
+      accessTokenType: sessionResult.accessTokenType,
+      accessTokenExpiresAt: sessionResult.accessTokenExpiresAt,
+      refreshToken: sessionResult.refreshToken,
+      refreshTokenExpiresAt: sessionResult.refreshTokenExpiresAt,
+      session: sessionResult.session,
       transitionalCryptoBypassUsed:
         loginAssertionResult.transitionalCryptoBypassUsed,
     };

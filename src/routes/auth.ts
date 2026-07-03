@@ -172,8 +172,10 @@ const registerCompleteRoute: RouteDefinition = {
                 ? 401
                 : result.errorCode === "ATTESTATION_INVALID"
                   ? 400
-                  : result.errorCode === "CREDENTIAL_KEY_MISMATCH"
-                    ? 409
+          : result.errorCode === "CREDENTIAL_KEY_MISMATCH"
+            ? 409
+          : result.errorCode === "SESSION_LIMIT_REACHED"
+            ? 409
           : result.errorCode === "ACCOUNT_DISABLED"
             ? 403
             : result.errorCode === "CREDENTIAL_ALREADY_BOUND"

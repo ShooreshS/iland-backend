@@ -67,22 +67,30 @@ export const appAttestationCredentialRepository = {
       packageName: string | null;
       signingCertDigest: string | null;
       status: AppAttestationCredentialRow["status"];
+      resetAssertionState?: boolean;
     },
   ): Promise<AppAttestationCredentialRow | null> {
     const supabase = requireSupabaseAdminClient();
+    const nextValues: Record<string, unknown> = {
+      attestation_provider: input.attestationProvider,
+      environment: input.environment,
+      attestation_key_id: input.attestationKeyId,
+      public_key_pem: input.publicKeyPem,
+      app_identifier: input.appIdentifier,
+      package_name: input.packageName,
+      signing_cert_digest: input.signingCertDigest,
+      status: input.status,
+    };
+
+    if (input.resetAssertionState === true) {
+      nextValues.last_asserted_at = null;
+      nextValues.last_assertion_nonce_hash = null;
+      nextValues.last_counter = null;
+    }
 
     const { data, error } = await supabase
       .from("app_attestation_credentials")
-      .update({
-        attestation_provider: input.attestationProvider,
-        environment: input.environment,
-        attestation_key_id: input.attestationKeyId,
-        public_key_pem: input.publicKeyPem,
-        app_identifier: input.appIdentifier,
-        package_name: input.packageName,
-        signing_cert_digest: input.signingCertDigest,
-        status: input.status,
-      })
+      .update(nextValues)
       .eq("auth_credential_id", authCredentialId)
       .select(APP_ATTESTATION_CREDENTIAL_COLUMNS)
       .maybeSingle<AppAttestationCredentialRow>();

@@ -91,6 +91,7 @@ const state = {
   refreshFamilies: new Map<string, RefreshTokenFamilyRow>(),
   users: new Map<string, UserRow>(),
   auditEvents: [] as Array<Record<string, unknown>>,
+  consumedChallenges: [] as string[],
   revokedSessions: [] as Array<{ sessionId: string; reason: string }>,
   revokedRefreshFamilies: [] as Array<{
     familyId?: string;
@@ -109,6 +110,7 @@ const resetState = () => {
   state.refreshFamilies = new Map([["refresh-family-1", buildRefreshFamily()]]);
   state.users = new Map([[activeUser.id, activeUser]]);
   state.auditEvents = [];
+  state.consumedChallenges = [];
   state.revokedSessions = [];
   state.revokedRefreshFamilies = [];
   state.recoveryCounts = {
@@ -116,6 +118,76 @@ const resetState = () => {
     attestations: 0,
   };
 };
+
+mock.module("../repositories/authChallengeRepository", () => {
+  const repository = {
+    insert: async () => ({
+      id: "challenge-1",
+    }),
+    getById: async (challengeId: string) => ({
+      id: challengeId,
+      purpose: "register",
+      platform: "ios",
+      challenge_hash: hashOpaqueBearerToken("challenge"),
+      credential_id_hint: null,
+      expires_at: "2999-06-28T10:00:00.000Z",
+      consumed_at: null,
+      metadata: {},
+      created_at: nowIso,
+    }),
+    markConsumed: async (challengeId: string) => {
+      state.consumedChallenges.push(challengeId);
+      return null;
+    },
+  };
+
+  return {
+    authChallengeRepository: repository,
+    default: repository,
+  };
+});
+
+mock.module("../auth/credentialSignature", () => ({
+  default: () => ({
+    success: true,
+    signatureEncoding: "base64-der",
+  }),
+}));
+
+mock.module("../auth/appAttestation", () => ({
+  default: {
+    verifyRegistrationAttestation: async () => ({
+      success: true,
+      provider: "ios_app_attest",
+      environment: "development",
+      attestationKeyId: "app-attest-key-1",
+      attestationPublicKeyPem: "app-attest-public-key-1",
+      appIdentifier: "TEAM.com.shooresh.iland",
+      packageName: null,
+      signingCertDigest: null,
+      transitionalCryptoBypassUsed: false,
+    }),
+    verifyLoginAssertion: async () => ({
+      success: true,
+      provider: "ios_app_attest",
+      environment: "development",
+      attestationKeyId: "app-attest-key-1",
+      attestationPublicKeyPem: "app-attest-public-key-1",
+      appIdentifier: "TEAM.com.shooresh.iland",
+      packageName: null,
+      signingCertDigest: null,
+      lastAssertionNonceHash: "assertion-nonce-hash",
+      lastCounter: 1,
+      transitionalCryptoBypassUsed: false,
+    }),
+  },
+}));
+
+mock.module("./authAccountBindingService", () => ({
+  default: {
+    resolveOrCreateUserByVerifiedIdentity: async () => activeUser,
+  },
+}));
 
 mock.module("../repositories/authSessionRepository", () => {
   const repository = {
@@ -330,6 +402,27 @@ mock.module("../repositories/authCredentialRepository", () => {
 });
 
 mock.module("../repositories/appAttestationCredentialRepository", () => {
+  const buildAttestation = () => ({
+    id: "attestation-1",
+    user_id: activeUser.id,
+    auth_credential_id: "auth-credential-1",
+    platform: "ios" as const,
+    attestation_provider: "ios_app_attest" as const,
+    environment: "development" as const,
+    attestation_key_id: "app-attest-key-1",
+    public_key_pem: "app-attest-public-key-1",
+    app_identifier: "TEAM.com.shooresh.iland",
+    package_name: null,
+    signing_cert_digest: null,
+    status: "verified" as const,
+    last_counter: null,
+    last_asserted_at: null,
+    last_assertion_nonce_hash: null,
+    revoked_at: null,
+    revocation_reason: null,
+    created_at: nowIso,
+    updated_at: nowIso,
+  });
   const repository = {
     revokeActiveByUserId: async () => {
       state.recoveryCounts.attestations += 1;
@@ -341,7 +434,7 @@ mock.module("../repositories/appAttestationCredentialRepository", () => {
     },
     getByAuthCredentialId: async () => null,
     updateByAuthCredentialId: async () => null,
-    insert: async () => ({ id: "attestation-1" }),
+    insert: async () => buildAttestation(),
     recordAssertion: async () => null,
   };
 
@@ -370,6 +463,44 @@ const { __testOnly, authService } = await import("./authService");
 describe("authService first-party auth lifecycle hardening", () => {
   beforeEach(() => {
     resetState();
+  });
+
+  it("creates a first-party session during successful backend auth registration", async () => {
+    const result = await authService.completeRegistration({
+      challengeId: "challenge-1",
+      challenge: "challenge",
+      credentialId: "device-credential-1",
+      publicKeyPem: "pem",
+      signature: "signature",
+      appAttestation: {},
+      nidnh: "a".repeat(128),
+      normalizationVersion: 1,
+      verificationMethod: "passport_nfc",
+      platform: "ios",
+    });
+
+    expect(result.success).toBe(true);
+    if (!result.success) {
+      throw new Error(result.message);
+    }
+    expect(result).toMatchObject({
+      accessTokenType: "Bearer",
+      session: {
+        id: "session-1",
+        userId: activeUser.id,
+        authGeneration: activeUser.auth_generation,
+      },
+    });
+    expect(typeof result.accessToken).toBe("string");
+    expect(typeof result.refreshToken).toBe("string");
+    expect(state.consumedChallenges).toContain("challenge-1");
+    expect(state.revokedSessions).toContainEqual({
+      sessionId: "session-1",
+      reason: "same_credential_session_superseded_before_login",
+    });
+    expect(state.auditEvents.some((event) => (
+      event.event_type === "auth_registration_session_created"
+    ))).toBe(true);
   });
 
   it("revokes the refresh family and session when a rotated refresh token is reused", async () => {
