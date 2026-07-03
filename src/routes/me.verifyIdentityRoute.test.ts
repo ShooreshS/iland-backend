@@ -59,6 +59,17 @@ const buildSuccessResult = (
   },
 });
 
+const verificationEvidence = {
+  liveness: {
+    passed: true as const,
+  },
+  likeness: {
+    passed: true as const,
+    similarity: 0.91,
+    threshold: 0.03,
+  },
+};
+
 describe("POST /me/verify-identity route", () => {
   it("returns success for first bind", async () => {
     let receivedInput: unknown = null;
@@ -81,6 +92,7 @@ describe("POST /me/verify-identity route", () => {
     const response = await invokeRoute(route, {
       nidnh: "a".repeat(128),
       normalizationVersion: 1,
+      verificationEvidence,
     });
 
     expect(response.status).toBe(200);
@@ -113,6 +125,7 @@ describe("POST /me/verify-identity route", () => {
       nidnh: "b".repeat(128),
       normalizationVersion: 1,
       verificationMethod: "passport_nfc",
+      verificationEvidence,
     });
 
     expect(response.status).toBe(200);
@@ -138,6 +151,7 @@ describe("POST /me/verify-identity route", () => {
     const response = await invokeRoute(route, {
       nidnh: "c".repeat(128),
       normalizationVersion: 1,
+      verificationEvidence,
     });
 
     expect(response.status).toBe(200);
@@ -170,6 +184,7 @@ describe("POST /me/verify-identity route", () => {
     const response = await invokeRoute(route, {
       nidnh: "c".repeat(128),
       normalizationVersion: 1,
+      verificationEvidence,
     });
 
     expect(response.status).toBe(409);
@@ -206,6 +221,33 @@ describe("POST /me/verify-identity route", () => {
     expect(called).toBe(false);
   });
 
+  it("rejects missing liveness and likeness evidence before calling the bind service", async () => {
+    let called = false;
+    const route = createVerifyIdentityRoute({
+      requireViewerFn: async () => ({
+        ok: true,
+        viewer: {
+          userId: viewerUser.id,
+          user: viewerUser,
+        },
+      }),
+      bindService: {
+        bindVerifiedIdentityForViewer: async () => {
+          called = true;
+          return buildSuccessResult();
+        },
+      },
+    });
+
+    const response = await invokeRoute(route, {
+      nidnh: "a".repeat(128),
+      normalizationVersion: 1,
+    });
+
+    expect(response.status).toBe(400);
+    expect(called).toBe(false);
+  });
+
   it("does not accept raw-NIDN-style fields in request payload", async () => {
     let called = false;
     const route = createVerifyIdentityRoute({
@@ -227,6 +269,7 @@ describe("POST /me/verify-identity route", () => {
     const response = await invokeRoute(route, {
       nidnh: "d".repeat(128),
       normalizationVersion: 1,
+      verificationEvidence,
       nationalIdNumber: "1234567890",
     });
 
@@ -254,6 +297,7 @@ describe("POST /me/verify-identity route", () => {
     const response = await invokeRoute(route, {
       nidnh: "f".repeat(128),
       normalizationVersion: 1,
+      verificationEvidence,
     });
 
     expect(response.status).toBe(401);

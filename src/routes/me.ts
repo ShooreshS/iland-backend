@@ -11,6 +11,7 @@ import type {
   ViewerLandSelectionResultDto,
 } from "../types/contracts";
 import type { RouteDefinition } from "../types/http";
+import { verificationEvidenceSchema } from "./verificationEvidenceSchema";
 
 const selectedLandUpdateSchema = z
   .object({
@@ -70,6 +71,7 @@ const verifyIdentitySchema = z
     nidnh: z.string().trim().min(1),
     normalizationVersion: z.number().int(),
     verificationMethod: z.enum(["passport_nfc"]).optional(),
+    verificationEvidence: verificationEvidenceSchema,
   })
   .strict();
 

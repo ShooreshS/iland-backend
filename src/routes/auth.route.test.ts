@@ -127,7 +127,10 @@ const authService = {
     return state.revokeResult;
   },
   issueChallenge: async () => ({ success: true as const }),
-  completeRegistration: async () => ({ success: true as const }),
+  completeRegistration: async (...input: unknown[]) => {
+    state.serviceCalls.push({ method: "completeRegistration", input });
+    return { success: true as const };
+  },
   completeLogin: async () => ({ success: true as const }),
 };
 
@@ -171,9 +174,61 @@ const invokeRoute = (
   });
 };
 
+const verificationEvidence = {
+  liveness: {
+    passed: true,
+  },
+  likeness: {
+    passed: true,
+    similarity: 0.91,
+    threshold: 0.03,
+  },
+};
+
+const buildRegistrationCompleteBody = (overrides: Record<string, unknown> = {}) => ({
+  challengeId: "challenge-1",
+  challenge: "challenge",
+  platform: "ios",
+  credentialId: "device-credential-1",
+  publicKeyPem: "public-key",
+  signature: "signature",
+  appAttestation: {},
+  nidnh: "a".repeat(128),
+  normalizationVersion: 1,
+  verificationMethod: "passport_nfc",
+  verificationEvidence,
+  ...overrides,
+});
+
 describe("auth lifecycle routes", () => {
   beforeEach(() => {
     resetState();
+  });
+
+  it("POST /auth/register/complete forwards verification evidence", async () => {
+    const response = await invokeRoute(findRoute("POST", "/auth/register/complete"), {
+      body: buildRegistrationCompleteBody(),
+    });
+
+    expect(response.status).toBe(201);
+    expect(state.serviceCalls).toContainEqual({
+      method: "completeRegistration",
+      input: [buildRegistrationCompleteBody()],
+    });
+  });
+
+  it("POST /auth/register/complete rejects missing verification evidence", async () => {
+    const bodyWithoutEvidence: Record<string, unknown> = buildRegistrationCompleteBody();
+    delete bodyWithoutEvidence.verificationEvidence;
+
+    const response = await invokeRoute(findRoute("POST", "/auth/register/complete"), {
+      body: bodyWithoutEvidence,
+    });
+
+    expect(response.status).toBe(400);
+    expect(
+      state.serviceCalls.some((call) => call.method === "completeRegistration"),
+    ).toBe(false);
   });
 
   it("POST /auth/refresh forwards the refresh token and returns no-store", async () => {

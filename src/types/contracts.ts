@@ -307,6 +307,22 @@ export type BindVerifiedIdentityRequestDto = {
   nidnh: string;
   normalizationVersion: number;
   verificationMethod?: "passport_nfc";
+  verificationEvidence: {
+    liveness: {
+      passed: true;
+      [key: string]: unknown;
+    };
+    likeness: {
+      passed: true;
+      similarity: number;
+      threshold: number;
+      [key: string]: unknown;
+    };
+    gaze?: {
+      passed: true;
+      [key: string]: unknown;
+    };
+  };
 };
 
 export type VerifiedIdentityBindingDto = {

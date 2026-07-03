@@ -5,6 +5,7 @@ import { json } from "../middleware/json";
 import defaultAuthSessionRepository from "../repositories/authSessionRepository";
 import defaultAuthService from "../services/authService";
 import type { RouteDefinition } from "../types/http";
+import { verificationEvidenceSchema } from "./verificationEvidenceSchema";
 
 const challengeRequestSchema = z
   .object({
@@ -25,6 +26,7 @@ const registrationCompleteSchema = z
     nidnh: z.string().trim().min(1),
     normalizationVersion: z.number().int(),
     verificationMethod: z.enum(["passport_nfc"]).default("passport_nfc"),
+    verificationEvidence: verificationEvidenceSchema,
   })
   .strict();
 
