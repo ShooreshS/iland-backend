@@ -7,6 +7,18 @@ export const SOLANA_AUDIT_CLUSTERS = [
 
 export type SolanaAuditCluster = (typeof SOLANA_AUDIT_CLUSTERS)[number];
 
+export const SOLANA_AUDIT_FEE_MODES = [
+  "civicos-sponsored",
+  "user-paid",
+] as const;
+
+export type SolanaAuditFeeMode = (typeof SOLANA_AUDIT_FEE_MODES)[number];
+
+export const DEFAULT_SOLANA_AUDIT_FEE_MODE: SolanaAuditFeeMode =
+  "civicos-sponsored";
+
+export const SOLANA_BASE_FEE_LAMPORTS_PER_SIGNATURE = 5_000;
+
 export const TOKEN_2022_PROGRAM_ID =
   "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb" as const;
 

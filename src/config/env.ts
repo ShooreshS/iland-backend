@@ -1,8 +1,11 @@
 import { z } from "zod";
 
 import {
+  DEFAULT_SOLANA_AUDIT_FEE_MODE,
   SHOLAN_TOKEN_DEFAULTS,
   SOLANA_AUDIT_CLUSTERS,
+  SOLANA_AUDIT_FEE_MODES,
+  SOLANA_BASE_FEE_LAMPORTS_PER_SIGNATURE,
 } from "./solanaAuditDefaults";
 
 const emptyToUndefined = (value: unknown): string | undefined => {
@@ -94,6 +97,9 @@ const parsed = z
     SOLANA_AUDIT_REGISTRY_AUTHORITY: solanaPublicKeySchema.optional(),
     SOLANA_AUDIT_TREASURY: solanaPublicKeySchema.optional(),
     SOLANA_AUDIT_FEE_PAYER_PUBLIC_KEY: solanaPublicKeySchema.optional(),
+    SOLANA_AUDIT_DEFAULT_FEE_MODE: z.enum(SOLANA_AUDIT_FEE_MODES).optional(),
+    SOLANA_AUDIT_SPONSORSHIP_ENABLED: z.string().optional(),
+    SOLANA_AUDIT_USER_PAID_FEES_ENABLED: z.string().optional(),
   })
   .superRefine((input, context) => {
     const hasUrl = Boolean(input.SUPABASE_URL);
@@ -289,6 +295,15 @@ const parsed = z
     SOLANA_AUDIT_FEE_PAYER_PUBLIC_KEY: emptyToUndefined(
       process.env.SOLANA_AUDIT_FEE_PAYER_PUBLIC_KEY,
     ),
+    SOLANA_AUDIT_DEFAULT_FEE_MODE: emptyToUndefined(
+      process.env.SOLANA_AUDIT_DEFAULT_FEE_MODE,
+    ) as (typeof SOLANA_AUDIT_FEE_MODES)[number] | undefined,
+    SOLANA_AUDIT_SPONSORSHIP_ENABLED: emptyToUndefined(
+      process.env.SOLANA_AUDIT_SPONSORSHIP_ENABLED,
+    ),
+    SOLANA_AUDIT_USER_PAID_FEES_ENABLED: emptyToUndefined(
+      process.env.SOLANA_AUDIT_USER_PAID_FEES_ENABLED,
+    ),
   });
 
 const authIssuer =
@@ -361,6 +376,16 @@ const solanaAuditTokenMint =
   parsed.SOLANA_AUDIT_TOKEN_MINT || SHOLAN_TOKEN_DEFAULTS.mint;
 const solanaAuditTokenProgram =
   parsed.SOLANA_AUDIT_TOKEN_PROGRAM || SHOLAN_TOKEN_DEFAULTS.tokenProgram;
+const solanaAuditDefaultFeeMode =
+  parsed.SOLANA_AUDIT_DEFAULT_FEE_MODE || DEFAULT_SOLANA_AUDIT_FEE_MODE;
+const solanaAuditSponsorshipEnabled =
+  parsed.SOLANA_AUDIT_SPONSORSHIP_ENABLED !== undefined
+    ? toBoolean(parsed.SOLANA_AUDIT_SPONSORSHIP_ENABLED)
+    : true;
+const solanaAuditUserPaidFeesEnabled =
+  parsed.SOLANA_AUDIT_USER_PAID_FEES_ENABLED !== undefined
+    ? toBoolean(parsed.SOLANA_AUDIT_USER_PAID_FEES_ENABLED)
+    : false;
 
 export const env = Object.freeze({
   nodeEnv: parsed.NODE_ENV,
@@ -420,7 +445,11 @@ export const env = Object.freeze({
     registryAuthority: parsed.SOLANA_AUDIT_REGISTRY_AUTHORITY ?? null,
     treasury: parsed.SOLANA_AUDIT_TREASURY ?? null,
     feePayerPublicKey: parsed.SOLANA_AUDIT_FEE_PAYER_PUBLIC_KEY ?? null,
+    defaultFeeMode: solanaAuditDefaultFeeMode,
+    sponsorshipEnabled: solanaAuditSponsorshipEnabled,
+    userPaidFeesEnabled: solanaAuditUserPaidFeesEnabled,
     networkFeeCurrency: "SOL",
+    baseFeeLamportsPerSignature: SOLANA_BASE_FEE_LAMPORTS_PER_SIGNATURE,
     tokenRequiredForBackendProcessing: false,
     transactionsEnabled: false,
   }),
