@@ -9,3 +9,9 @@ test.json
 test.md
 dev
 sso-client-secrets/
+
+# Solana / Anchor build output
+solana/target/
+solana/.anchor/
+solana/test-ledger/
+solana/programs/*/target/
