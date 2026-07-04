@@ -28,6 +28,8 @@ export type PollDto = {
   jurisdictionAreaIds: string[];
   jurisdictionLandIds: string[];
   eligibilityRule: PollEligibilityRule;
+  pollPolicyHash: string | null;
+  credentialSchemaHash: string | null;
   startsAt: string | null;
   endsAt: string | null;
   createdAt: string;
@@ -92,7 +94,39 @@ export type VoteSubmissionErrorCode =
   | "OPTION_NOT_FOUND"
   | "OPTION_NOT_IN_POLL"
   | "ALREADY_VOTED"
-  | "ELIGIBILITY_FAILED";
+  | "ELIGIBILITY_FAILED"
+  | "PROOF_REQUIRED"
+  | "PROOF_INVALID";
+
+export type VoteProofPublicInputsDto = {
+  pollId: string;
+  pollPolicyHash: string;
+  credentialSchemaHash: string;
+  nullifier: string;
+  verificationMethodVersion: string;
+  proofSystemVersion: string;
+};
+
+export type VoteProofEnvelopeDto = {
+  version: string;
+  proofSystemVersion: string;
+  status: string;
+  reason: string | null;
+  publicInputs: VoteProofPublicInputsDto;
+  publicInputsHash: string | null;
+};
+
+export type VotePrivacyPayloadDto = {
+  version: string;
+  hashSuite: string;
+  nullifier: string;
+  proof: VoteProofEnvelopeDto;
+};
+
+export type VoteSubmissionRequestDto = {
+  optionId: string;
+  privacy?: VotePrivacyPayloadDto | null;
+};
 
 export type VoteSubmissionSuccessDto = {
   success: true;

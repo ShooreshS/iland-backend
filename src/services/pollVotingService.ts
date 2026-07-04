@@ -3,12 +3,19 @@ import pollMapRefreshQueueRepository from "../repositories/pollMapRefreshQueueRe
 import pollRepository from "../repositories/pollRepository";
 import verifiedIdentityRepository from "../repositories/verifiedIdentityRepository";
 import voteRepository from "../repositories/voteRepository";
+import {
+  normalizeCountryCode,
+  resolveCivicPollPolicy,
+  type CivicPollPolicy,
+} from "./pollPolicyService";
+import { verifyVoteProofForPoll } from "./voteProofVerifierService";
 import type {
   PollDetailsDto,
   PollDto,
   PollOptionDto,
   PollResultsSummaryDto,
   PollSummaryDto,
+  VotePrivacyPayloadDto,
   VoteSubmissionErrorCode,
   VoteSubmissionFailureDto,
   VoteSubmissionResultDto,
@@ -51,6 +58,8 @@ const mapPoll = (row: PollRow): PollDto => {
       ...(allowedLandIds.length > 0 ? { allowedLandIds } : null),
       minimumAge: row.minimum_age,
     },
+    pollPolicyHash: row.poll_policy_hash ?? null,
+    credentialSchemaHash: row.credential_schema_hash ?? null,
     startsAt: row.starts_at,
     endsAt: row.ends_at,
     createdAt: row.created_at,
@@ -82,6 +91,8 @@ const DUPLICATE_USER_VOTE_MESSAGE =
   "Only one vote per user and poll is allowed.";
 const DUPLICATE_VERIFIED_IDENTITY_VOTE_MESSAGE =
   "Only one vote per verified identity and poll is allowed.";
+const DUPLICATE_NULLIFIER_VOTE_MESSAGE =
+  "Only one vote per proof nullifier and poll is allowed.";
 const VERIFIED_IDENTITY_REQUIRED_MESSAGE =
   "This poll requires a linked verified identity.";
 
@@ -154,22 +165,67 @@ const buildResults = (
   };
 };
 
+const resolvePolicyForPoll = (poll: PollRow): CivicPollPolicy =>
+  resolveCivicPollPolicy(poll.poll_policy_json, {
+    pollId: poll.id,
+    jurisdictionType: poll.jurisdiction_type,
+    jurisdictionCountryCode: poll.jurisdiction_country_code,
+    jurisdictionAreaIds: poll.jurisdiction_area_ids,
+    jurisdictionLandIds: poll.jurisdiction_land_ids,
+    requiresVerifiedIdentity: poll.requires_verified_identity,
+    allowedDocumentCountryCodes: poll.allowed_document_country_codes,
+    allowedHomeAreaIds: poll.allowed_home_area_ids,
+    allowedLandIds: poll.allowed_land_ids,
+    minimumAge: poll.minimum_age,
+    startsAt: poll.starts_at,
+    endsAt: poll.ends_at,
+  });
+
+const isTimestampAfter = (left: string, right: string): boolean => {
+  const leftMs = Date.parse(left);
+  const rightMs = Date.parse(right);
+  return Number.isFinite(leftMs) && Number.isFinite(rightMs) && leftMs > rightMs;
+};
+
+const isTimestampOnOrBefore = (left: string, right: string): boolean => {
+  const leftMs = Date.parse(left);
+  const rightMs = Date.parse(right);
+  return Number.isFinite(leftMs) && Number.isFinite(rightMs) && leftMs <= rightMs;
+};
+
+const isPollVotingWindowOpen = (poll: PollRow, nowIso: string): boolean => {
+  if (poll.starts_at && isTimestampAfter(poll.starts_at, nowIso)) {
+    return false;
+  }
+
+  if (poll.ends_at && isTimestampOnOrBefore(poll.ends_at, nowIso)) {
+    return false;
+  }
+
+  return true;
+};
+
 const evaluateEligibility = (
-  poll: PollRow,
+  policy: CivicPollPolicy,
   user: Pick<UserRow, "selected_land_id">,
   hasLinkedVerifiedIdentity: boolean,
   identityProfile: { document_country_code: string | null; home_area_id: string | null },
 ): VoteSubmissionFailureDto | null => {
-  if (poll.requires_verified_identity && !hasLinkedVerifiedIdentity) {
+  const { eligibilityRules } = policy;
+
+  if (eligibilityRules.requiresVerifiedIdentity && !hasLinkedVerifiedIdentity) {
     return buildFailure(
       "ELIGIBILITY_FAILED",
       VERIFIED_IDENTITY_REQUIRED_MESSAGE,
     );
   }
 
-  const allowedDocumentCountryCodes = toArray(poll.allowed_document_country_codes);
+  const allowedDocumentCountryCodes =
+    eligibilityRules.acceptedDocumentCountryCodes;
   if (allowedDocumentCountryCodes.length > 0) {
-    const documentCountryCode = identityProfile.document_country_code;
+    const documentCountryCode = normalizeCountryCode(
+      identityProfile.document_country_code,
+    );
     if (
       !documentCountryCode ||
       !allowedDocumentCountryCodes.includes(documentCountryCode)
@@ -181,9 +237,9 @@ const evaluateEligibility = (
     }
   }
 
-  const allowedHomeAreaIds = toArray(poll.allowed_home_area_ids);
+  const allowedHomeAreaIds = eligibilityRules.acceptedHomeAreaIds;
   if (allowedHomeAreaIds.length > 0) {
-    const homeAreaId = identityProfile.home_area_id;
+    const homeAreaId = identityProfile.home_area_id?.trim() || null;
     if (!homeAreaId || !allowedHomeAreaIds.includes(homeAreaId)) {
       return buildFailure(
         "ELIGIBILITY_FAILED",
@@ -192,9 +248,9 @@ const evaluateEligibility = (
     }
   }
 
-  const allowedLandIds = toArray(poll.allowed_land_ids);
+  const allowedLandIds = eligibilityRules.acceptedLandIds;
   if (allowedLandIds.length > 0) {
-    const selectedLandId = user.selected_land_id;
+    const selectedLandId = user.selected_land_id?.trim() || null;
     if (!selectedLandId || !allowedLandIds.includes(selectedLandId)) {
       return buildFailure(
         "ELIGIBILITY_FAILED",
@@ -207,13 +263,13 @@ const evaluateEligibility = (
   return null;
 };
 
-const pollRequiresIdentityProfile = (poll: PollRow): boolean =>
-  poll.requires_verified_identity ||
-  toArray(poll.allowed_document_country_codes).length > 0 ||
-  toArray(poll.allowed_home_area_ids).length > 0;
+const pollRequiresIdentityProfile = (policy: CivicPollPolicy): boolean =>
+  policy.eligibilityRules.requiresVerifiedIdentity ||
+  policy.eligibilityRules.acceptedDocumentCountryCodes.length > 0 ||
+  policy.eligibilityRules.acceptedHomeAreaIds.length > 0;
 
-const pollRequiresHomeArea = (poll: PollRow): boolean =>
-  toArray(poll.allowed_home_area_ids).length > 0;
+const pollRequiresHomeArea = (policy: CivicPollPolicy): boolean =>
+  policy.eligibilityRules.acceptedHomeAreaIds.length > 0;
 
 const canonicalizeNegativeZero = (value: number): number =>
   Object.is(value, -0) ? 0 : value;
@@ -384,20 +440,33 @@ export const pollVotingService = {
     pollId: string;
     optionId: string;
     viewer: UserRow;
+    privacy?: VotePrivacyPayloadDto | null;
   }): Promise<VoteSubmissionResultDto> {
-    const { pollId, optionId, viewer } = params;
+    const { pollId, optionId, viewer, privacy } = params;
 
     const poll = await pollRepository.getById(pollId);
     if (!poll) {
       return buildFailure("POLL_NOT_FOUND", "The requested poll does not exist.");
     }
 
+    const submittedAt = new Date().toISOString();
     if (poll.status !== "active") {
       return buildFailure(
         "POLL_NOT_ACTIVE",
         "Only active polls can accept new votes in this phase.",
       );
     }
+
+    if (!isPollVotingWindowOpen(poll, submittedAt)) {
+      return buildFailure(
+        "POLL_NOT_ACTIVE",
+        "The poll voting window is not open.",
+      );
+    }
+
+    const pollPolicy = resolvePolicyForPoll(poll);
+    const requiresVerifiedIdentity =
+      pollPolicy.eligibilityRules.requiresVerifiedIdentity;
 
     const optionInPoll = await pollRepository.getOptionByIdForPoll(pollId, optionId);
     if (!optionInPoll) {
@@ -423,7 +492,7 @@ export const pollVotingService = {
     }
 
     let verifiedIdentityId: string | null = null;
-    if (poll.requires_verified_identity) {
+    if (requiresVerifiedIdentity) {
       const verifiedIdentity = await verifiedIdentityRepository.getByUserId(viewer.id);
       if (!verifiedIdentity) {
         return buildFailure(
@@ -448,7 +517,7 @@ export const pollVotingService = {
     }
 
     const identityProfile = await identityProfileRepository.getByUserId(viewer.id);
-    const requiresIdentityProfile = pollRequiresIdentityProfile(poll);
+    const requiresIdentityProfile = pollRequiresIdentityProfile(pollPolicy);
 
     if (!identityProfile && requiresIdentityProfile) {
       return buildFailure(
@@ -457,7 +526,7 @@ export const pollVotingService = {
       );
     }
 
-    if (pollRequiresHomeArea(poll) && !identityProfile?.home_area_id) {
+    if (pollRequiresHomeArea(pollPolicy) && !identityProfile?.home_area_id) {
       return buildFailure(
         "HOME_LOCATION_MISSING",
         "A home location area is required for this poll.",
@@ -465,7 +534,7 @@ export const pollVotingService = {
     }
 
     const eligibilityFailure = evaluateEligibility(
-      poll,
+      pollPolicy,
       viewer,
       Boolean(verifiedIdentityId),
       {
@@ -477,7 +546,31 @@ export const pollVotingService = {
       return eligibilityFailure;
     }
 
-    const submittedAt = new Date().toISOString();
+    const proofVerification = verifyVoteProofForPoll({
+      poll,
+      optionId,
+      privacy,
+    });
+    if (!proofVerification.ok) {
+      return buildFailure(
+        proofVerification.reason === "PROOF_REQUIRED"
+          ? "PROOF_REQUIRED"
+          : "PROOF_INVALID",
+        proofVerification.message,
+      );
+    }
+
+    const proofAuditMaterial = proofVerification.auditMaterial;
+    if (proofAuditMaterial?.nullifier) {
+      const existingNullifierVote = await voteRepository.getByPollIdAndNullifier(
+        pollId,
+        proofAuditMaterial.nullifier,
+      );
+      if (existingNullifierVote) {
+        return buildFailure("ALREADY_VOTED", DUPLICATE_NULLIFIER_VOTE_MESSAGE);
+      }
+    }
+
     const locationSnapshot = resolveVoteLocationSnapshot(
       identityProfile
         ? {
@@ -494,6 +587,20 @@ export const pollVotingService = {
         option_id: optionId,
         user_id: viewer.id,
         verified_identity_id: verifiedIdentityId,
+        nullifier: proofAuditMaterial?.nullifier ?? null,
+        vote_commitment: proofAuditMaterial?.voteCommitment ?? null,
+        encrypted_vote: null,
+        proof_hash: proofAuditMaterial?.proofHash ?? null,
+        proof_system_version: proofAuditMaterial?.proofSystemVersion ?? null,
+        verification_method_version:
+          proofAuditMaterial?.verificationMethodVersion ?? null,
+        proof_verification_status:
+          proofAuditMaterial?.proofVerificationStatus ?? null,
+        proof_public_inputs_json:
+          proofAuditMaterial?.proofPublicInputsJson ?? null,
+        proof_envelope_json: proofAuditMaterial?.proofEnvelopeJson ?? null,
+        accepted_at: proofAuditMaterial ? submittedAt : null,
+        batch_id: null,
         vote_latitude_l0: locationSnapshot.vote_latitude_l0,
         vote_longitude_l0: locationSnapshot.vote_longitude_l0,
         vote_location_snapshot_at: locationSnapshot.vote_location_snapshot_at,
@@ -524,7 +631,7 @@ export const pollVotingService = {
       if (isUniqueViolation(error)) {
         return buildFailure(
           "ALREADY_VOTED",
-          poll.requires_verified_identity
+          requiresVerifiedIdentity
             ? DUPLICATE_VERIFIED_IDENTITY_VOTE_MESSAGE
             : DUPLICATE_USER_VOTE_MESSAGE,
         );

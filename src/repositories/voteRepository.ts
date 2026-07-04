@@ -5,7 +5,10 @@ const BASE_VOTE_COLUMNS =
   "id,poll_id,option_id,user_id,verified_identity_id,submitted_at,is_valid,invalid_reason,created_at,updated_at";
 const SNAPSHOT_VOTE_COLUMNS =
   "vote_latitude_l0,vote_longitude_l0,vote_location_snapshot_at,vote_location_snapshot_version";
+const AUDIT_VOTE_COLUMNS =
+  "nullifier,vote_commitment,encrypted_vote,proof_hash,proof_system_version,verification_method_version,proof_verification_status,proof_public_inputs_json,proof_envelope_json,accepted_at,batch_id";
 const VOTE_COLUMNS_WITH_SNAPSHOT = `${BASE_VOTE_COLUMNS},${SNAPSHOT_VOTE_COLUMNS}`;
+const VOTE_COLUMNS_WITH_AUDIT = `${BASE_VOTE_COLUMNS},${SNAPSHOT_VOTE_COLUMNS},${AUDIT_VOTE_COLUMNS}`;
 const MAP_CACHE_REBUILD_VOTE_COLUMNS =
   "id,option_id,submitted_at,vote_latitude_l0,vote_longitude_l0";
 const SNAPSHOT_VOTE_COLUMN_NAMES = [
@@ -14,6 +17,19 @@ const SNAPSHOT_VOTE_COLUMN_NAMES = [
   "vote_location_snapshot_at",
   "vote_location_snapshot_version",
 ] as const;
+const AUDIT_VOTE_COLUMN_NAMES = [
+  "nullifier",
+  "vote_commitment",
+  "encrypted_vote",
+  "proof_hash",
+  "proof_system_version",
+  "verification_method_version",
+  "proof_verification_status",
+  "proof_public_inputs_json",
+  "proof_envelope_json",
+  "accepted_at",
+  "batch_id",
+] as const;
 
 type PartialVoteRow = Omit<
   VoteRow,
@@ -21,6 +37,17 @@ type PartialVoteRow = Omit<
   | "vote_longitude_l0"
   | "vote_location_snapshot_at"
   | "vote_location_snapshot_version"
+  | "nullifier"
+  | "vote_commitment"
+  | "encrypted_vote"
+  | "proof_hash"
+  | "proof_system_version"
+  | "verification_method_version"
+  | "proof_verification_status"
+  | "proof_public_inputs_json"
+  | "proof_envelope_json"
+  | "accepted_at"
+  | "batch_id"
 > &
   Partial<
     Pick<
@@ -29,6 +56,17 @@ type PartialVoteRow = Omit<
       | "vote_longitude_l0"
       | "vote_location_snapshot_at"
       | "vote_location_snapshot_version"
+      | "nullifier"
+      | "vote_commitment"
+      | "encrypted_vote"
+      | "proof_hash"
+      | "proof_system_version"
+      | "verification_method_version"
+      | "proof_verification_status"
+      | "proof_public_inputs_json"
+      | "proof_envelope_json"
+      | "accepted_at"
+      | "batch_id"
     >
   >;
 
@@ -43,6 +81,17 @@ export type PollMapRebuildVoteRow = Pick<
 
 const withSnapshotDefaults = (row: PartialVoteRow): VoteRow => ({
   ...row,
+  nullifier: row.nullifier ?? null,
+  vote_commitment: row.vote_commitment ?? null,
+  encrypted_vote: row.encrypted_vote ?? null,
+  proof_hash: row.proof_hash ?? null,
+  proof_system_version: row.proof_system_version ?? null,
+  verification_method_version: row.verification_method_version ?? null,
+  proof_verification_status: row.proof_verification_status ?? null,
+  proof_public_inputs_json: row.proof_public_inputs_json ?? null,
+  proof_envelope_json: row.proof_envelope_json ?? null,
+  accepted_at: row.accepted_at ?? null,
+  batch_id: row.batch_id ?? null,
   vote_latitude_l0: row.vote_latitude_l0 ?? null,
   vote_longitude_l0: row.vote_longitude_l0 ?? null,
   vote_location_snapshot_at: row.vote_location_snapshot_at ?? null,
@@ -176,6 +225,36 @@ const isMissingSnapshotVoteColumnError = (error: unknown): boolean => {
   );
 };
 
+const isMissingAuditVoteColumnError = (error: unknown): boolean => {
+  if (!error || typeof error !== "object") {
+    return false;
+  }
+
+  const code = (error as { code?: unknown }).code;
+  if (typeof code !== "string") {
+    return false;
+  }
+
+  const normalizedCode = code.trim().toUpperCase();
+  if (
+    normalizedCode !== "42703" &&
+    normalizedCode !== "PGRST204" &&
+    normalizedCode !== "PGRST205"
+  ) {
+    return false;
+  }
+
+  const message = (error as { message?: unknown }).message;
+  if (typeof message !== "string") {
+    return false;
+  }
+
+  const normalized = message.toLowerCase();
+  return AUDIT_VOTE_COLUMN_NAMES.some((columnName) =>
+    normalized.includes(columnName),
+  );
+};
+
 export const voteRepository = {
   async getByUserIdAndPollId(userId: string, pollId: string): Promise<VoteRow | null> {
     const supabase = requireSupabaseAdminClient();
@@ -205,6 +284,26 @@ export const voteRepository = {
       .select(BASE_VOTE_COLUMNS)
       .eq("verified_identity_id", verifiedIdentityId)
       .eq("poll_id", pollId)
+      .maybeSingle<PartialVoteRow>();
+
+    if (error) {
+      throw error;
+    }
+
+    return data ? withSnapshotDefaults(data) : null;
+  },
+
+  async getByPollIdAndNullifier(
+    pollId: string,
+    nullifier: string,
+  ): Promise<VoteRow | null> {
+    const supabase = requireSupabaseAdminClient();
+
+    const { data, error } = await supabase
+      .from("votes")
+      .select(VOTE_COLUMNS_WITH_AUDIT)
+      .eq("poll_id", pollId)
+      .eq("nullifier", nullifier)
       .maybeSingle<PartialVoteRow>();
 
     if (error) {
@@ -250,7 +349,7 @@ export const voteRepository = {
       throw error;
     }
 
-    return (data || []) as VoteRow[];
+    return ((data || []) as PartialVoteRow[]).map(withSnapshotDefaults);
   },
 
   async getValidWithSnapshotByPollIdPage(
@@ -275,7 +374,7 @@ export const voteRepository = {
       throw error;
     }
 
-    return (data || []) as VoteRow[];
+    return ((data || []) as PartialVoteRow[]).map(withSnapshotDefaults);
   },
 
   async getValidWithSnapshotByPollIdKeysetPage(
@@ -477,6 +576,17 @@ export const voteRepository = {
       option_id: input.option_id,
       user_id: input.user_id,
       verified_identity_id: input.verified_identity_id ?? null,
+      nullifier: input.nullifier ?? null,
+      vote_commitment: input.vote_commitment ?? null,
+      encrypted_vote: input.encrypted_vote ?? null,
+      proof_hash: input.proof_hash ?? null,
+      proof_system_version: input.proof_system_version ?? null,
+      verification_method_version: input.verification_method_version ?? null,
+      proof_verification_status: input.proof_verification_status ?? null,
+      proof_public_inputs_json: input.proof_public_inputs_json ?? null,
+      proof_envelope_json: input.proof_envelope_json ?? null,
+      accepted_at: input.accepted_at ?? null,
+      batch_id: input.batch_id ?? null,
       submitted_at: input.submitted_at,
       is_valid: input.is_valid ?? true,
       invalid_reason: input.invalid_reason ?? null,
@@ -493,11 +603,15 @@ export const voteRepository = {
     const { data, error } = await supabase
       .from("votes")
       .insert(snapshotInsertPayload)
-      .select(VOTE_COLUMNS_WITH_SNAPSHOT)
+      .select(VOTE_COLUMNS_WITH_AUDIT)
       .single<VoteRow>();
 
     if (!error) {
       return data;
+    }
+
+    if (isMissingAuditVoteColumnError(error)) {
+      throw error;
     }
 
     if (!isMissingSnapshotVoteColumnError(error)) {

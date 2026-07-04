@@ -7,7 +7,7 @@ import type {
 } from "../types/db";
 
 const POLL_COLUMNS =
-  "id,slug,created_by_user_id,title,description,status,jurisdiction_type,jurisdiction_country_code,jurisdiction_area_ids,jurisdiction_land_ids,requires_verified_identity,allowed_document_country_codes,allowed_home_area_ids,allowed_land_ids,minimum_age,starts_at,ends_at,created_at,updated_at";
+  "id,slug,created_by_user_id,title,description,status,jurisdiction_type,jurisdiction_country_code,jurisdiction_area_ids,jurisdiction_land_ids,requires_verified_identity,allowed_document_country_codes,allowed_home_area_ids,allowed_land_ids,minimum_age,starts_at,ends_at,poll_policy_json,poll_policy_hash,credential_schema_json,credential_schema_hash,created_at,updated_at";
 
 const POLL_OPTION_COLUMNS =
   "id,poll_id,label,description,color,display_order,is_active,created_at,updated_at";
@@ -118,6 +118,7 @@ export const pollRepository = {
     const { data, error } = await supabase
       .from("polls")
       .insert({
+        ...(input.id ? { id: input.id } : null),
         slug: input.slug,
         created_by_user_id: input.created_by_user_id,
         title: input.title,
@@ -134,6 +135,10 @@ export const pollRepository = {
         minimum_age: input.minimum_age,
         starts_at: input.starts_at,
         ends_at: input.ends_at,
+        poll_policy_json: input.poll_policy_json ?? null,
+        poll_policy_hash: input.poll_policy_hash ?? null,
+        credential_schema_json: input.credential_schema_json ?? null,
+        credential_schema_hash: input.credential_schema_hash ?? null,
       })
       .select(POLL_COLUMNS)
       .single<PollRow>();
@@ -166,6 +171,10 @@ export const pollRepository = {
         minimum_age: input.minimum_age,
         starts_at: input.starts_at,
         ends_at: input.ends_at,
+        poll_policy_json: input.poll_policy_json ?? null,
+        poll_policy_hash: input.poll_policy_hash ?? null,
+        credential_schema_json: input.credential_schema_json ?? null,
+        credential_schema_hash: input.credential_schema_hash ?? null,
       })
       .eq("id", pollId)
       .select(POLL_COLUMNS)

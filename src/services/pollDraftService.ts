@@ -1,5 +1,7 @@
+import { randomUUID } from "node:crypto";
 import pollRepository from "../repositories/pollRepository";
 import voteRepository from "../repositories/voteRepository";
+import { buildPollAuditMaterial } from "./pollPolicyService";
 import type {
   CreatePollRequestDto,
   CreatePollResultDto,
@@ -88,6 +90,8 @@ const mapPoll = (row: PollRow): PollDto => {
       ...(allowedLandIds.length > 0 ? { allowedLandIds } : null),
       minimumAge: row.minimum_age,
     },
+    pollPolicyHash: row.poll_policy_hash ?? null,
+    credentialSchemaHash: row.credential_schema_hash ?? null,
     startsAt: row.starts_at,
     endsAt: row.ends_at,
     createdAt: row.created_at,
@@ -203,6 +207,19 @@ const normalizeMutationInput = (
       error: createFailureResult(
         "VALIDATION_FAILED",
         "A land must be selected for land-scoped polls.",
+      ),
+    };
+  }
+
+  const minimumAge = input.eligibilityRule?.minimumAge;
+  if (
+    typeof minimumAge === "number" &&
+    (!Number.isFinite(minimumAge) || !Number.isInteger(minimumAge) || minimumAge < 0)
+  ) {
+    return {
+      error: createFailureResult(
+        "VALIDATION_FAILED",
+        "Minimum age must be a non-negative whole number.",
       ),
     };
   }
@@ -325,29 +342,55 @@ const createEditabilityResult = (
 };
 
 const buildPollInsertPayload = (
+  pollId: string,
   data: NormalizedPollMutationInput,
   createdByUserId: string,
   slug: string,
   startsAt: string | null,
   endsAt: string | null,
-): NewPollRow => ({
-  slug,
-  created_by_user_id: createdByUserId,
-  title: data.title,
-  description: data.description,
-  status: data.status,
-  jurisdiction_type: data.jurisdictionType,
-  jurisdiction_country_code: data.jurisdictionCountryCode,
-  jurisdiction_area_ids: data.jurisdictionAreaIds,
-  jurisdiction_land_ids: data.jurisdictionLandIds,
-  requires_verified_identity: data.eligibilityRule.requiresVerifiedIdentity,
-  allowed_document_country_codes: data.eligibilityRule.allowedDocumentCountryCodes || [],
-  allowed_home_area_ids: data.eligibilityRule.allowedHomeAreaIds || [],
-  allowed_land_ids: data.eligibilityRule.allowedLandIds || [],
-  minimum_age: data.eligibilityRule.minimumAge ?? null,
-  starts_at: startsAt,
-  ends_at: endsAt,
-});
+): NewPollRow => {
+  const auditMaterial = buildPollAuditMaterial({
+    pollId,
+    jurisdictionType: data.jurisdictionType,
+    jurisdictionCountryCode: data.jurisdictionCountryCode,
+    jurisdictionAreaIds: data.jurisdictionAreaIds,
+    jurisdictionLandIds: data.jurisdictionLandIds,
+    requiresVerifiedIdentity: data.eligibilityRule.requiresVerifiedIdentity,
+    allowedDocumentCountryCodes: data.eligibilityRule.allowedDocumentCountryCodes || [],
+    allowedHomeAreaIds: data.eligibilityRule.allowedHomeAreaIds || [],
+    allowedLandIds: data.eligibilityRule.allowedLandIds || [],
+    minimumAge: data.eligibilityRule.minimumAge ?? null,
+    startsAt,
+    endsAt,
+  });
+  const { pollPolicy, pollPolicyHash, credentialSchema, credentialSchemaHash } =
+    auditMaterial;
+
+  return {
+    id: pollId,
+    slug,
+    created_by_user_id: createdByUserId,
+    title: data.title,
+    description: data.description,
+    status: data.status,
+    jurisdiction_type: pollPolicy.jurisdiction.type,
+    jurisdiction_country_code: pollPolicy.jurisdiction.countryCode,
+    jurisdiction_area_ids: pollPolicy.jurisdiction.areaIds,
+    jurisdiction_land_ids: pollPolicy.jurisdiction.landIds,
+    requires_verified_identity: pollPolicy.eligibilityRules.requiresVerifiedIdentity,
+    allowed_document_country_codes:
+      pollPolicy.eligibilityRules.acceptedDocumentCountryCodes,
+    allowed_home_area_ids: pollPolicy.eligibilityRules.acceptedHomeAreaIds,
+    allowed_land_ids: pollPolicy.eligibilityRules.acceptedLandIds,
+    minimum_age: pollPolicy.eligibilityRules.minimumAge,
+    starts_at: pollPolicy.votingWindow.opensAt,
+    ends_at: pollPolicy.votingWindow.closesAt,
+    poll_policy_json: pollPolicy,
+    poll_policy_hash: pollPolicyHash,
+    credential_schema_json: credentialSchema,
+    credential_schema_hash: credentialSchemaHash,
+  };
+};
 
 const buildCreateSlug = (title: string): string => {
   const base = slugify(title) || "poll";
@@ -391,8 +434,10 @@ export const pollDraftService = {
     }
 
     const now = new Date().toISOString();
+    const pollId = randomUUID();
     const createdPoll = await pollRepository.insert(
       buildPollInsertPayload(
+        pollId,
         normalized.data,
         viewerUserId,
         buildCreateSlug(normalized.data.title),
@@ -495,6 +540,7 @@ export const pollDraftService = {
     const updatedPoll = await pollRepository.updateById(
       existingPoll.id,
       buildPollInsertPayload(
+        existingPoll.id,
         normalized.data,
         existingPoll.created_by_user_id || viewerUserId,
         existingPoll.slug,
@@ -563,24 +609,34 @@ export const pollDraftService = {
     }
 
     const now = new Date().toISOString();
-    const publishedPoll = await pollRepository.updateById(existingPoll.id, {
-      slug: existingPoll.slug,
-      created_by_user_id: existingPoll.created_by_user_id || viewerUserId,
-      title: existingPoll.title,
-      description: existingPoll.description,
-      status: "active",
-      jurisdiction_type: existingPoll.jurisdiction_type,
-      jurisdiction_country_code: existingPoll.jurisdiction_country_code,
-      jurisdiction_area_ids: existingPoll.jurisdiction_area_ids || [],
-      jurisdiction_land_ids: existingPoll.jurisdiction_land_ids || [],
-      requires_verified_identity: existingPoll.requires_verified_identity,
-      allowed_document_country_codes: existingPoll.allowed_document_country_codes || [],
-      allowed_home_area_ids: existingPoll.allowed_home_area_ids || [],
-      allowed_land_ids: existingPoll.allowed_land_ids || [],
-      minimum_age: existingPoll.minimum_age,
-      starts_at: existingPoll.starts_at || now,
-      ends_at: existingPoll.ends_at,
-    });
+    const publishedPoll = await pollRepository.updateById(
+      existingPoll.id,
+      buildPollInsertPayload(
+        existingPoll.id,
+        {
+          title: existingPoll.title,
+          description: existingPoll.description,
+          options: [],
+          jurisdictionType: existingPoll.jurisdiction_type,
+          jurisdictionCountryCode: existingPoll.jurisdiction_country_code,
+          jurisdictionAreaIds: existingPoll.jurisdiction_area_ids || [],
+          jurisdictionLandIds: existingPoll.jurisdiction_land_ids || [],
+          status: "active",
+          eligibilityRule: {
+            requiresVerifiedIdentity: existingPoll.requires_verified_identity,
+            allowedDocumentCountryCodes:
+              existingPoll.allowed_document_country_codes || [],
+            allowedHomeAreaIds: existingPoll.allowed_home_area_ids || [],
+            allowedLandIds: existingPoll.allowed_land_ids || [],
+            minimumAge: existingPoll.minimum_age,
+          },
+        },
+        existingPoll.created_by_user_id || viewerUserId,
+        existingPoll.slug,
+        existingPoll.starts_at || now,
+        existingPoll.ends_at,
+      ),
+    );
 
     if (!publishedPoll) {
       return {

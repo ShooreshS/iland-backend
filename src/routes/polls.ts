@@ -8,11 +8,55 @@ import type {
   PollManagementErrorCode,
   UpdateDraftPollRequestDto,
   VoteSubmissionFailureDto,
+  VoteSubmissionRequestDto,
 } from "../types/contracts";
 import type { RouteDefinition } from "../types/http";
 
+const hex64Schema = z
+  .string()
+  .trim()
+  .regex(/^[0-9a-f]{64}$/i)
+  .transform((value) => value.toLowerCase());
+
+const voteProofPublicInputsSchema = z
+  .object({
+    pollId: z.string().trim().min(1),
+    pollPolicyHash: hex64Schema,
+    credentialSchemaHash: hex64Schema,
+    nullifier: hex64Schema,
+    verificationMethodVersion: z.string().trim().min(1),
+    proofSystemVersion: z.string().trim().min(1),
+  })
+  .strict();
+
+const voteProofEnvelopeSchema = z
+  .object({
+    version: z.string().trim().min(1),
+    proofSystemVersion: z.string().trim().min(1),
+    status: z.string().trim().min(1),
+    reason: z.string().trim().min(1).nullable().optional(),
+    publicInputs: voteProofPublicInputsSchema,
+    publicInputsHash: hex64Schema.nullable().optional(),
+  })
+  .strict()
+  .transform((value) => ({
+    ...value,
+    reason: value.reason ?? null,
+    publicInputsHash: value.publicInputsHash ?? null,
+  }));
+
+const votePrivacySchema = z
+  .object({
+    version: z.string().trim().min(1),
+    hashSuite: z.string().trim().min(1),
+    nullifier: hex64Schema,
+    proof: voteProofEnvelopeSchema,
+  })
+  .strict();
+
 const voteRequestSchema = z.object({
   optionId: z.string().trim().min(1),
+  privacy: votePrivacySchema.nullable().optional(),
 });
 
 const optionInputSchema = z.union([
@@ -65,6 +109,8 @@ const voteErrorStatusMap: Partial<Record<VoteSubmissionFailureDto["errorCode"], 
   OPTION_NOT_IN_POLL: 400,
   ALREADY_VOTED: 409,
   ELIGIBILITY_FAILED: 403,
+  PROOF_REQUIRED: 403,
+  PROOF_INVALID: 400,
   UNKNOWN_ERROR: 500,
 };
 
@@ -370,6 +416,8 @@ const submitVoteRoute: RouteDefinition = {
     const result = await pollVotingService.submitVote({
       pollId,
       optionId: parsedBody.data.optionId,
+      privacy:
+        (parsedBody.data as VoteSubmissionRequestDto).privacy ?? null,
       viewer: viewerResult.viewer.user,
     });
 

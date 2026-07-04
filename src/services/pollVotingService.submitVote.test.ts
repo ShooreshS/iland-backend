@@ -1,9 +1,11 @@
 import { describe, expect, it } from "bun:test";
+import { createHash } from "node:crypto";
 import identityProfileRepository from "../repositories/identityProfileRepository";
 import pollMapRefreshQueueRepository from "../repositories/pollMapRefreshQueueRepository";
 import pollRepository from "../repositories/pollRepository";
 import verifiedIdentityRepository from "../repositories/verifiedIdentityRepository";
 import voteRepository from "../repositories/voteRepository";
+import { canonicalizeJson } from "./pollPolicyService";
 import { pollVotingService } from "./pollVotingService";
 import type {
   IdentityProfileRow,
@@ -16,6 +18,12 @@ import type {
 } from "../types/db";
 
 const FIXED_TIME = "2026-04-06T12:00:00.000Z";
+const POLL_POLICY_HASH = "1".repeat(64);
+const CREDENTIAL_SCHEMA_HASH = "2".repeat(64);
+const NULLIFIER = "3".repeat(64);
+
+const sha256Hex = (value: string): string =>
+  createHash("sha256").update(value, "utf8").digest("hex");
 
 const createViewer = (overrides: Partial<UserRow> = {}): UserRow => {
   const next = {
@@ -125,6 +133,17 @@ const createVote = (overrides: Partial<VoteRow> = {}): VoteRow => ({
   option_id: "option-1",
   user_id: "viewer-user-1",
   verified_identity_id: null,
+  nullifier: null,
+  vote_commitment: null,
+  encrypted_vote: null,
+  proof_hash: null,
+  proof_system_version: null,
+  verification_method_version: null,
+  proof_verification_status: null,
+  proof_public_inputs_json: null,
+  proof_envelope_json: null,
+  accepted_at: null,
+  batch_id: null,
   vote_latitude_l0: null,
   vote_longitude_l0: null,
   vote_location_snapshot_at: null,
@@ -136,6 +155,41 @@ const createVote = (overrides: Partial<VoteRow> = {}): VoteRow => ({
   updated_at: FIXED_TIME,
   ...overrides,
 });
+
+const createVotePrivacyPayload = (
+  overrides: {
+    pollId?: string;
+    pollPolicyHash?: string;
+    credentialSchemaHash?: string;
+    nullifier?: string;
+  } = {},
+) => {
+  const publicInputs = {
+    pollId: overrides.pollId ?? "poll-1",
+    pollPolicyHash: overrides.pollPolicyHash ?? POLL_POLICY_HASH,
+    credentialSchemaHash:
+      overrides.credentialSchemaHash ?? CREDENTIAL_SCHEMA_HASH,
+    nullifier: overrides.nullifier ?? NULLIFIER,
+    verificationMethodVersion: "civicos-mobile-verification-v1",
+    proofSystemVersion: "civicos-zk-proof-v1-preprover",
+  };
+
+  return {
+    version: "civicos-vote-privacy-v1",
+    hashSuite: "sha256-sha512-preposeidon-v1",
+    nullifier: publicInputs.nullifier,
+    proof: {
+      version: "civicos-proof-envelope-v1",
+      proofSystemVersion: "civicos-zk-proof-v1-preprover",
+      status: "not_generated",
+      reason: "prover_not_integrated",
+      publicInputs,
+      publicInputsHash: sha256Hex(
+        `org.civicos.identity|proof-public-inputs|${canonicalizeJson(publicInputs)}`,
+      ),
+    },
+  };
+};
 
 const createQueueRow = (
   overrides: Partial<PollMapRefreshQueueRow> = {},
@@ -268,6 +322,226 @@ describe("pollVotingService.submitVote", () => {
         ).vote_location_snapshot_at,
       ).toBeTruthy();
       expect(enqueueCalls).toBe(1);
+    } finally {
+      restoreFns.reverse().forEach((restore) => restore());
+    }
+  });
+
+  it("accepts proof-enabled verified vote and persists proof audit metadata", async () => {
+    const viewer = createViewer();
+    const poll = createPoll({
+      requires_verified_identity: true,
+      poll_policy_hash: POLL_POLICY_HASH,
+      credential_schema_hash: CREDENTIAL_SCHEMA_HASH,
+    });
+    const option = createOption();
+    const verifiedIdentity = createVerifiedIdentity();
+    const identityProfile = createIdentityProfile();
+    const privacy = createVotePrivacyPayload();
+
+    let insertedPayload: unknown = null;
+    let enqueueCalls = 0;
+    let duplicateNullifierLookup:
+      | { pollId: string; nullifier: string }
+      | undefined;
+
+    const restoreFns = [
+      patchMethod(pollRepository, "getById", async () => poll),
+      patchMethod(pollRepository, "getOptionByIdForPoll", async () => option),
+      patchMethod(
+        verifiedIdentityRepository,
+        "getByUserId",
+        async () => verifiedIdentity,
+      ),
+      patchMethod(
+        voteRepository,
+        "getByVerifiedIdentityIdAndPollId",
+        async () => null,
+      ),
+      patchMethod(identityProfileRepository, "getByUserId", async () => identityProfile),
+      patchMethod(
+        voteRepository,
+        "getByPollIdAndNullifier",
+        async (pollId: string, nullifier: string) => {
+          duplicateNullifierLookup = { pollId, nullifier };
+          return null;
+        },
+      ),
+      patchMethod(
+        pollMapRefreshQueueRepository,
+        "enqueuePoll",
+        async (pollId: string) => {
+          enqueueCalls += 1;
+          return createQueueRow({
+            poll_id: pollId,
+            pending_vote_events: enqueueCalls,
+          });
+        },
+      ),
+      patchMethod(voteRepository, "insert", async (input) => {
+        insertedPayload = input;
+        return createVote({
+          poll_id: input.poll_id,
+          option_id: input.option_id,
+          user_id: input.user_id,
+          verified_identity_id: input.verified_identity_id ?? null,
+          nullifier: input.nullifier ?? null,
+          vote_commitment: input.vote_commitment ?? null,
+          proof_hash: input.proof_hash ?? null,
+          proof_system_version: input.proof_system_version ?? null,
+          verification_method_version: input.verification_method_version ?? null,
+          proof_verification_status: input.proof_verification_status ?? null,
+          proof_public_inputs_json: input.proof_public_inputs_json ?? null,
+          proof_envelope_json: input.proof_envelope_json ?? null,
+          accepted_at: input.accepted_at ?? null,
+          submitted_at: input.submitted_at,
+        });
+      }),
+    ];
+
+    try {
+      const result = await pollVotingService.submitVote({
+        pollId: poll.id,
+        optionId: option.id,
+        viewer,
+        privacy,
+      });
+
+      expect(result.success).toBe(true);
+      expect(duplicateNullifierLookup).toEqual({
+        pollId: poll.id,
+        nullifier: NULLIFIER,
+      });
+      expect(insertedPayload).toMatchObject({
+        poll_id: poll.id,
+        option_id: option.id,
+        user_id: viewer.id,
+        verified_identity_id: verifiedIdentity.id,
+        nullifier: NULLIFIER,
+        proof_system_version: "civicos-zk-proof-v1-preprover",
+        verification_method_version: "civicos-mobile-verification-v1",
+        proof_verification_status: "preprover_accepted",
+        proof_public_inputs_json: privacy.proof.publicInputs,
+        proof_envelope_json: privacy.proof,
+      });
+      expect(
+        (insertedPayload as { proof_hash?: string | null }).proof_hash,
+      ).toMatch(/^[0-9a-f]{64}$/);
+      expect(
+        (insertedPayload as { vote_commitment?: string | null }).vote_commitment,
+      ).toMatch(/^[0-9a-f]{64}$/);
+      expect(
+        (insertedPayload as { accepted_at?: string | null }).accepted_at,
+      ).toBeTruthy();
+      expect(enqueueCalls).toBe(1);
+    } finally {
+      restoreFns.reverse().forEach((restore) => restore());
+    }
+  });
+
+  it("rejects duplicate proof nullifier before inserting a vote", async () => {
+    const viewer = createViewer();
+    const poll = createPoll({
+      requires_verified_identity: true,
+      poll_policy_hash: POLL_POLICY_HASH,
+      credential_schema_hash: CREDENTIAL_SCHEMA_HASH,
+    });
+    const option = createOption();
+    const verifiedIdentity = createVerifiedIdentity();
+    const identityProfile = createIdentityProfile();
+    let insertCalls = 0;
+
+    const restoreFns = [
+      patchMethod(pollRepository, "getById", async () => poll),
+      patchMethod(pollRepository, "getOptionByIdForPoll", async () => option),
+      patchMethod(
+        verifiedIdentityRepository,
+        "getByUserId",
+        async () => verifiedIdentity,
+      ),
+      patchMethod(
+        voteRepository,
+        "getByVerifiedIdentityIdAndPollId",
+        async () => null,
+      ),
+      patchMethod(identityProfileRepository, "getByUserId", async () => identityProfile),
+      patchMethod(voteRepository, "getByPollIdAndNullifier", async () =>
+        createVote({
+          poll_id: poll.id,
+          nullifier: NULLIFIER,
+        }),
+      ),
+      patchMethod(voteRepository, "insert", async (input) => {
+        insertCalls += 1;
+        return createVote({
+          poll_id: input.poll_id,
+          option_id: input.option_id,
+          user_id: input.user_id,
+        });
+      }),
+    ];
+
+    try {
+      const result = await pollVotingService.submitVote({
+        pollId: poll.id,
+        optionId: option.id,
+        viewer,
+        privacy: createVotePrivacyPayload(),
+      });
+
+      expect(result.success).toBe(false);
+      if (!result.success) {
+        expect(result.errorCode).toBe("ALREADY_VOTED");
+        expect(result.message).toContain("proof nullifier");
+      }
+      expect(insertCalls).toBe(0);
+    } finally {
+      restoreFns.reverse().forEach((restore) => restore());
+    }
+  });
+
+  it("rejects proof when policy hash does not match the registered poll policy", async () => {
+    const viewer = createViewer();
+    const poll = createPoll({
+      requires_verified_identity: true,
+      poll_policy_hash: POLL_POLICY_HASH,
+      credential_schema_hash: CREDENTIAL_SCHEMA_HASH,
+    });
+    const option = createOption();
+    const verifiedIdentity = createVerifiedIdentity();
+    const identityProfile = createIdentityProfile();
+
+    const restoreFns = [
+      patchMethod(pollRepository, "getById", async () => poll),
+      patchMethod(pollRepository, "getOptionByIdForPoll", async () => option),
+      patchMethod(
+        verifiedIdentityRepository,
+        "getByUserId",
+        async () => verifiedIdentity,
+      ),
+      patchMethod(
+        voteRepository,
+        "getByVerifiedIdentityIdAndPollId",
+        async () => null,
+      ),
+      patchMethod(identityProfileRepository, "getByUserId", async () => identityProfile),
+    ];
+
+    try {
+      const result = await pollVotingService.submitVote({
+        pollId: poll.id,
+        optionId: option.id,
+        viewer,
+        privacy: createVotePrivacyPayload({
+          pollPolicyHash: "9".repeat(64),
+        }),
+      });
+
+      expect(result.success).toBe(false);
+      if (!result.success) {
+        expect(result.errorCode).toBe("PROOF_INVALID");
+        expect(result.message).toContain("poll policy hash");
+      }
     } finally {
       restoreFns.reverse().forEach((restore) => restore());
     }

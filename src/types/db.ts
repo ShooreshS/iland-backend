@@ -1,4 +1,5 @@
 import type { PollJurisdictionType, PollStatus } from "./contracts";
+import type { JsonValue } from "./json";
 
 export type UserRow = {
   id: string;
@@ -410,6 +411,10 @@ export type PollRow = {
   minimum_age: number | null;
   starts_at: string | null;
   ends_at: string | null;
+  poll_policy_json?: JsonValue | null;
+  poll_policy_hash?: string | null;
+  credential_schema_json?: JsonValue | null;
+  credential_schema_hash?: string | null;
   created_at: string;
   updated_at: string;
 };
@@ -427,6 +432,7 @@ export type PollOptionRow = {
 };
 
 export type NewPollRow = {
+  id?: string;
   slug: string;
   created_by_user_id: string;
   title: string;
@@ -443,6 +449,10 @@ export type NewPollRow = {
   minimum_age: number | null;
   starts_at: string | null;
   ends_at: string | null;
+  poll_policy_json?: JsonValue | null;
+  poll_policy_hash?: string | null;
+  credential_schema_json?: JsonValue | null;
+  credential_schema_hash?: string | null;
 };
 
 export type NewPollOptionRow = {
@@ -490,6 +500,17 @@ export type VoteRow = {
   option_id: string;
   user_id: string;
   verified_identity_id: string | null;
+  nullifier: string | null;
+  vote_commitment: string | null;
+  encrypted_vote: JsonValue | null;
+  proof_hash: string | null;
+  proof_system_version: string | null;
+  verification_method_version: string | null;
+  proof_verification_status: "preprover_accepted" | "verified" | "rejected" | null;
+  proof_public_inputs_json: JsonValue | null;
+  proof_envelope_json: JsonValue | null;
+  accepted_at: string | null;
+  batch_id: string | null;
   vote_latitude_l0: number | null;
   vote_longitude_l0: number | null;
   vote_location_snapshot_at: string | null;
@@ -506,6 +527,17 @@ export type NewVoteRow = {
   option_id: string;
   user_id: string;
   verified_identity_id?: string | null;
+  nullifier?: string | null;
+  vote_commitment?: string | null;
+  encrypted_vote?: JsonValue | null;
+  proof_hash?: string | null;
+  proof_system_version?: string | null;
+  verification_method_version?: string | null;
+  proof_verification_status?: "preprover_accepted" | "verified" | "rejected" | null;
+  proof_public_inputs_json?: JsonValue | null;
+  proof_envelope_json?: JsonValue | null;
+  accepted_at?: string | null;
+  batch_id?: string | null;
   vote_latitude_l0?: number | null;
   vote_longitude_l0?: number | null;
   vote_location_snapshot_at?: string | null;
