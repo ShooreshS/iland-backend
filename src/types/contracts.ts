@@ -69,6 +69,102 @@ export type PollResultsSummaryDto = {
   updatedAt: string;
 };
 
+export type PublicAuditTreeKind = "nullifier" | "vote_commitment";
+
+export type PublicAuditHashAlgorithm = "sha256";
+
+export type PublicAuditMerkleProofStepDto = {
+  position: "left" | "right";
+  hash: string;
+};
+
+export type PublicAuditTreeSummaryDto = {
+  kind: PublicAuditTreeKind;
+  root: string;
+  leafCount: number;
+  hashAlgorithm: PublicAuditHashAlgorithm;
+  leafHashDomain: string;
+  nodeHashDomain: string;
+};
+
+export type PublicAuditComputedRootBatchDto = {
+  status: "pending_on_chain_publication";
+  batchIndex: number;
+  acceptedCount: number;
+  nullifierRoot: string;
+  voteCommitmentRoot: string;
+  transactionSignature: string | null;
+  explorerUrl: string | null;
+  submittedAt: string | null;
+};
+
+export type PublicAuditRootCommitDto = {
+  status: "published_on_chain";
+  batchIndex: number;
+  acceptedCount: number;
+  nullifierRoot: string;
+  voteCommitmentRoot: string;
+  transactionSignature: string;
+  explorerUrl: string;
+  submittedAt: string;
+};
+
+export type PublicPollAuditDto = {
+  version: "civicos-public-audit-v1";
+  pollId: string;
+  pollStatus: PollStatus;
+  pollPolicyHash: string | null;
+  credentialSchemaHash: string | null;
+  generatedAt: string;
+  publicationStatus:
+    | "not_applicable"
+    | "pending_on_chain_publication"
+    | "published_on_chain";
+  acceptedVoteCount: number;
+  totalValidVoteCount: number;
+  trees: {
+    nullifier: PublicAuditTreeSummaryDto;
+    voteCommitment: PublicAuditTreeSummaryDto;
+  };
+  computedCurrentRootBatch: PublicAuditComputedRootBatchDto | null;
+  rootCommits: PublicAuditRootCommitDto[];
+  resultHash: string;
+  tallyProofHash: string | null;
+  finalResult: PollResultsSummaryDto;
+  solana: {
+    cluster: string;
+    programId: string;
+    transactionsEnabled: boolean;
+  };
+  inclusionCheck: {
+    route: string;
+    acceptedTrees: PublicAuditTreeKind[];
+    expectsLeafHash: true;
+  };
+  warnings: string[];
+};
+
+export type PublicAuditInclusionProofSuccessDto = {
+  success: true;
+  pollId: string;
+  tree: PublicAuditTreeKind;
+  leafHash: string;
+  leafIndex: number;
+  matchingLeafCount: number;
+  root: string;
+  proof: PublicAuditMerkleProofStepDto[];
+};
+
+export type PublicAuditInclusionProofFailureDto = {
+  success: false;
+  errorCode: "POLL_NOT_FOUND" | "LEAF_NOT_FOUND";
+  message: string;
+};
+
+export type PublicAuditInclusionProofResultDto =
+  | PublicAuditInclusionProofSuccessDto
+  | PublicAuditInclusionProofFailureDto;
+
 export type PollSummaryDto = {
   poll: PollDto;
   optionCount: number;

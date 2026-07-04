@@ -79,6 +79,18 @@ export type PollMapRebuildVoteRow = Pick<
   | "vote_longitude_l0"
 >;
 
+export type PublicAuditVoteRecordRow = Pick<
+  VoteRow,
+  | "id"
+  | "poll_id"
+  | "nullifier"
+  | "vote_commitment"
+  | "proof_hash"
+  | "accepted_at"
+  | "batch_id"
+  | "created_at"
+>;
+
 const withSnapshotDefaults = (row: PartialVoteRow): VoteRow => ({
   ...row,
   nullifier: row.nullifier ?? null,
@@ -421,6 +433,32 @@ export const voteRepository = {
     }
 
     return ((data || []) as PartialVoteRow[]).map(withSnapshotDefaults);
+  },
+
+  async getAcceptedAuditRecordsByPollId(
+    pollId: string,
+  ): Promise<PublicAuditVoteRecordRow[]> {
+    const supabase = requireSupabaseAdminClient();
+
+    const { data, error } = await supabase
+      .from("votes")
+      .select(
+        "id,poll_id,nullifier,vote_commitment,proof_hash,accepted_at,batch_id,created_at",
+      )
+      .eq("poll_id", pollId)
+      .eq("is_valid", true)
+      .not("nullifier", "is", null)
+      .not("vote_commitment", "is", null)
+      .not("proof_hash", "is", null)
+      .not("accepted_at", "is", null)
+      .order("accepted_at", { ascending: true })
+      .order("id", { ascending: true });
+
+    if (error) {
+      throw error;
+    }
+
+    return (data || []) as PublicAuditVoteRecordRow[];
   },
 
   async countByPollId(pollId: string): Promise<number> {

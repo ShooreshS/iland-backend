@@ -1,6 +1,7 @@
 import { z } from "zod";
 
 import {
+  CIVICOS_AUDIT_PROGRAM_ID,
   DEFAULT_SOLANA_AUDIT_FEE_MODE,
   SHOLAN_TOKEN_DEFAULTS,
   SOLANA_AUDIT_CLUSTERS,
@@ -94,6 +95,7 @@ const parsed = z
     SOLANA_AUDIT_CLUSTER: z.enum(SOLANA_AUDIT_CLUSTERS).optional(),
     SOLANA_AUDIT_TOKEN_MINT: solanaPublicKeySchema.optional(),
     SOLANA_AUDIT_TOKEN_PROGRAM: solanaPublicKeySchema.optional(),
+    SOLANA_AUDIT_PROGRAM_ID: solanaPublicKeySchema.optional(),
     SOLANA_AUDIT_REGISTRY_AUTHORITY: solanaPublicKeySchema.optional(),
     SOLANA_AUDIT_TREASURY: solanaPublicKeySchema.optional(),
     SOLANA_AUDIT_FEE_PAYER_PUBLIC_KEY: solanaPublicKeySchema.optional(),
@@ -288,6 +290,9 @@ const parsed = z
     SOLANA_AUDIT_TOKEN_PROGRAM: emptyToUndefined(
       process.env.SOLANA_AUDIT_TOKEN_PROGRAM,
     ),
+    SOLANA_AUDIT_PROGRAM_ID: emptyToUndefined(
+      process.env.SOLANA_AUDIT_PROGRAM_ID,
+    ),
     SOLANA_AUDIT_REGISTRY_AUTHORITY: emptyToUndefined(
       process.env.SOLANA_AUDIT_REGISTRY_AUTHORITY,
     ),
@@ -376,6 +381,8 @@ const solanaAuditTokenMint =
   parsed.SOLANA_AUDIT_TOKEN_MINT || SHOLAN_TOKEN_DEFAULTS.mint;
 const solanaAuditTokenProgram =
   parsed.SOLANA_AUDIT_TOKEN_PROGRAM || SHOLAN_TOKEN_DEFAULTS.tokenProgram;
+const solanaAuditProgramId =
+  parsed.SOLANA_AUDIT_PROGRAM_ID || CIVICOS_AUDIT_PROGRAM_ID;
 const solanaAuditDefaultFeeMode =
   parsed.SOLANA_AUDIT_DEFAULT_FEE_MODE || DEFAULT_SOLANA_AUDIT_FEE_MODE;
 const solanaAuditSponsorshipEnabled =
@@ -438,6 +445,7 @@ export const env = Object.freeze({
   }),
   solanaAudit: Object.freeze({
     cluster: solanaAuditCluster,
+    programId: solanaAuditProgramId,
     tokenMint: solanaAuditTokenMint,
     tokenProgram: solanaAuditTokenProgram,
     tokenSymbol: SHOLAN_TOKEN_DEFAULTS.symbol,

@@ -2,6 +2,7 @@ import { z } from "zod";
 import requireViewer from "../auth/requireViewer";
 import { json } from "../middleware/json";
 import pollDraftService from "../services/pollDraftService";
+import pollPublicAuditService from "../services/pollPublicAuditService";
 import pollVotingService from "../services/pollVotingService";
 import type {
   CreatePollRequestDto,
@@ -57,6 +58,11 @@ const votePrivacySchema = z
 const voteRequestSchema = z.object({
   optionId: z.string().trim().min(1),
   privacy: votePrivacySchema.nullable().optional(),
+});
+
+const auditInclusionQuerySchema = z.object({
+  tree: z.enum(["vote_commitment", "nullifier"]),
+  leafHash: hex64Schema,
 });
 
 const optionInputSchema = z.union([
@@ -369,6 +375,101 @@ const getPollDetailsRoute: RouteDefinition = {
   },
 };
 
+type PollAuditRouteDependencies = {
+  pollPublicAuditServiceLike?: Pick<
+    typeof pollPublicAuditService,
+    "getPublicPollAudit" | "getPublicPollAuditInclusionProof"
+  >;
+};
+
+export const createGetPollAuditRoute = (
+  dependencies: PollAuditRouteDependencies = {},
+): RouteDefinition => {
+  const auditService =
+    dependencies.pollPublicAuditServiceLike || pollPublicAuditService;
+
+  return {
+    method: "GET",
+    path: "/polls/:id/audit",
+    handler: async ({ params }) => {
+      const pollId = params.id?.trim() || "";
+      if (!pollId) {
+        return json(
+          {
+            error: "invalid_poll_id",
+            message: "A poll id is required.",
+          },
+          400,
+        );
+      }
+
+      const audit = await auditService.getPublicPollAudit(pollId);
+      if (!audit) {
+        return json(
+          {
+            error: "poll_not_found",
+            message: "The requested poll does not exist.",
+          },
+          404,
+        );
+      }
+
+      return json(audit);
+    },
+  };
+};
+
+export const createGetPollAuditInclusionRoute = (
+  dependencies: PollAuditRouteDependencies = {},
+): RouteDefinition => {
+  const auditService =
+    dependencies.pollPublicAuditServiceLike || pollPublicAuditService;
+
+  return {
+    method: "GET",
+    path: "/polls/:id/audit/inclusion",
+    handler: async ({ params, url }) => {
+      const pollId = params.id?.trim() || "";
+      if (!pollId) {
+        return json(
+          {
+            error: "invalid_poll_id",
+            message: "A poll id is required.",
+          },
+          400,
+        );
+      }
+
+      const parsedQuery = auditInclusionQuerySchema.safeParse({
+        tree: url.searchParams.get("tree") || undefined,
+        leafHash: url.searchParams.get("leafHash") || undefined,
+      });
+
+      if (!parsedQuery.success) {
+        return json(
+          {
+            error: "invalid_request",
+            message: "Audit inclusion request is invalid.",
+          },
+          400,
+        );
+      }
+
+      const result = await auditService.getPublicPollAuditInclusionProof({
+        pollId,
+        tree: parsedQuery.data.tree,
+        leafHash: parsedQuery.data.leafHash,
+      });
+
+      if (result.success) {
+        return json(result);
+      }
+
+      return json(result, 404);
+    },
+  };
+};
+
 const submitVoteRoute: RouteDefinition = {
   method: "POST",
   path: "/polls/:id/votes",
@@ -429,6 +530,9 @@ const submitVoteRoute: RouteDefinition = {
   },
 };
 
+const getPollAuditRoute = createGetPollAuditRoute();
+const getPollAuditInclusionRoute = createGetPollAuditInclusionRoute();
+
 export const pollRoutes: RouteDefinition[] = [
   getPollsRoute,
   createDraftPollRoute,
@@ -436,6 +540,8 @@ export const pollRoutes: RouteDefinition[] = [
   getDraftPollRoute,
   updateDraftPollRoute,
   publishDraftPollRoute,
+  getPollAuditRoute,
+  getPollAuditInclusionRoute,
   getPollDetailsRoute,
   submitVoteRoute,
 ];
