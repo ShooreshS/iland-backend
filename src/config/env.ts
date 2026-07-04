@@ -1,5 +1,10 @@
 import { z } from "zod";
 
+import {
+  SHOLAN_TOKEN_DEFAULTS,
+  SOLANA_AUDIT_CLUSTERS,
+} from "./solanaAuditDefaults";
+
 const emptyToUndefined = (value: unknown): string | undefined => {
   if (typeof value !== "string") {
     return undefined;
@@ -13,6 +18,10 @@ const toBoolean = (value: string): boolean => {
   const normalized = value.trim().toLowerCase();
   return normalized === "1" || normalized === "true" || normalized === "yes";
 };
+
+const solanaPublicKeySchema = z
+  .string()
+  .regex(/^[1-9A-HJ-NP-Za-km-z]{32,44}$/u, "Invalid Solana public key.");
 
 const normalizeAndroidCertDigest = (value: string): string => {
   const trimmed = value.trim();
@@ -79,6 +88,12 @@ const parsed = z
     POLL_MAP_REFRESH_MAX_POLLS_PER_CYCLE: z.coerce.number().int().min(1).optional(),
     POLL_MAP_REFRESH_FAILURE_COOLDOWN_MS: z.coerce.number().int().min(0).optional(),
     MAP_ENABLE_ALL_POLLS_DEBUG: z.string().optional(),
+    SOLANA_AUDIT_CLUSTER: z.enum(SOLANA_AUDIT_CLUSTERS).optional(),
+    SOLANA_AUDIT_TOKEN_MINT: solanaPublicKeySchema.optional(),
+    SOLANA_AUDIT_TOKEN_PROGRAM: solanaPublicKeySchema.optional(),
+    SOLANA_AUDIT_REGISTRY_AUTHORITY: solanaPublicKeySchema.optional(),
+    SOLANA_AUDIT_TREASURY: solanaPublicKeySchema.optional(),
+    SOLANA_AUDIT_FEE_PAYER_PUBLIC_KEY: solanaPublicKeySchema.optional(),
   })
   .superRefine((input, context) => {
     const hasUrl = Boolean(input.SUPABASE_URL);
@@ -168,6 +183,19 @@ const parsed = z
         path: ["AUTH_ANDROID_ALLOWED_SIGNING_CERT_DIGESTS"],
       });
     }
+
+    const hasSolanaAuditTokenMint = Boolean(input.SOLANA_AUDIT_TOKEN_MINT);
+    const hasSolanaAuditTokenProgram = Boolean(input.SOLANA_AUDIT_TOKEN_PROGRAM);
+    if (hasSolanaAuditTokenMint !== hasSolanaAuditTokenProgram) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        message:
+          "SOLANA_AUDIT_TOKEN_MINT and SOLANA_AUDIT_TOKEN_PROGRAM must both be set together, or both omitted.",
+        path: hasSolanaAuditTokenMint
+          ? ["SOLANA_AUDIT_TOKEN_PROGRAM"]
+          : ["SOLANA_AUDIT_TOKEN_MINT"],
+      });
+    }
   })
   .parse({
     NODE_ENV: process.env.NODE_ENV,
@@ -245,6 +273,22 @@ const parsed = z
     MAP_ENABLE_ALL_POLLS_DEBUG: emptyToUndefined(
       process.env.MAP_ENABLE_ALL_POLLS_DEBUG,
     ),
+    SOLANA_AUDIT_CLUSTER: emptyToUndefined(process.env.SOLANA_AUDIT_CLUSTER) as
+      | (typeof SOLANA_AUDIT_CLUSTERS)[number]
+      | undefined,
+    SOLANA_AUDIT_TOKEN_MINT: emptyToUndefined(
+      process.env.SOLANA_AUDIT_TOKEN_MINT,
+    ),
+    SOLANA_AUDIT_TOKEN_PROGRAM: emptyToUndefined(
+      process.env.SOLANA_AUDIT_TOKEN_PROGRAM,
+    ),
+    SOLANA_AUDIT_REGISTRY_AUTHORITY: emptyToUndefined(
+      process.env.SOLANA_AUDIT_REGISTRY_AUTHORITY,
+    ),
+    SOLANA_AUDIT_TREASURY: emptyToUndefined(process.env.SOLANA_AUDIT_TREASURY),
+    SOLANA_AUDIT_FEE_PAYER_PUBLIC_KEY: emptyToUndefined(
+      process.env.SOLANA_AUDIT_FEE_PAYER_PUBLIC_KEY,
+    ),
   });
 
 const authIssuer =
@@ -311,6 +355,12 @@ const mapEnableAllPollsDebug =
   parsed.MAP_ENABLE_ALL_POLLS_DEBUG !== undefined
     ? toBoolean(parsed.MAP_ENABLE_ALL_POLLS_DEBUG)
     : false;
+const solanaAuditCluster =
+  parsed.SOLANA_AUDIT_CLUSTER || SHOLAN_TOKEN_DEFAULTS.cluster;
+const solanaAuditTokenMint =
+  parsed.SOLANA_AUDIT_TOKEN_MINT || SHOLAN_TOKEN_DEFAULTS.mint;
+const solanaAuditTokenProgram =
+  parsed.SOLANA_AUDIT_TOKEN_PROGRAM || SHOLAN_TOKEN_DEFAULTS.tokenProgram;
 
 export const env = Object.freeze({
   nodeEnv: parsed.NODE_ENV,
@@ -360,6 +410,19 @@ export const env = Object.freeze({
   }),
   map: Object.freeze({
     enableAllPollsDebug: mapEnableAllPollsDebug,
+  }),
+  solanaAudit: Object.freeze({
+    cluster: solanaAuditCluster,
+    tokenMint: solanaAuditTokenMint,
+    tokenProgram: solanaAuditTokenProgram,
+    tokenSymbol: SHOLAN_TOKEN_DEFAULTS.symbol,
+    tokenDecimals: SHOLAN_TOKEN_DEFAULTS.decimals,
+    registryAuthority: parsed.SOLANA_AUDIT_REGISTRY_AUTHORITY ?? null,
+    treasury: parsed.SOLANA_AUDIT_TREASURY ?? null,
+    feePayerPublicKey: parsed.SOLANA_AUDIT_FEE_PAYER_PUBLIC_KEY ?? null,
+    networkFeeCurrency: "SOL",
+    tokenRequiredForBackendProcessing: false,
+    transactionsEnabled: false,
   }),
 });
 
