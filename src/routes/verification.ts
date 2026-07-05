@@ -2,6 +2,7 @@ import { z } from "zod";
 import { json } from "../middleware/json";
 import proofSystemPolicyService from "../services/proofSystemPolicyService";
 import verificationProofService from "../services/verificationProofService";
+import zkpSecurityPolicyService from "../services/zkpSecurityPolicyService";
 import type { VerificationProofRequestDto } from "../types/contracts";
 import type { RouteDefinition } from "../types/http";
 
@@ -33,6 +34,10 @@ type VerificationRouteDependencies = {
     typeof proofSystemPolicyService,
     "getPolicy"
   >;
+  zkpSecurityPolicyServiceLike?: Pick<
+    typeof zkpSecurityPolicyService,
+    "getPolicy"
+  >;
 };
 
 export const createGetVerificationProofSystemRoute = (
@@ -44,6 +49,19 @@ export const createGetVerificationProofSystemRoute = (
   return {
     method: "GET",
     path: "/verification/proof-system",
+    handler: () => json(policyService.getPolicy()),
+  };
+};
+
+export const createGetVerificationSecurityPolicyRoute = (
+  dependencies: VerificationRouteDependencies = {},
+): RouteDefinition => {
+  const policyService =
+    dependencies.zkpSecurityPolicyServiceLike || zkpSecurityPolicyService;
+
+  return {
+    method: "GET",
+    path: "/verification/security-policy",
     handler: () => json(policyService.getPolicy()),
   };
 };
@@ -93,5 +111,6 @@ export const createPostVerificationProofRoute = (
 
 export const verificationRoutes: RouteDefinition[] = [
   createGetVerificationProofSystemRoute(),
+  createGetVerificationSecurityPolicyRoute(),
   createPostVerificationProofRoute(),
 ];

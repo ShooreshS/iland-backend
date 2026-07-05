@@ -2,6 +2,7 @@ import { describe, expect, it } from "bun:test";
 
 import {
   createGetVerificationProofSystemRoute,
+  createGetVerificationSecurityPolicyRoute,
   createPostVerificationProofRoute,
 } from "./verification";
 import type { VerificationProofResultDto } from "../types/contracts";
@@ -103,6 +104,46 @@ describe("GET /verification/proof-system route", () => {
       storesProofHash: true,
       storesPublicInputs: true,
       storesPrivateWitness: false,
+    });
+  });
+});
+
+describe("GET /verification/security-policy route", () => {
+  it("returns the selected Phase 12 security policy", async () => {
+    const route = createGetVerificationSecurityPolicyRoute();
+    const request = new Request(
+      "http://127.0.0.1:3001/verification/security-policy",
+      {
+        method: "GET",
+      },
+    );
+
+    const response = await route.handler({
+      request,
+      url: new URL(request.url),
+      params: {},
+    });
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({
+      version: "civicos-zkp-security-policy-v1",
+      phase: 12,
+      backendSigner: {
+        role: "root_publisher_key",
+        privateKeyMaterialAcceptedByBackend: false,
+        keypairFilesAllowedInRepository: false,
+        transactionsEnabled: false,
+      },
+      programUpgradeAuthority: {
+        developerWalletAllowed: false,
+        backendControlsUpgradeAuthority: false,
+        multisigRequired: true,
+      },
+      auditLog: {
+        table: "backend_audit_events",
+        appendRpc: "append_backend_audit_event",
+        anchorTarget: "audit_log_root",
+      },
     });
   });
 });

@@ -547,6 +547,31 @@ export type NewVoteRow = {
   invalid_reason?: string | null;
 };
 
+export type BackendAuditEventDecision =
+  | "accepted"
+  | "rejected"
+  | "recorded"
+  | "published"
+  | "errored";
+
+export type BackendAuditEventRow = {
+  id: string;
+  stream_id: string;
+  sequence: number;
+  previous_event_hash: string;
+  event_hash: string;
+  event_type: string;
+  decision: BackendAuditEventDecision;
+  subject_type: string | null;
+  subject_id: string | null;
+  event_payload_json: JsonValue;
+  occurred_at: string;
+  anchored_at: string | null;
+  anchor_cluster: string | null;
+  anchor_tx_signature: string | null;
+  created_at: string;
+};
+
 export type PollMapMarkerCacheMarkerJson = Record<string, unknown>;
 
 export type PollMapMarkerCacheRow = {

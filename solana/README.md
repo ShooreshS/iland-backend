@@ -38,6 +38,13 @@ cargo test
 
 Deployment and root-publisher signing are intentionally not automated here. Do not use a mainnet program authority or fee payer until the deployment plan and key custody are reviewed.
 
+## Phase 12 Security
+
+- Root publishing must use a dedicated `root_publisher_key` controlled through external KMS/HSM or multisig signing-service custody.
+- Do not commit Solana keypair files or private-key material. The backend records only public signer metadata until transaction publication is explicitly enabled.
+- Program upgrade authority must not remain with a single developer wallet. Use multisig, a timelock where possible, public upgrade announcements, and versioned program IDs.
+- Backend audit decisions are prepared for hash-linked logging through `backend_audit_events`; future root publication can anchor `audit_log_root` alongside poll audit roots.
+
 ## SHOLAN Token
 
 The existing SHOLAN mint can be recorded in `PollRegistry` when the registry is initialized:
