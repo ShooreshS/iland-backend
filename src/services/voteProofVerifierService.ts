@@ -44,7 +44,8 @@ export type VoteProofVerificationResult =
         | "PROOF_INVALID"
         | "POLL_POLICY_HASH_MISMATCH"
         | "CREDENTIAL_SCHEMA_HASH_MISMATCH"
-        | "NULLIFIER_MISMATCH";
+        | "NULLIFIER_MISMATCH"
+        | "VOTE_COMMITMENT_MISMATCH";
       message: string;
     };
 
@@ -68,12 +69,12 @@ const hashProofPublicInputs = (publicInputs: VoteProofPublicInputsDto): string =
     `${CIVIC_IDENTITY_DOMAIN}|proof-public-inputs|${canonicalizeJson(publicInputs)}`,
   );
 
-const hashProofEnvelope = (proof: VoteProofEnvelopeDto): string =>
+export const hashVoteProofEnvelope = (proof: VoteProofEnvelopeDto): string =>
   sha256Hex(
     `${CIVIC_IDENTITY_DOMAIN}|proof-envelope|${canonicalizeJson(proof)}`,
   );
 
-const buildVoteCommitment = (input: {
+export const buildVoteCommitment = (input: {
   pollId: string;
   optionId: string;
   nullifier: string;
@@ -165,6 +166,7 @@ export const verifyVoteProofForPoll = (params: {
   poll: PollRow;
   optionId: string;
   privacy?: VotePrivacyPayloadDto | null;
+  expectedVoteCommitment?: string | null;
 }): VoteProofVerificationResult => {
   const { poll, optionId, privacy } = params;
   const proofRequired = pollHasFrozenProofMaterial(poll);
@@ -216,17 +218,27 @@ export const verifyVoteProofForPoll = (params: {
     };
   }
 
-  const proofHash = hashProofEnvelope(proof);
+  const proofHash = hashVoteProofEnvelope(proof);
+  const voteCommitment = buildVoteCommitment({
+    pollId: poll.id,
+    optionId,
+    nullifier: publicInputs.nullifier,
+    proofHash,
+  });
+  const expectedVoteCommitment = normalizeHex64(params.expectedVoteCommitment);
+  if (expectedVoteCommitment && expectedVoteCommitment !== voteCommitment) {
+    return {
+      ok: false,
+      reason: "VOTE_COMMITMENT_MISMATCH",
+      message: "Vote commitment does not match the submitted proof material.",
+    };
+  }
+
   return {
     ok: true,
     auditMaterial: {
       nullifier: publicInputs.nullifier,
-      voteCommitment: buildVoteCommitment({
-        pollId: poll.id,
-        optionId,
-        nullifier: publicInputs.nullifier,
-        proofHash,
-      }),
+      voteCommitment,
       proofHash,
       proofSystemVersion: publicInputs.proofSystemVersion,
       verificationMethodVersion: publicInputs.verificationMethodVersion,
@@ -238,5 +250,7 @@ export const verifyVoteProofForPoll = (params: {
 };
 
 export default {
+  buildVoteCommitment,
+  hashVoteProofEnvelope,
   verifyVoteProofForPoll,
 };

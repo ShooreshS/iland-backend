@@ -10,6 +10,7 @@ import type {
   PublicAuditMerkleProofStepDto,
   PublicAuditTreeKind,
   PublicAuditTreeSummaryDto,
+  PublicVoteReceiptLookupDto,
   PublicPollAuditDto,
 } from "../types/contracts";
 import type { PollOptionRow, PollRow } from "../types/db";
@@ -457,6 +458,91 @@ export const pollPublicAuditService = {
       ).length,
       root: tree.root,
       proof: buildPublicAuditMerkleProof(tree, leafIndex),
+    };
+  },
+
+  async getPublicVoteReceipt(input: {
+    pollId: string;
+    voteCommitment: string;
+  }): Promise<PublicVoteReceiptLookupDto | null> {
+    const poll = await pollRepository.getById(input.pollId);
+    if (!poll) {
+      return null;
+    }
+
+    const normalizedVoteCommitment = normalizeHex64(input.voteCommitment);
+    const auditUrl = `/polls/${encodeURIComponent(poll.id)}/audit`;
+    if (!normalizedVoteCommitment) {
+      return {
+        included: false,
+        pollId: poll.id,
+        voteCommitment: "",
+        voteCommitmentLeafHash: "",
+        batchStatus: "not_found",
+        batchIndex: null,
+        batchId: null,
+        acceptedAt: null,
+        proofHash: null,
+        root: null,
+        matchingLeafCount: 0,
+        merklePath: [],
+        solanaTx: null,
+        solanaExplorerUrl: null,
+        auditUrl,
+      };
+    }
+
+    const voteCommitmentLeafHash = hashPublicAuditLeaf(
+      "vote_commitment",
+      normalizedVoteCommitment,
+    );
+    const auditRecords = await voteRepository.getAcceptedAuditRecordsByPollId(
+      input.pollId,
+    );
+    const { voteCommitmentTree } = buildAuditTrees(auditRecords);
+    const leafIndex = voteCommitmentTree.leafHashes.findIndex(
+      (leafHash) => leafHash === voteCommitmentLeafHash,
+    );
+
+    if (leafIndex < 0) {
+      return {
+        included: false,
+        pollId: poll.id,
+        voteCommitment: normalizedVoteCommitment,
+        voteCommitmentLeafHash,
+        batchStatus: "not_found",
+        batchIndex: null,
+        batchId: null,
+        acceptedAt: null,
+        proofHash: null,
+        root: voteCommitmentTree.root,
+        matchingLeafCount: 0,
+        merklePath: [],
+        solanaTx: null,
+        solanaExplorerUrl: null,
+        auditUrl,
+      };
+    }
+
+    const auditRecord = auditRecords[leafIndex];
+    return {
+      included: true,
+      pollId: poll.id,
+      voteCommitment: normalizedVoteCommitment,
+      voteCommitmentLeafHash,
+      batchStatus: "pending_on_chain_publication",
+      batchIndex: 0,
+      batchId: auditRecord?.batch_id ?? null,
+      acceptedAt: auditRecord?.accepted_at ?? null,
+      proofHash: auditRecord?.proof_hash ?? null,
+      root: voteCommitmentTree.root,
+      matchingLeafCount: voteCommitmentTree.leafHashes.filter(
+        (leafHash) => leafHash === voteCommitmentLeafHash,
+      ).length,
+      merklePath: buildPublicAuditMerkleProof(voteCommitmentTree, leafIndex),
+      solanaTx: null,
+      solanaExplorerUrl: null,
+      auditUrl,
     };
   },
 };

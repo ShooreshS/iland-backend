@@ -1,7 +1,11 @@
 import { describe, expect, it } from "bun:test";
 import { createHash } from "node:crypto";
 import { canonicalizeJson } from "./pollPolicyService";
-import { verifyVoteProofForPoll } from "./voteProofVerifierService";
+import {
+  buildVoteCommitment,
+  hashVoteProofEnvelope,
+  verifyVoteProofForPoll,
+} from "./voteProofVerifierService";
 import type { PollRow } from "../types/db";
 import type { VotePrivacyPayloadDto } from "../types/contracts";
 
@@ -81,10 +85,19 @@ const createPrivacy = (
 
 describe("voteProofVerifierService", () => {
   it("accepts a Phase 3 pre-prover envelope and derives audit material", () => {
+    const privacy = createPrivacy();
+    const proofHash = hashVoteProofEnvelope(privacy.proof);
+    const expectedVoteCommitment = buildVoteCommitment({
+      pollId: "poll-1",
+      optionId: "option-1",
+      nullifier: NULLIFIER,
+      proofHash,
+    });
     const result = verifyVoteProofForPoll({
       poll: createPoll(),
       optionId: "option-1",
-      privacy: createPrivacy(),
+      privacy,
+      expectedVoteCommitment,
     });
 
     expect(result.ok).toBe(true);
@@ -95,6 +108,21 @@ describe("voteProofVerifierService", () => {
       expect(result.auditMaterial?.proofVerificationStatus).toBe(
         "preprover_accepted",
       );
+    }
+  });
+
+  it("rejects a supplied vote commitment that does not match proof material", () => {
+    const result = verifyVoteProofForPoll({
+      poll: createPoll(),
+      optionId: "option-1",
+      privacy: createPrivacy(),
+      expectedVoteCommitment: "9".repeat(64),
+    });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.reason).toBe("VOTE_COMMITMENT_MISMATCH");
+      expect(result.message).toContain("Vote commitment");
     }
   });
 

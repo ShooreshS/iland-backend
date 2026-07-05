@@ -433,6 +433,21 @@ describe("pollVotingService.submitVote", () => {
       expect(
         (insertedPayload as { accepted_at?: string | null }).accepted_at,
       ).toBeTruthy();
+      if (!result.success) {
+        throw new Error("Expected successful vote.");
+      }
+      expect(result.receipt).toMatchObject({
+        version: "civicos-vote-receipt-v1",
+        pollId: poll.id,
+        optionId: option.id,
+        batchStatus: "pending",
+        batchId: null,
+        solanaRootTransaction: null,
+        auditUrl: `/polls/${poll.id}/audit`,
+      });
+      expect(result.receipt?.voteCommitment).toMatch(/^[0-9a-f]{64}$/);
+      expect(result.receipt?.voteCommitmentLeafHash).toMatch(/^[0-9a-f]{64}$/);
+      expect(result.receipt?.proofHash).toMatch(/^[0-9a-f]{64}$/);
       expect(enqueueCalls).toBe(1);
     } finally {
       restoreFns.reverse().forEach((restore) => restore());

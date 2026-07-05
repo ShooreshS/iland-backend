@@ -55,10 +55,25 @@ const votePrivacySchema = z
   })
   .strict();
 
-const voteRequestSchema = z.object({
-  optionId: z.string().trim().min(1),
-  privacy: votePrivacySchema.nullable().optional(),
-});
+const phase10ProofSchema = z.union([
+  voteProofEnvelopeSchema,
+  z.string().trim().min(1),
+]);
+
+const voteRequestSchema = z
+  .object({
+    pollId: z.string().trim().min(1).optional(),
+    optionId: z.string().trim().min(1),
+    pollPolicyHash: hex64Schema.optional(),
+    nullifier: hex64Schema.optional(),
+    voteCommitment: hex64Schema.nullable().optional(),
+    encryptedVote: z.unknown().optional(),
+    proof: phase10ProofSchema.optional(),
+    publicInputs: voteProofPublicInputsSchema.optional(),
+    feeMode: z.enum(["civicos-sponsored", "user-paid"]).nullable().optional(),
+    privacy: votePrivacySchema.nullable().optional(),
+  })
+  .strict();
 
 const auditInclusionQuerySchema = z.object({
   tree: z.enum(["vote_commitment", "nullifier"]),
@@ -376,17 +391,21 @@ const getPollDetailsRoute: RouteDefinition = {
 };
 
 type PollAuditRouteDependencies = {
-  pollPublicAuditServiceLike?: Pick<
+  pollPublicAuditServiceLike?: Partial<Pick<
     typeof pollPublicAuditService,
-    "getPublicPollAudit" | "getPublicPollAuditInclusionProof"
-  >;
+    | "getPublicPollAudit"
+    | "getPublicPollAuditInclusionProof"
+    | "getPublicVoteReceipt"
+  >>;
 };
 
 export const createGetPollAuditRoute = (
   dependencies: PollAuditRouteDependencies = {},
 ): RouteDefinition => {
-  const auditService =
-    dependencies.pollPublicAuditServiceLike || pollPublicAuditService;
+  const getPublicPollAudit =
+    dependencies.pollPublicAuditServiceLike?.getPublicPollAudit?.bind(
+      dependencies.pollPublicAuditServiceLike,
+    ) || pollPublicAuditService.getPublicPollAudit.bind(pollPublicAuditService);
 
   return {
     method: "GET",
@@ -403,7 +422,7 @@ export const createGetPollAuditRoute = (
         );
       }
 
-      const audit = await auditService.getPublicPollAudit(pollId);
+      const audit = await getPublicPollAudit(pollId);
       if (!audit) {
         return json(
           {
@@ -422,8 +441,13 @@ export const createGetPollAuditRoute = (
 export const createGetPollAuditInclusionRoute = (
   dependencies: PollAuditRouteDependencies = {},
 ): RouteDefinition => {
-  const auditService =
-    dependencies.pollPublicAuditServiceLike || pollPublicAuditService;
+  const getPublicPollAuditInclusionProof =
+    dependencies.pollPublicAuditServiceLike?.getPublicPollAuditInclusionProof?.bind(
+      dependencies.pollPublicAuditServiceLike,
+    ) ||
+    pollPublicAuditService.getPublicPollAuditInclusionProof.bind(
+      pollPublicAuditService,
+    );
 
   return {
     method: "GET",
@@ -455,7 +479,7 @@ export const createGetPollAuditInclusionRoute = (
         );
       }
 
-      const result = await auditService.getPublicPollAuditInclusionProof({
+      const result = await getPublicPollAuditInclusionProof({
         pollId,
         tree: parsedQuery.data.tree,
         leafHash: parsedQuery.data.leafHash,
@@ -470,9 +494,93 @@ export const createGetPollAuditInclusionRoute = (
   };
 };
 
-const submitVoteRoute: RouteDefinition = {
+export const createGetPollReceiptRoute = (
+  dependencies: PollAuditRouteDependencies = {},
+): RouteDefinition => {
+  const getPublicVoteReceipt =
+    dependencies.pollPublicAuditServiceLike?.getPublicVoteReceipt?.bind(
+      dependencies.pollPublicAuditServiceLike,
+    ) || pollPublicAuditService.getPublicVoteReceipt.bind(pollPublicAuditService);
+
+  return {
+    method: "GET",
+    path: "/polls/:id/receipt/:voteCommitment",
+    handler: async ({ params }) => {
+      const pollId = params.id?.trim() || "";
+      const voteCommitment = params.voteCommitment?.trim() || "";
+      if (!pollId) {
+        return json(
+          {
+            error: "invalid_poll_id",
+            message: "A poll id is required.",
+          },
+          400,
+        );
+      }
+
+      const parsedVoteCommitment = hex64Schema.safeParse(voteCommitment);
+      if (!parsedVoteCommitment.success) {
+        return json(
+          {
+            error: "invalid_request",
+            message: "Vote commitment must be a 32-byte hex string.",
+          },
+          400,
+        );
+      }
+
+      const receipt = await getPublicVoteReceipt({
+        pollId,
+        voteCommitment: parsedVoteCommitment.data,
+      });
+      if (!receipt) {
+        return json(
+          {
+            error: "poll_not_found",
+            message: "The requested poll does not exist.",
+          },
+          404,
+        );
+      }
+
+      return json(receipt, receipt.included ? 200 : 404);
+    },
+  };
+};
+
+const buildVotePrivacyFromRequest = (
+  requestBody: z.infer<typeof voteRequestSchema>,
+): VoteSubmissionRequestDto["privacy"] => {
+  if (requestBody.privacy !== undefined) {
+    return requestBody.privacy ?? null;
+  }
+
+  if (!requestBody.proof || typeof requestBody.proof === "string") {
+    return null;
+  }
+
+  return {
+    version: "civicos-vote-privacy-v1",
+    hashSuite: "sha256-sha512-preposeidon-v1",
+    nullifier: requestBody.nullifier || requestBody.proof.publicInputs.nullifier,
+    proof: requestBody.proof,
+  };
+};
+
+const publicInputsMatch = (
+  left: z.infer<typeof voteProofPublicInputsSchema>,
+  right: z.infer<typeof voteProofPublicInputsSchema>,
+): boolean =>
+  left.pollId === right.pollId &&
+  left.pollPolicyHash === right.pollPolicyHash &&
+  left.credentialSchemaHash === right.credentialSchemaHash &&
+  left.nullifier === right.nullifier &&
+  left.verificationMethodVersion === right.verificationMethodVersion &&
+  left.proofSystemVersion === right.proofSystemVersion;
+
+const createSubmitVoteRoute = (path: string): RouteDefinition => ({
   method: "POST",
-  path: "/polls/:id/votes",
+  path,
   handler: async ({ request, params }) => {
     const viewerResult = await requireViewer(request);
     if (!viewerResult.ok) {
@@ -508,7 +616,60 @@ const submitVoteRoute: RouteDefinition = {
       return json(
         {
           error: "invalid_request",
-          message: "Request body must include a non-empty optionId.",
+          message: "Vote request body is invalid.",
+        },
+        400,
+      );
+    }
+
+    if (parsedBody.data.pollId && parsedBody.data.pollId !== pollId) {
+      return json(
+        {
+          error: "invalid_request",
+          message: "Body pollId must match the route poll id.",
+        },
+        400,
+      );
+    }
+
+    const privacy = buildVotePrivacyFromRequest(parsedBody.data);
+    if (
+      parsedBody.data.nullifier &&
+      privacy?.nullifier &&
+      parsedBody.data.nullifier !== privacy.nullifier
+    ) {
+      return json(
+        {
+          error: "invalid_request",
+          message: "Body nullifier must match the submitted proof envelope.",
+        },
+        400,
+      );
+    }
+
+    if (
+      parsedBody.data.pollPolicyHash &&
+      privacy?.proof.publicInputs.pollPolicyHash &&
+      parsedBody.data.pollPolicyHash !== privacy.proof.publicInputs.pollPolicyHash
+    ) {
+      return json(
+        {
+          error: "invalid_request",
+          message: "Body pollPolicyHash must match the submitted proof envelope.",
+        },
+        400,
+      );
+    }
+
+    if (
+      parsedBody.data.publicInputs &&
+      privacy?.proof.publicInputs &&
+      !publicInputsMatch(parsedBody.data.publicInputs, privacy.proof.publicInputs)
+    ) {
+      return json(
+        {
+          error: "invalid_request",
+          message: "Body publicInputs must match the submitted proof envelope.",
         },
         400,
       );
@@ -517,8 +678,8 @@ const submitVoteRoute: RouteDefinition = {
     const result = await pollVotingService.submitVote({
       pollId,
       optionId: parsedBody.data.optionId,
-      privacy:
-        (parsedBody.data as VoteSubmissionRequestDto).privacy ?? null,
+      privacy,
+      expectedVoteCommitment: parsedBody.data.voteCommitment ?? null,
       viewer: viewerResult.viewer.user,
     });
 
@@ -528,10 +689,13 @@ const submitVoteRoute: RouteDefinition = {
 
     return json(result, voteErrorStatusMap[result.errorCode] || 400);
   },
-};
+});
 
 const getPollAuditRoute = createGetPollAuditRoute();
 const getPollAuditInclusionRoute = createGetPollAuditInclusionRoute();
+const getPollReceiptRoute = createGetPollReceiptRoute();
+const submitVoteRoute = createSubmitVoteRoute("/polls/:id/votes");
+const submitVotePhase10Route = createSubmitVoteRoute("/polls/:id/vote");
 
 export const pollRoutes: RouteDefinition[] = [
   getPollsRoute,
@@ -542,6 +706,8 @@ export const pollRoutes: RouteDefinition[] = [
   publishDraftPollRoute,
   getPollAuditRoute,
   getPollAuditInclusionRoute,
+  getPollReceiptRoute,
   getPollDetailsRoute,
   submitVoteRoute,
+  submitVotePhase10Route,
 ];

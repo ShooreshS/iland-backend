@@ -3,9 +3,11 @@ import { describe, expect, it } from "bun:test";
 import {
   createGetPollAuditInclusionRoute,
   createGetPollAuditRoute,
+  createGetPollReceiptRoute,
 } from "./polls";
 import type {
   PublicAuditInclusionProofResultDto,
+  PublicVoteReceiptLookupDto,
   PublicPollAuditDto,
 } from "../types/contracts";
 
@@ -80,7 +82,9 @@ const sampleAudit: PublicPollAuditDto = {
 
 const invokeRoute = async (
   route: ReturnType<
-    typeof createGetPollAuditRoute | typeof createGetPollAuditInclusionRoute
+    | typeof createGetPollAuditRoute
+    | typeof createGetPollAuditInclusionRoute
+    | typeof createGetPollReceiptRoute
   >,
   path: string,
   params: Record<string, string>,
@@ -183,5 +187,62 @@ describe("GET /polls/:id/audit/inclusion route", () => {
 
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual(expectedProof);
+  });
+});
+
+describe("GET /polls/:id/receipt/:voteCommitment route", () => {
+  it("returns receipt inclusion status by vote commitment", async () => {
+    const voteCommitment = "7".repeat(64);
+    const expectedReceipt: PublicVoteReceiptLookupDto = {
+      included: true,
+      pollId: "poll-1",
+      voteCommitment,
+      voteCommitmentLeafHash: "8".repeat(64),
+      batchStatus: "pending_on_chain_publication",
+      batchIndex: 0,
+      batchId: null,
+      acceptedAt: "2026-07-05T12:00:00.000Z",
+      proofHash: "9".repeat(64),
+      root: "4".repeat(64),
+      matchingLeafCount: 1,
+      merklePath: [],
+      solanaTx: null,
+      solanaExplorerUrl: null,
+      auditUrl: "/polls/poll-1/audit",
+    };
+    const route = createGetPollReceiptRoute({
+      pollPublicAuditServiceLike: {
+        getPublicVoteReceipt: async (input) => ({
+          ...expectedReceipt,
+          pollId: input.pollId,
+          voteCommitment: input.voteCommitment,
+        }),
+      },
+    });
+
+    const response = await invokeRoute(
+      route,
+      `/polls/poll-1/receipt/${voteCommitment}`,
+      { id: "poll-1", voteCommitment },
+    );
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual(expectedReceipt);
+  });
+
+  it("validates vote commitment path parameter", async () => {
+    const route = createGetPollReceiptRoute({
+      pollPublicAuditServiceLike: {
+        getPublicVoteReceipt: async () => null,
+      },
+    });
+
+    const response = await invokeRoute(
+      route,
+      "/polls/poll-1/receipt/not-a-hash",
+      { id: "poll-1", voteCommitment: "not-a-hash" },
+    );
+
+    expect(response.status).toBe(400);
   });
 });

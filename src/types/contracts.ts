@@ -165,6 +165,41 @@ export type PublicAuditInclusionProofResultDto =
   | PublicAuditInclusionProofSuccessDto
   | PublicAuditInclusionProofFailureDto;
 
+export type PublicVoteReceiptLookupDto = {
+  included: boolean;
+  pollId: string;
+  voteCommitment: string;
+  voteCommitmentLeafHash: string;
+  batchStatus:
+    | "pending_on_chain_publication"
+    | "published_on_chain"
+    | "not_found";
+  batchIndex: number | null;
+  batchId: string | null;
+  acceptedAt: string | null;
+  proofHash: string | null;
+  root: string | null;
+  matchingLeafCount: number;
+  merklePath: PublicAuditMerkleProofStepDto[];
+  solanaTx: string | null;
+  solanaExplorerUrl: string | null;
+  auditUrl: string;
+};
+
+export type VoteReceiptDto = {
+  version: "civicos-vote-receipt-v1";
+  pollId: string;
+  optionId: string;
+  voteCommitment: string;
+  voteCommitmentLeafHash: string;
+  proofHash: string;
+  batchStatus: "pending";
+  batchId: string | null;
+  solanaRootTransaction: string | null;
+  acceptedAt: string;
+  auditUrl: string;
+};
+
 export type PollSummaryDto = {
   poll: PollDto;
   optionCount: number;
@@ -222,11 +257,15 @@ export type VotePrivacyPayloadDto = {
 export type VoteSubmissionRequestDto = {
   optionId: string;
   privacy?: VotePrivacyPayloadDto | null;
+  voteCommitment?: string | null;
+  encryptedVote?: unknown;
+  feeMode?: "civicos-sponsored" | "user-paid" | null;
 };
 
 export type VoteSubmissionSuccessDto = {
   success: true;
   viewerVote: ViewerVoteSummaryDto;
+  receipt?: VoteReceiptDto | null;
 };
 
 export type VoteSubmissionFailureDto = {
@@ -236,6 +275,32 @@ export type VoteSubmissionFailureDto = {
 };
 
 export type VoteSubmissionResultDto = VoteSubmissionSuccessDto | VoteSubmissionFailureDto;
+
+export type VerificationProofPublicInputsDto = {
+  credentialCommitment: string;
+  verificationMethodVersion: string;
+};
+
+export type VerificationProofRequestDto = {
+  credentialSchemaHash: string;
+  proof: unknown;
+  publicInputs: VerificationProofPublicInputsDto;
+};
+
+export type VerificationProofResultDto =
+  | {
+      verified: true;
+      credentialCommitment: string;
+      credentialSchemaHash: string;
+      verificationMethodVersion: string;
+      proofVerificationStatus: "preprover_accepted";
+      expiresAt: string;
+    }
+  | {
+      verified: false;
+      errorCode: "INVALID_PROOF" | "UNSUPPORTED_VERSION";
+      message: string;
+    };
 
 export type PollOptionInputDto =
   | string

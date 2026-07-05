@@ -5,6 +5,7 @@ import { mapRoutes } from "./map";
 import { meRoutes } from "./me";
 import { pollRoutes } from "./polls";
 import { referenceRoutes } from "./reference";
+import { verificationRoutes } from "./verification";
 import type { ResolvedRoute, RouteDefinition } from "../types/http";
 
 export const routes: RouteDefinition[] = [
@@ -12,6 +13,7 @@ export const routes: RouteDefinition[] = [
   ...healthRoutes,
   ...idpRoutes,
   ...pollRoutes,
+  ...verificationRoutes,
   ...meRoutes,
   ...mapRoutes,
   ...referenceRoutes,

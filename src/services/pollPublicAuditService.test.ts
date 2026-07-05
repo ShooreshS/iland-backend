@@ -235,6 +235,58 @@ describe("Phase 8 public poll audit service", () => {
     }
   });
 
+  it("returns a receipt lookup by vote commitment without exposing nullifiers", async () => {
+    const poll = createPoll();
+    const auditRecords = [
+      createAuditRecord({
+        id: "vote-a",
+        vote_commitment: VOTE_COMMITMENT_A,
+      }),
+      createAuditRecord({
+        id: "vote-b",
+        nullifier: NULLIFIER_B,
+        vote_commitment: VOTE_COMMITMENT_B,
+        proof_hash: PROOF_HASH_B,
+      }),
+    ];
+
+    const restoreFns = [
+      patchMethod(pollRepository, "getById", async () => poll),
+      patchMethod(voteRepository, "getAcceptedAuditRecordsByPollId", async () =>
+        auditRecords,
+      ),
+    ];
+
+    try {
+      const receipt = await pollPublicAuditService.getPublicVoteReceipt({
+        pollId: poll.id,
+        voteCommitment: VOTE_COMMITMENT_B,
+      });
+
+      expect(receipt).not.toBeNull();
+      expect(receipt?.included).toBe(true);
+      expect(receipt?.voteCommitment).toBe(VOTE_COMMITMENT_B);
+      expect(receipt?.voteCommitmentLeafHash).toBe(
+        hashPublicAuditLeaf("vote_commitment", VOTE_COMMITMENT_B),
+      );
+      expect(receipt?.batchStatus).toBe("pending_on_chain_publication");
+      expect(receipt?.batchIndex).toBe(0);
+      expect(receipt?.solanaTx).toBeNull();
+      expect(JSON.stringify(receipt)).not.toContain(NULLIFIER_B);
+      if (receipt?.included && receipt.root) {
+        expect(
+          verifyPublicAuditMerkleProof({
+            leafHash: receipt.voteCommitmentLeafHash,
+            root: receipt.root,
+            proof: receipt.merklePath,
+          }),
+        ).toBe(true);
+      }
+    } finally {
+      restoreFns.reverse().forEach((restore) => restore());
+    }
+  });
+
   it("uses the Anchor zero root for empty audit trees", () => {
     const tree = buildPublicAuditMerkleTree([]);
 

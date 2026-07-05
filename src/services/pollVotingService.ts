@@ -8,6 +8,7 @@ import {
   resolveCivicPollPolicy,
   type CivicPollPolicy,
 } from "./pollPolicyService";
+import { hashPublicAuditLeaf } from "./pollPublicAuditService";
 import { verifyVoteProofForPoll } from "./voteProofVerifierService";
 import type {
   PollDetailsDto,
@@ -16,6 +17,7 @@ import type {
   PollResultsSummaryDto,
   PollSummaryDto,
   VotePrivacyPayloadDto,
+  VoteReceiptDto,
   VoteSubmissionErrorCode,
   VoteSubmissionFailureDto,
   VoteSubmissionResultDto,
@@ -95,6 +97,29 @@ const DUPLICATE_NULLIFIER_VOTE_MESSAGE =
   "Only one vote per proof nullifier and poll is allowed.";
 const VERIFIED_IDENTITY_REQUIRED_MESSAGE =
   "This poll requires a linked verified identity.";
+
+const buildVoteReceipt = (input: {
+  pollId: string;
+  optionId: string;
+  voteCommitment: string;
+  proofHash: string;
+  acceptedAt: string;
+}): VoteReceiptDto => ({
+  version: "civicos-vote-receipt-v1",
+  pollId: input.pollId,
+  optionId: input.optionId,
+  voteCommitment: input.voteCommitment,
+  voteCommitmentLeafHash: hashPublicAuditLeaf(
+    "vote_commitment",
+    input.voteCommitment,
+  ),
+  proofHash: input.proofHash,
+  batchStatus: "pending",
+  batchId: null,
+  solanaRootTransaction: null,
+  acceptedAt: input.acceptedAt,
+  auditUrl: `/polls/${encodeURIComponent(input.pollId)}/audit`,
+});
 
 const isUniqueViolation = (error: unknown): boolean => {
   if (!error || typeof error !== "object") {
@@ -441,6 +466,7 @@ export const pollVotingService = {
     optionId: string;
     viewer: UserRow;
     privacy?: VotePrivacyPayloadDto | null;
+    expectedVoteCommitment?: string | null;
   }): Promise<VoteSubmissionResultDto> {
     const { pollId, optionId, viewer, privacy } = params;
 
@@ -550,6 +576,7 @@ export const pollVotingService = {
       poll,
       optionId,
       privacy,
+      expectedVoteCommitment: params.expectedVoteCommitment,
     });
     if (!proofVerification.ok) {
       return buildFailure(
@@ -626,6 +653,16 @@ export const pollVotingService = {
           optionId: insertedVote.option_id,
           submittedAt: insertedVote.submitted_at,
         },
+        receipt:
+          proofAuditMaterial && insertedVote.vote_commitment && insertedVote.proof_hash
+            ? buildVoteReceipt({
+                pollId: insertedVote.poll_id,
+                optionId: insertedVote.option_id,
+                voteCommitment: insertedVote.vote_commitment,
+                proofHash: insertedVote.proof_hash,
+                acceptedAt: insertedVote.accepted_at || insertedVote.submitted_at,
+              })
+            : null,
       };
     } catch (error) {
       if (isUniqueViolation(error)) {
