@@ -19,6 +19,7 @@ describe("verificationProofService", () => {
     expect(result.verified).toBe(true);
     if (result.verified) {
       expect(result.credentialCommitment).toBe("2".repeat(64));
+      expect(result.proofVerificationMode).toBe("off_chain_preprover");
       expect(result.proofVerificationStatus).toBe("preprover_accepted");
       expect(Date.parse(result.expiresAt)).toBeGreaterThan(Date.now());
     }

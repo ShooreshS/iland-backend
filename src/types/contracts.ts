@@ -287,12 +287,35 @@ export type VerificationProofRequestDto = {
   publicInputs: VerificationProofPublicInputsDto;
 };
 
+export type ProofSystemPolicyDto = {
+  version: "civicos-proof-system-policy-v1";
+  phase: 11;
+  selectedTrack: "v1";
+  proofSystemVersion: "civicos-zk-proof-v1-preprover";
+  proofVerificationMode: "off_chain_preprover";
+  proofVerificationStatus: "preprover_accepted";
+  onChainZkVerifierEnabled: false;
+  solanaAnchoring: "audit_roots_only";
+  storesProofHash: true;
+  storesPublicInputs: true;
+  storesPrivateWitness: false;
+  solanaArtifacts: Array<
+    | "nullifier_root"
+    | "vote_commitment_root"
+    | "final_result_hash"
+    | "tally_proof_hash"
+  >;
+  offChainArtifacts: Array<"proof_hash" | "public_inputs" | "proof_envelope">;
+  notes: string[];
+};
+
 export type VerificationProofResultDto =
   | {
       verified: true;
       credentialCommitment: string;
       credentialSchemaHash: string;
       verificationMethodVersion: string;
+      proofVerificationMode: "off_chain_preprover";
       proofVerificationStatus: "preprover_accepted";
       expiresAt: string;
     }

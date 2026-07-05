@@ -1,6 +1,9 @@
 import { describe, expect, it } from "bun:test";
 
-import { createPostVerificationProofRoute } from "./verification";
+import {
+  createGetVerificationProofSystemRoute,
+  createPostVerificationProofRoute,
+} from "./verification";
 import type { VerificationProofResultDto } from "../types/contracts";
 
 const invokeRoute = async (
@@ -16,6 +19,7 @@ const invokeRoute = async (
           credentialSchemaHash: input.credentialSchemaHash,
           verificationMethodVersion:
             input.publicInputs.verificationMethodVersion,
+          proofVerificationMode: "off_chain_preprover",
           proofVerificationStatus: "preprover_accepted",
           expiresAt: "2026-07-05T12:10:00.000Z",
         },
@@ -53,6 +57,7 @@ describe("POST /verification/proof route", () => {
       credentialCommitment: "2".repeat(64),
       credentialSchemaHash: "1".repeat(64),
       verificationMethodVersion: "civicos-mobile-verification-v1",
+      proofVerificationMode: "off_chain_preprover",
       proofVerificationStatus: "preprover_accepted",
       expiresAt: "2026-07-05T12:10:00.000Z",
     });
@@ -68,5 +73,36 @@ describe("POST /verification/proof route", () => {
     });
 
     expect(response.status).toBe(400);
+  });
+});
+
+describe("GET /verification/proof-system route", () => {
+  it("returns the selected Phase 11 v1 proof-system policy", async () => {
+    const route = createGetVerificationProofSystemRoute();
+    const request = new Request(
+      "http://127.0.0.1:3001/verification/proof-system",
+      {
+        method: "GET",
+      },
+    );
+
+    const response = await route.handler({
+      request,
+      url: new URL(request.url),
+      params: {},
+    });
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({
+      version: "civicos-proof-system-policy-v1",
+      phase: 11,
+      selectedTrack: "v1",
+      proofVerificationMode: "off_chain_preprover",
+      onChainZkVerifierEnabled: false,
+      solanaAnchoring: "audit_roots_only",
+      storesProofHash: true,
+      storesPublicInputs: true,
+      storesPrivateWitness: false,
+    });
   });
 });

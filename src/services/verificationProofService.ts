@@ -2,6 +2,7 @@ import type {
   VerificationProofRequestDto,
   VerificationProofResultDto,
 } from "../types/contracts";
+import { CIVIC_PROOF_VERIFICATION_MODE } from "./proofSystemPolicyService";
 
 export const VERIFICATION_PROOF_STATUS = "preprover_accepted" as const;
 export const VERIFICATION_PROOF_TTL_MS = 10 * 60 * 1000;
@@ -66,6 +67,7 @@ export const verificationProofService = {
       credentialCommitment,
       credentialSchemaHash,
       verificationMethodVersion,
+      proofVerificationMode: CIVIC_PROOF_VERIFICATION_MODE,
       proofVerificationStatus: VERIFICATION_PROOF_STATUS,
       expiresAt: new Date(Date.now() + VERIFICATION_PROOF_TTL_MS).toISOString(),
     };

@@ -74,4 +74,26 @@ describe("Phase 5 Solana audit program scaffold", () => {
       "final_nullifier_root == poll.latest_nullifier_root",
     );
   });
+
+  it("keeps v1 limited to root anchoring instead of on-chain ZK verification", () => {
+    const source = readSolanaFile(
+      "programs",
+      "civicos-audit",
+      "src",
+      "lib.rs",
+    );
+
+    [
+      "verify_zk_proof",
+      "verify_proof",
+      "groth16",
+      "ultraplonk",
+      "honk",
+      "alt_bn128",
+    ].forEach((unsupportedV1Surface) => {
+      expect(source.toLowerCase()).not.toContain(unsupportedV1Surface);
+    });
+    expect(source).toContain("commit_roots");
+    expect(source).toContain("finalize_poll");
+  });
 });
