@@ -8,6 +8,8 @@ template AssertBoolean() {
 }
 
 template CredentialCommitmentVote(depth) {
+    var ENCRYPTED_VOTE_TAG = 1001;
+
     // Public poll/proof binding inputs.
     signal input pollId;
     signal input pollPolicyHash;
@@ -21,6 +23,9 @@ template CredentialCommitmentVote(depth) {
     // Private witness material.
     signal input identitySecret;
     signal input credentialSalt;
+    signal input optionIndex;
+    signal input optionIndexBits[2];
+    signal input encryptedVoteRandomness;
     signal input voteRandomness;
     signal input documentValid;
     signal input livenessPassed;
@@ -39,6 +44,7 @@ template CredentialCommitmentVote(depth) {
     component countryEligibleIsBoolean = AssertBoolean();
     component homeAreaEligibleIsBoolean = AssertBoolean();
     component landEligibleIsBoolean = AssertBoolean();
+    component optionIndexBitIsBoolean[2];
 
     documentValidIsBoolean.in <== documentValid;
     livenessPassedIsBoolean.in <== livenessPassed;
@@ -47,7 +53,12 @@ template CredentialCommitmentVote(depth) {
     countryEligibleIsBoolean.in <== countryEligible;
     homeAreaEligibleIsBoolean.in <== homeAreaEligible;
     landEligibleIsBoolean.in <== landEligible;
+    optionIndexBitIsBoolean[0] = AssertBoolean();
+    optionIndexBitIsBoolean[1] = AssertBoolean();
+    optionIndexBitIsBoolean[0].in <== optionIndexBits[0];
+    optionIndexBitIsBoolean[1].in <== optionIndexBits[1];
 
+    optionIndex === optionIndexBits[0] + 2 * optionIndexBits[1];
     documentValid === 1;
     livenessPassed === 1;
     faceMatchedDocument === 1;
@@ -73,6 +84,13 @@ template CredentialCommitmentVote(depth) {
     nullifierHasher.inputs[1] <== pollId;
     nullifierHasher.inputs[2] <== pollPolicyHash;
     nullifierHasher.out === nullifier;
+
+    component encryptedVoteHasher = Poseidon(4);
+    encryptedVoteHasher.inputs[0] <== ENCRYPTED_VOTE_TAG;
+    encryptedVoteHasher.inputs[1] <== optionIndex;
+    encryptedVoteHasher.inputs[2] <== encryptedVoteRandomness;
+    encryptedVoteHasher.inputs[3] <== optionSetHash;
+    encryptedVoteHasher.out === encryptedVoteHash;
 
     component voteCommitmentHasher = Poseidon(4);
     voteCommitmentHasher.inputs[0] <== nullifier;

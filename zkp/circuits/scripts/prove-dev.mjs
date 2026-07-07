@@ -7,14 +7,10 @@ const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const buildDir = resolve(packageRoot, "build");
 const vectorDir = resolve(packageRoot, "test-vectors");
 const snarkjs = resolve(packageRoot, "node_modules/.bin/snarkjs");
-const witnessGenerator = resolve(
-  buildDir,
-  "credential_commitment_vote_js/generate_witness.js",
-);
-const wasmPath = resolve(
-  buildDir,
-  "credential_commitment_vote_js/credential_commitment_vote.wasm",
-);
+const circuits = Object.freeze([
+  "credential_commitment_vote",
+  "encrypted_choice_tally",
+]);
 
 const run = (command, args) => {
   console.log(`$ ${command} ${args.join(" ")}`);
@@ -25,33 +21,50 @@ const run = (command, args) => {
 };
 
 mkdirSync(buildDir, { recursive: true });
-writeFileSync(
-  resolve(buildDir, "credential_commitment_vote_js/package.json"),
-  `${JSON.stringify({ type: "commonjs" }, null, 2)}\n`,
-);
 
-const validWitness = resolve(buildDir, "credential_commitment_vote.valid.wtns");
-run("node", [
-  witnessGenerator,
-  wasmPath,
-  resolve(vectorDir, "credential_commitment_vote.valid.input.json"),
-  validWitness,
-]);
-run(snarkjs, [
-  "groth16",
-  "prove",
-  "build/credential_commitment_vote_final.zkey",
-  validWitness,
-  "test-vectors/credential_commitment_vote.valid.proof.json",
-  "test-vectors/credential_commitment_vote.valid.public.proof.json",
-]);
-run(snarkjs, [
-  "groth16",
-  "verify",
-  "build/credential_commitment_vote.vkey.json",
-  "test-vectors/credential_commitment_vote.valid.public.proof.json",
-  "test-vectors/credential_commitment_vote.valid.proof.json",
-]);
+for (const circuit of circuits) {
+  const witnessGenerator = resolve(
+    buildDir,
+    `${circuit}_js/generate_witness.js`,
+  );
+  const wasmPath = resolve(buildDir, `${circuit}_js/${circuit}.wasm`);
+  writeFileSync(
+    resolve(buildDir, `${circuit}_js/package.json`),
+    `${JSON.stringify({ type: "commonjs" }, null, 2)}\n`,
+  );
+
+  const validWitness = resolve(buildDir, `${circuit}.valid.wtns`);
+  run("node", [
+    witnessGenerator,
+    wasmPath,
+    resolve(vectorDir, `${circuit}.valid.input.json`),
+    validWitness,
+  ]);
+  run(snarkjs, [
+    "groth16",
+    "prove",
+    `build/${circuit}_final.zkey`,
+    validWitness,
+    `test-vectors/${circuit}.valid.proof.json`,
+    `test-vectors/${circuit}.valid.public.proof.json`,
+  ]);
+  run(snarkjs, [
+    "groth16",
+    "verify",
+    `build/${circuit}.vkey.json`,
+    `test-vectors/${circuit}.valid.public.proof.json`,
+    `test-vectors/${circuit}.valid.proof.json`,
+  ]);
+}
+
+const witnessGenerator = resolve(
+  buildDir,
+  "credential_commitment_vote_js/generate_witness.js",
+);
+const wasmPath = resolve(
+  buildDir,
+  "credential_commitment_vote_js/credential_commitment_vote.wasm",
+);
 
 const assertInvalidWitnessFails = ({ name, inputFile }) => {
   const invalid = spawnSync(
@@ -82,4 +95,4 @@ assertInvalidWitnessFails({
   inputFile: "credential_commitment_vote.invalid_wrong_credential_root.input.json",
 });
 
-console.log("Local proof generated and invalid vectors rejected.");
+console.log("Local vote/tally proofs generated and invalid vectors rejected.");

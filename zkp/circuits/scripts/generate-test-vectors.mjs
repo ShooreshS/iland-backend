@@ -6,6 +6,7 @@ import {
   createInvalidWrongCredentialRootInput,
   createInvalidWrongNullifierInput,
   deriveCircuitValues,
+  deriveTallyCircuitValues,
 } from "./test-vector-lib.mjs";
 
 const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -62,3 +63,30 @@ writeJson(resolve(vectorDir, "credential_commitment_vote.summary.json"), {
 });
 
 console.log(`Wrote CredentialCommitmentVote vectors to ${vectorDir}`);
+
+const tally = await deriveTallyCircuitValues();
+writeJson(
+  resolve(vectorDir, "encrypted_choice_tally.valid.input.json"),
+  tally.input,
+);
+writeJson(
+  resolve(vectorDir, "encrypted_choice_tally.valid.public.json"),
+  tally.publicSignals,
+);
+writeJson(
+  resolve(vectorDir, "encrypted_choice_tally.valid.public.named.json"),
+  tally.publicSignalsByName,
+);
+writeJson(resolve(vectorDir, "encrypted_choice_tally.summary.json"), {
+  ...tally.metadata,
+  validInput: "encrypted_choice_tally.valid.input.json",
+  validPublicSignals: "encrypted_choice_tally.valid.public.json",
+  validPublicSignalsByName: "encrypted_choice_tally.valid.public.named.json",
+  encryptedVoteHashes: tally.encryptedVoteHashes,
+  voteCommitments: tally.voteCommitments,
+  nullifierLeaves: tally.nullifierLeaves,
+  voteCommitmentLeaves: tally.voteCommitmentLeaves,
+  encryptedVoteLeaves: tally.encryptedVoteLeaves,
+});
+
+console.log(`Wrote EncryptedChoiceTally vectors to ${vectorDir}`);

@@ -6,7 +6,9 @@
   "description": "CivicOS Circom/Groth16 circuits and local test-vector tooling.",
   "scripts": {
     "clean": "node scripts/clean.mjs",
-    "build:circuit": "mkdir -p build && circom2 circuits/credential_commitment_vote.circom --r1cs --wasm --sym -o build -l node_modules/circomlib/circuits",
+    "build:vote": "mkdir -p build && circom2 circuits/credential_commitment_vote.circom --r1cs --wasm --sym -o build -l node_modules/circomlib/circuits",
+    "build:tally": "mkdir -p build && circom2 circuits/encrypted_choice_tally.circom --r1cs --wasm --sym -o build -l node_modules/circomlib/circuits",
+    "build:circuit": "npm run build:vote && npm run build:tally",
     "vectors": "node scripts/generate-test-vectors.mjs",
     "test:vectors": "node scripts/verify-test-vectors.mjs",
     "setup:dev": "node scripts/setup-dev-groth16.mjs",

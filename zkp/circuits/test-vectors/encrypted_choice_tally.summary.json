@@ -1,0 +1,36 @@
+{
+  "circuitId": "civicos-groth16-tally-circuit-v1",
+  "publicInputSchemaVersion": "civicos-groth16-tally-public-inputs-v1",
+  "hashSuite": "poseidon-bn254-v1",
+  "maxVotes": 1,
+  "maxOptions": 2,
+  "publicSignalNames": [
+    "pollId",
+    "pollPolicyHash",
+    "credentialSchemaHash",
+    "optionSetHash",
+    "nullifierRoot",
+    "voteCommitmentRoot",
+    "encryptedVoteRoot",
+    "acceptedVoteCount",
+    "optionCountsHash"
+  ],
+  "validInput": "encrypted_choice_tally.valid.input.json",
+  "validPublicSignals": "encrypted_choice_tally.valid.public.json",
+  "validPublicSignalsByName": "encrypted_choice_tally.valid.public.named.json",
+  "encryptedVoteHashes": [
+    "15392643493015346327654757686519288114832895265999112583599039694519965461871"
+  ],
+  "voteCommitments": [
+    "20687983888008036607253757538254255927016718375226570635031536337497833717663"
+  ],
+  "nullifierLeaves": [
+    "16632636436561095876099443978757670510189627408979489296573622861124605128969"
+  ],
+  "voteCommitmentLeaves": [
+    "8206551270654128564045190669552264688748433407111346522406059134415535985331"
+  ],
+  "encryptedVoteLeaves": [
+    "4561251596238956158246648574496068445863190679357197847492134714810731824975"
+  ]
+}

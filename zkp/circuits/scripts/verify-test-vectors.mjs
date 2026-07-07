@@ -7,6 +7,7 @@ import {
   createInvalidWrongCredentialRootInput,
   createInvalidWrongNullifierInput,
   deriveCircuitValues,
+  deriveTallyCircuitValues,
 } from "./test-vector-lib.mjs";
 
 const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -53,3 +54,23 @@ assert.deepEqual(
 );
 
 console.log("CredentialCommitmentVote test vectors verified.");
+
+const expectedTally = await deriveTallyCircuitValues();
+
+assert.deepEqual(
+  readJson(resolve(vectorDir, "encrypted_choice_tally.valid.input.json")),
+  expectedTally.input,
+  "valid tally circuit input vector drifted",
+);
+assert.deepEqual(
+  readJson(resolve(vectorDir, "encrypted_choice_tally.valid.public.json")),
+  expectedTally.publicSignals,
+  "valid tally public signal vector drifted",
+);
+assert.deepEqual(
+  readJson(resolve(vectorDir, "encrypted_choice_tally.valid.public.named.json")),
+  expectedTally.publicSignalsByName,
+  "named tally public signal vector drifted",
+);
+
+console.log("EncryptedChoiceTally test vectors verified.");
