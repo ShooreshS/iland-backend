@@ -4,6 +4,8 @@ import type { PollRow } from "../types/db";
 import {
   CIVIC_PRODUCTION_HASH_SUITE,
   CIVIC_PRODUCTION_PROOF_ENVELOPE_VERSION,
+  CIVIC_PRODUCTION_PROOF_GENERATED_STATUS,
+  CIVIC_PRODUCTION_PROOF_PROTOCOL,
   CIVIC_PRODUCTION_PROOF_SYSTEM_VERSION,
   CIVIC_PRODUCTION_PUBLIC_INPUT_SCHEMA_VERSION,
   hashGroth16VotePublicInputs,
@@ -77,6 +79,7 @@ const createProof = (
   } = {},
 ): Groth16VoteProofEnvelopeDto => {
   const publicInputs: Groth16VotePublicInputsDto = {
+    version: CIVIC_PRODUCTION_PUBLIC_INPUT_SCHEMA_VERSION,
     pollId: overrides.pollId ?? "poll-1",
     pollPolicyHash: overrides.pollPolicyHash ?? POLL_POLICY_HASH,
     credentialSchemaHash:
@@ -101,8 +104,10 @@ const createProof = (
 
   return {
     version: CIVIC_PRODUCTION_PROOF_ENVELOPE_VERSION,
-    protocol: "groth16",
+    protocol: CIVIC_PRODUCTION_PROOF_PROTOCOL,
     proofSystemVersion: CIVIC_PRODUCTION_PROOF_SYSTEM_VERSION,
+    status: CIVIC_PRODUCTION_PROOF_GENERATED_STATUS,
+    hashSuite: CIVIC_PRODUCTION_HASH_SUITE,
     circuitId: overrides.circuitId ?? CIRCUIT_ID,
     verifierKeyHash: overrides.verifierKeyHash ?? VERIFIER_KEY_HASH,
     publicInputSchemaVersion: CIVIC_PRODUCTION_PUBLIC_INPUT_SCHEMA_VERSION,
@@ -229,6 +234,51 @@ describe("groth16ProofVerifierService", () => {
 
     expect(result.ok).toBe(false);
     expect(verifierCalled).toBe(false);
+    if (!result.ok) {
+      expect(result.reason).toBe("PROOF_INVALID");
+    }
+  });
+
+  it("rejects mixed pre-prover status in a production envelope", async () => {
+    const result = await verifyGroth16VoteProofForPoll(
+      {
+        poll: createPoll(),
+        proof: {
+          ...createProof(),
+          status: "not_generated",
+        },
+        encryptedVoteHash: ENCRYPTED_VOTE_HASH,
+      },
+      {
+        config: configuredVerifier,
+        verifyProof: () => true,
+      },
+    );
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.reason).toBe("PROOF_INVALID");
+    }
+  });
+
+  it("rejects pre-prover proof-system values in production public inputs", async () => {
+    const proof = createProof({
+      proofSystemVersion: "civicos-zk-proof-v1-preprover",
+    });
+
+    const result = await verifyGroth16VoteProofForPoll(
+      {
+        poll: createPoll(),
+        proof,
+        encryptedVoteHash: ENCRYPTED_VOTE_HASH,
+      },
+      {
+        config: configuredVerifier,
+        verifyProof: () => true,
+      },
+    );
+
+    expect(result.ok).toBe(false);
     if (!result.ok) {
       expect(result.reason).toBe("PROOF_INVALID");
     }

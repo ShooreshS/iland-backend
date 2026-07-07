@@ -8,6 +8,11 @@ export type PollJurisdictionType =
   | "real_area"
   | "land";
 
+export type PollVotePrivacyMode =
+  | "legacy_identity_linked"
+  | "zk_preprover_audit"
+  | "zk_secret_ballot_v1";
+
 export type PollEligibilityRule = {
   requiresVerifiedIdentity: boolean;
   allowedDocumentCountryCodes?: string[];
@@ -30,6 +35,9 @@ export type PollDto = {
   eligibilityRule: PollEligibilityRule;
   pollPolicyHash: string | null;
   credentialSchemaHash: string | null;
+  votePrivacyMode: PollVotePrivacyMode;
+  optionSetHash: string | null;
+  pollEncryptionKeyId: string | null;
   startsAt: string | null;
   endsAt: string | null;
   createdAt: string;
@@ -364,6 +372,8 @@ export type CreatePollRequestDto = {
   jurisdictionLandIds?: string[];
   status?: PollStatus;
   eligibilityRule?: Partial<PollEligibilityRule> | null;
+  votePrivacyMode?: PollVotePrivacyMode;
+  pollEncryptionKeyId?: string | null;
 };
 
 export type UpdateDraftPollRequestDto = {
@@ -377,6 +387,8 @@ export type UpdateDraftPollRequestDto = {
   jurisdictionLandIds?: string[];
   status?: "draft" | "active";
   eligibilityRule?: Partial<PollEligibilityRule> | null;
+  votePrivacyMode?: PollVotePrivacyMode;
+  pollEncryptionKeyId?: string | null;
 };
 
 export type PollManagementErrorCode =

@@ -4,6 +4,7 @@ import type { JsonValue } from "../types/json";
 
 export const CIVICOS_POLL_POLICY_VERSION = "civicos-poll-policy-v1" as const;
 export const CIVICOS_CREDENTIAL_SCHEMA_VERSION = "civicos-identity-v1" as const;
+export const CIVICOS_OPTION_SET_VERSION = "civicos-poll-option-set-v1" as const;
 const CIVICOS_SET_HASH_VERSION = "civicos-string-set-v1" as const;
 
 export type PollPolicySource = {
@@ -59,6 +60,31 @@ export type CivicCredentialSchema = {
     acceptedLandSetHash: string | null;
     eligibilityPolicyHash: string;
   };
+};
+
+export type PollOptionSetSource = {
+  pollId: string;
+  options: Array<{
+    id?: string | null;
+    label: string;
+    description?: string | null;
+    color?: string | null;
+    displayOrder: number;
+    isActive: boolean;
+  }>;
+};
+
+export type CivicPollOptionSet = {
+  version: typeof CIVICOS_OPTION_SET_VERSION;
+  pollId: string;
+  options: Array<{
+    id: string;
+    label: string;
+    description: string | null;
+    color: string | null;
+    displayOrder: number;
+    isActive: boolean;
+  }>;
 };
 
 const compareStrings = (left: string, right: string): number =>
@@ -165,6 +191,41 @@ const hashStringSet = (kind: string, values: string[]): string | null =>
         values,
       })
     : null;
+
+const normalizeRequiredString = (value: string | null | undefined): string => {
+  const normalized = normalizeOptionalString(value);
+  return normalized ?? "";
+};
+
+export const buildCivicPollOptionSet = (
+  input: PollOptionSetSource,
+): CivicPollOptionSet => ({
+  version: CIVICOS_OPTION_SET_VERSION,
+  pollId: normalizeRequiredString(input.pollId),
+  options: [...input.options]
+    .map((option) => ({
+      id: normalizeRequiredString(option.id),
+      label: normalizeRequiredString(option.label),
+      description: normalizeOptionalString(option.description),
+      color: normalizeOptionalString(option.color),
+      displayOrder:
+        Number.isFinite(option.displayOrder) && Number.isInteger(option.displayOrder)
+          ? option.displayOrder
+          : 0,
+      isActive: option.isActive !== false,
+    }))
+    .filter((option) => option.id.length > 0 && option.label.length > 0)
+    .sort((left, right) => {
+      if (left.displayOrder !== right.displayOrder) {
+        return left.displayOrder - right.displayOrder;
+      }
+
+      return compareStrings(left.id, right.id);
+    }),
+});
+
+export const hashPollOptionSet = (input: PollOptionSetSource): string =>
+  hashCanonicalJson(buildCivicPollOptionSet(input));
 
 export const buildCivicPollPolicy = (
   input: PollPolicySource,

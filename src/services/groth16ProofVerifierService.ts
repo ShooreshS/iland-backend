@@ -10,18 +10,20 @@ export const CIVIC_PRODUCTION_PROOF_ENVELOPE_VERSION =
   "civicos-groth16-vote-proof-envelope-v1" as const;
 export const CIVIC_PRODUCTION_PROOF_SYSTEM_VERSION =
   "civicos-zk-proof-v1" as const;
+export const CIVIC_PRODUCTION_PROOF_PROTOCOL = "groth16" as const;
 export const CIVIC_PRODUCTION_HASH_SUITE = "poseidon-bn254-v1" as const;
 export const CIVIC_PRODUCTION_PUBLIC_INPUT_SCHEMA_VERSION =
   "civicos-groth16-vote-public-inputs-v1" as const;
+export const CIVIC_PRODUCTION_PROOF_GENERATED_STATUS = "generated" as const;
 export const CIVIC_PRODUCTION_PROOF_VERIFICATION_MODE =
   "off_chain_groth16" as const;
 export const CIVIC_PRODUCTION_PROOF_VERIFICATION_STATUS = "verified" as const;
 
 const CIVIC_ZKP_DOMAIN = "org.civicos.zkp" as const;
-const GROTH16_PROTOCOL = "groth16" as const;
 const HEX_64_PATTERN = /^[0-9a-f]{64}$/;
 
 export type Groth16VotePublicInputsDto = {
+  version: string;
   pollId: string;
   pollPolicyHash: string;
   credentialSchemaHash: string;
@@ -42,6 +44,8 @@ export type Groth16VoteProofEnvelopeDto = {
   version: string;
   protocol: string;
   proofSystemVersion: string;
+  status: string;
+  hashSuite: string;
   circuitId: string;
   verifierKeyHash: string;
   publicInputSchemaVersion: string;
@@ -226,8 +230,10 @@ export const verifyGroth16VoteProofForPoll = async (
   const proof = params.proof;
   if (
     proof.version !== CIVIC_PRODUCTION_PROOF_ENVELOPE_VERSION ||
-    proof.protocol !== GROTH16_PROTOCOL ||
-    proof.proofSystemVersion !== CIVIC_PRODUCTION_PROOF_SYSTEM_VERSION
+    proof.protocol !== CIVIC_PRODUCTION_PROOF_PROTOCOL ||
+    proof.proofSystemVersion !== CIVIC_PRODUCTION_PROOF_SYSTEM_VERSION ||
+    proof.status !== CIVIC_PRODUCTION_PROOF_GENERATED_STATUS ||
+    proof.hashSuite !== CIVIC_PRODUCTION_HASH_SUITE
   ) {
     return reject(
       "PROOF_INVALID",
@@ -257,6 +263,7 @@ export const verifyGroth16VoteProofForPoll = async (
 
   if (
     proof.publicInputSchemaVersion !== configuredPublicInputSchemaVersion ||
+    proof.publicInputs.version !== configuredPublicInputSchemaVersion ||
     proof.publicInputs.publicInputSchemaVersion !==
       configuredPublicInputSchemaVersion
   ) {

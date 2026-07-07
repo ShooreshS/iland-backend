@@ -1,10 +1,9 @@
-import type { PollJurisdictionType, PollStatus } from "./contracts";
+import type {
+  PollJurisdictionType,
+  PollStatus,
+  PollVotePrivacyMode,
+} from "./contracts";
 import type { JsonValue } from "./json";
-
-export type PollVotePrivacyMode =
-  | "legacy_identity_linked"
-  | "zk_preprover_audit"
-  | "zk_secret_ballot_v1";
 
 export type UserRow = {
   id: string;

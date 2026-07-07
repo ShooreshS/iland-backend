@@ -170,6 +170,45 @@ describe("voteProofVerifierService", () => {
     }
   });
 
+  it("rejects production Groth16 envelopes on the pre-prover verifier path", () => {
+    const privacy = {
+      version: "civicos-vote-privacy-v1",
+      hashSuite: "poseidon-bn254-v1",
+      nullifier: NULLIFIER,
+      proof: {
+        version: "civicos-groth16-vote-proof-envelope-v1",
+        protocol: "groth16",
+        proofSystemVersion: "civicos-zk-proof-v1",
+        status: "generated",
+        hashSuite: "poseidon-bn254-v1",
+        circuitId: "civicos-groth16-vote-circuit-v1",
+        verifierKeyHash: "8".repeat(64),
+        publicInputSchemaVersion: "civicos-groth16-vote-public-inputs-v1",
+        proof: {},
+        publicInputs: {
+          pollId: "poll-1",
+          pollPolicyHash: POLL_POLICY_HASH,
+          credentialSchemaHash: CREDENTIAL_SCHEMA_HASH,
+          nullifier: NULLIFIER,
+          verificationMethodVersion: "civicos-mobile-verification-v1",
+          proofSystemVersion: "civicos-zk-proof-v1",
+        },
+        publicInputsHash: null,
+      },
+    } as unknown as VotePrivacyPayloadDto;
+
+    const result = verifyVoteProofForPoll({
+      poll: createPoll(),
+      optionId: "option-1",
+      privacy,
+    });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.reason).toBe("PROOF_INVALID");
+    }
+  });
+
   it("keeps legacy non-proof polls optional", () => {
     const result = verifyVoteProofForPoll({
       poll: createPoll({
