@@ -1,0 +1,36 @@
+{
+  "version": "civicos-groth16-artifact-manifest-v1",
+  "artifactKind": "tally",
+  "circuitId": "civicos-groth16-tally-circuit-v1",
+  "proofSystem": "groth16",
+  "protocol": "groth16",
+  "curve": "bn254",
+  "hashSuite": "poseidon-bn254-v1",
+  "publicInputSchemaVersion": "civicos-groth16-tally-public-inputs-v1",
+  "trustedSetupTranscriptHash": "de82496b670c095315bb36f19165f5b2dadcb05dd12707fb17c8ec078f75288e",
+  "verifierKeyHash": "9bd37caad27ffc247431b71572b2fb8804417f0c0efd705075f617b60a008c67",
+  "provingKeyHash": "de82496b670c095315bb36f19165f5b2dadcb05dd12707fb17c8ec078f75288e",
+  "wasmOrNativeArtifactHash": "b8e56a7a31e43ed9cfe3a994055d98c0bb738906864927fb96baae0fec90b652",
+  "artifacts": [
+    {
+      "role": "verification_key",
+      "path": "encrypted_choice_tally.vkey.json",
+      "sha256": "9bd37caad27ffc247431b71572b2fb8804417f0c0efd705075f617b60a008c67",
+      "format": "snarkjs-vkey-json"
+    },
+    {
+      "role": "proving_key",
+      "path": "../../../../zkp/circuits/build/encrypted_choice_tally_final.zkey",
+      "sha256": "de82496b670c095315bb36f19165f5b2dadcb05dd12707fb17c8ec078f75288e",
+      "format": "zkey"
+    },
+    {
+      "role": "witness_wasm",
+      "path": "../../../../zkp/circuits/build/encrypted_choice_tally_js/encrypted_choice_tally.wasm",
+      "sha256": "b8e56a7a31e43ed9cfe3a994055d98c0bb738906864927fb96baae0fec90b652",
+      "format": "wasm"
+    }
+  ],
+  "generatedAt": "2026-07-07T00:00:00.000Z",
+  "notes": "Local one-vote/two-option development fixture for backend snarkjs verifier tests only. Not a production ceremony artifact."
+}

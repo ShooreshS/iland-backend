@@ -19,6 +19,7 @@ import {
   verifyGroth16ProofFromManifestWithSnarkjs,
 } from "./groth16SnarkjsVerifierEngine";
 import { canonicalizeJson } from "./pollPolicyService";
+import { poseidonHashHex64 } from "./poseidonBn254Service";
 
 export const CIVIC_TALLY_PROOF_ENVELOPE_VERSION =
   "civicos-groth16-tally-proof-envelope-v1" as const;
@@ -290,17 +291,11 @@ const loadTallyArtifactManifestFromEnv = (values: {
 
 export const hashGroth16TallyOptionCounts = (
   optionResults: readonly Groth16TallyOptionResultDto[],
-): string =>
-  sha256Hex(
-    `${CIVIC_ZKP_DOMAIN}|groth16-tally-option-counts|${canonicalizeJson(
-      [...optionResults]
-        .map((entry) => ({
-          optionId: entry.optionId,
-          count: Math.max(0, Math.trunc(entry.count)),
-        }))
-        .sort((left, right) => left.optionId.localeCompare(right.optionId)),
-    )}`,
-  );
+): Promise<string> =>
+  poseidonHashHex64([
+    1201,
+    ...optionResults.map((entry) => Math.max(0, Math.trunc(entry.count))),
+  ]);
 
 export const hashGroth16TallyPublicInputs = (
   publicInputs: Groth16TallyPublicInputsDto,
@@ -491,7 +486,7 @@ export const verifyGroth16TallyProofForPoll = async (
     );
   }
 
-  const optionCountsHash = hashGroth16TallyOptionCounts(
+  const optionCountsHash = await hashGroth16TallyOptionCounts(
     publicInputs.optionResults,
   );
   if (publicInputs.optionCountsHash !== optionCountsHash) {

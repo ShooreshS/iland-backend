@@ -1,0 +1,66 @@
+{
+  "version": "civicos-groth16-tally-proof-envelope-v1",
+  "protocol": "groth16",
+  "proofSystemVersion": "civicos-zk-proof-v1",
+  "status": "generated",
+  "hashSuite": "poseidon-bn254-v1",
+  "circuitId": "civicos-groth16-tally-circuit-v1",
+  "verifierKeyHash": "9bd37caad27ffc247431b71572b2fb8804417f0c0efd705075f617b60a008c67",
+  "publicInputSchemaVersion": "civicos-groth16-tally-public-inputs-v1",
+  "proof": {
+    "pi_a": [
+      "21127306978950293465580545095594218221003808174511112223994126361342143840749",
+      "2870831028096169669656789078133943656436095099565079114471195360121690126360",
+      "1"
+    ],
+    "pi_b": [
+      [
+        "1809776077068137110226570914319119711667601305392093807909466288806643243108",
+        "16070646829999539885052551465398394612716380438324261688427616903005086206415"
+      ],
+      [
+        "17618164095129222353630166387640277530137319136110869984077122674645533387552",
+        "14310614873517116343568871987734616522109123065571133407690387676040659778015"
+      ],
+      [
+        "1",
+        "0"
+      ]
+    ],
+    "pi_c": [
+      "10213818757057241181133584060436102525767807183930485680141261356313677956935",
+      "993003371150121136518872277808578211439108864137487381953607549532614680229",
+      "1"
+    ],
+    "protocol": "groth16",
+    "curve": "bn128"
+  },
+  "publicInputs": {
+    "version": "civicos-groth16-tally-public-inputs-v1",
+    "pollId": "101",
+    "pollPolicyHash": "00000000000000000000000000000000000000000000000000000000000000ca",
+    "credentialSchemaHash": "000000000000000000000000000000000000000000000000000000000000012f",
+    "optionSetHash": "0000000000000000000000000000000000000000000000000000000000000194",
+    "nullifierRoot": "24c5bd15b9f56fcaa70daa88b58444bfe6f0494040a660425002514361513109",
+    "voteCommitmentRoot": "1224be507d8c24bda610166a57fb65bacce789e744d152255d40567d64ddd2b3",
+    "encryptedVoteRoot": "0a1593b0c18ac263e18825b445713d9dbcf051d64523b7edfc17f2518c37874f",
+    "acceptedVoteCount": 1,
+    "optionResults": [
+      {
+        "optionId": "option-a",
+        "count": 0
+      },
+      {
+        "optionId": "option-b",
+        "count": 1
+      }
+    ],
+    "optionCountsHash": "1b6dc1c2073e6ef393bec628c624041f6efcb0c6600ef56b621bc0718166e9f6",
+    "proofSystemVersion": "civicos-zk-proof-v1",
+    "hashSuite": "poseidon-bn254-v1",
+    "circuitId": "civicos-groth16-tally-circuit-v1",
+    "verifierKeyHash": "9bd37caad27ffc247431b71572b2fb8804417f0c0efd705075f617b60a008c67",
+    "publicInputSchemaVersion": "civicos-groth16-tally-public-inputs-v1"
+  },
+  "publicInputsHash": "bef45cb5a3cf9fa868bdc55ceecf382bc447cce8425d7ccdbfb456a55abf1a9b"
+}
