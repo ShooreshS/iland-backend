@@ -291,9 +291,9 @@ export type ProofSystemPolicyDto = {
   version: "civicos-proof-system-policy-v1";
   phase: 11;
   selectedTrack: "v1";
-  proofSystemVersion: "civicos-zk-proof-v1-preprover";
-  proofVerificationMode: "off_chain_preprover";
-  proofVerificationStatus: "preprover_accepted";
+  proofSystemVersion: "civicos-zk-proof-v1-preprover" | "civicos-zk-proof-v1";
+  proofVerificationMode: "off_chain_preprover" | "off_chain_groth16";
+  proofVerificationStatus: "preprover_accepted" | "verified";
   onChainZkVerifierEnabled: false;
   solanaAnchoring: "audit_roots_only";
   storesProofHash: true;
@@ -302,10 +302,30 @@ export type ProofSystemPolicyDto = {
   solanaArtifacts: Array<
     | "nullifier_root"
     | "vote_commitment_root"
+    | "encrypted_vote_root"
     | "final_result_hash"
     | "tally_proof_hash"
+    | "tally_public_inputs_hash"
   >;
-  offChainArtifacts: Array<"proof_hash" | "public_inputs" | "proof_envelope">;
+  offChainArtifacts: Array<
+    | "proof_hash"
+    | "public_inputs"
+    | "proof_envelope"
+    | "groth16_proof"
+    | "encrypted_vote"
+    | "tally_proof"
+  >;
+  productionTarget: {
+    enabled: boolean;
+    verifierConfigured: boolean;
+    proofSystemVersion: "civicos-zk-proof-v1";
+    proofVerificationMode: "off_chain_groth16";
+    proofVerificationStatus: "verified";
+    hashSuite: "poseidon-bn254-v1";
+    anonymousVoteTable: "poll_zk_votes";
+    tallyProofRequired: true;
+    onChainZkVerifierEnabled: false;
+  };
   notes: string[];
 };
 

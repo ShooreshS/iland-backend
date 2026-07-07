@@ -1,6 +1,11 @@
 import type { PollJurisdictionType, PollStatus } from "./contracts";
 import type { JsonValue } from "./json";
 
+export type PollVotePrivacyMode =
+  | "legacy_identity_linked"
+  | "zk_preprover_audit"
+  | "zk_secret_ballot_v1";
+
 export type UserRow = {
   id: string;
   username: string | null;
@@ -415,6 +420,9 @@ export type PollRow = {
   poll_policy_hash?: string | null;
   credential_schema_json?: JsonValue | null;
   credential_schema_hash?: string | null;
+  vote_privacy_mode?: PollVotePrivacyMode;
+  option_set_hash?: string | null;
+  poll_encryption_key_id?: string | null;
   created_at: string;
   updated_at: string;
 };
@@ -453,6 +461,9 @@ export type NewPollRow = {
   poll_policy_hash?: string | null;
   credential_schema_json?: JsonValue | null;
   credential_schema_hash?: string | null;
+  vote_privacy_mode?: PollVotePrivacyMode;
+  option_set_hash?: string | null;
+  poll_encryption_key_id?: string | null;
 };
 
 export type NewPollOptionRow = {
@@ -587,6 +598,76 @@ export type NewPollAuditEventRow = {
   payload_hash: string;
   payload_json?: JsonValue | null;
   solana_tx_signature?: string | null;
+};
+
+export type PollZkVoteRow = {
+  id: string;
+  poll_id: string;
+  nullifier: string;
+  vote_commitment: string;
+  encrypted_vote: JsonValue;
+  encrypted_vote_hash: string;
+  proof_hash: string;
+  proof_system_version: string;
+  verification_method_version: string;
+  proof_verification_status: "verified";
+  proof_public_inputs_json: JsonValue;
+  proof_envelope_hash: string;
+  verifier_key_hash: string;
+  circuit_id: string;
+  accepted_at: string;
+  batch_id: string | null;
+  created_at: string;
+};
+
+export type NewPollZkVoteRow = {
+  poll_id: string;
+  nullifier: string;
+  vote_commitment: string;
+  encrypted_vote: JsonValue;
+  encrypted_vote_hash: string;
+  proof_hash: string;
+  proof_system_version: string;
+  verification_method_version: string;
+  proof_verification_status?: "verified";
+  proof_public_inputs_json: JsonValue;
+  proof_envelope_hash: string;
+  verifier_key_hash: string;
+  circuit_id: string;
+  accepted_at?: string;
+  batch_id?: string | null;
+};
+
+export type PollTallyProofRow = {
+  id: string;
+  poll_id: string;
+  result_hash: string;
+  tally_proof_hash: string;
+  tally_public_inputs_hash: string;
+  tally_verifier_key_hash: string;
+  tally_circuit_id: string;
+  nullifier_root: string;
+  vote_commitment_root: string;
+  encrypted_vote_root: string;
+  accepted_count: number;
+  proof_envelope_json: JsonValue;
+  verified_at: string;
+  created_at: string;
+};
+
+export type NewPollTallyProofRow = {
+  poll_id: string;
+  result_hash: string;
+  tally_proof_hash: string;
+  tally_public_inputs_hash: string;
+  tally_verifier_key_hash: string;
+  tally_circuit_id: string;
+  nullifier_root: string;
+  vote_commitment_root: string;
+  encrypted_vote_root: string;
+  accepted_count: number;
+  proof_envelope_json: JsonValue;
+  verified_at?: string;
 };
 
 export type BackendAuditEventDecision =

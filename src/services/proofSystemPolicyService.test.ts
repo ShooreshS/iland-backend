@@ -31,13 +31,29 @@ describe("proofSystemPolicyService", () => {
     expect(policy.solanaArtifacts).toEqual([
       "nullifier_root",
       "vote_commitment_root",
+      "encrypted_vote_root",
       "final_result_hash",
       "tally_proof_hash",
+      "tally_public_inputs_hash",
     ]);
     expect(policy.offChainArtifacts).toEqual([
       "proof_hash",
       "public_inputs",
       "proof_envelope",
+      "groth16_proof",
+      "encrypted_vote",
+      "tally_proof",
     ]);
+    expect(policy.productionTarget).toMatchObject({
+      enabled: false,
+      verifierConfigured: false,
+      proofSystemVersion: "civicos-zk-proof-v1",
+      proofVerificationMode: "off_chain_groth16",
+      proofVerificationStatus: "verified",
+      hashSuite: "poseidon-bn254-v1",
+      anonymousVoteTable: "poll_zk_votes",
+      tallyProofRequired: true,
+      onChainZkVerifierEnabled: false,
+    });
   });
 });
