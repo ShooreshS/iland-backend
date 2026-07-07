@@ -17,6 +17,7 @@
     "cbor-x": "^1.6.4",
     "qrcode": "^1.5.4",
     "reflect-metadata": "^0.2.2",
+    "snarkjs": "^0.7.6",
     "zod": "^3.25.76"
   },
   "devDependencies": {

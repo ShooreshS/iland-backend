@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import env from "../config/env";
 import pollAuditRepository from "../repositories/pollAuditRepository";
 import pollRepository from "../repositories/pollRepository";
+import pollTallyProofRepository from "../repositories/pollTallyProofRepository";
 import pollZkVoteRepository from "../repositories/pollZkVoteRepository";
 import voteRepository from "../repositories/voteRepository";
 import type {
@@ -11,13 +12,24 @@ import type {
   PublicAuditRootCommitDto,
   PublicAuditInclusionProofResultDto,
   PublicAuditMerkleProofStepDto,
+  PublicAuditTallyProofSummaryDto,
   PublicAuditTreeKind,
   PublicAuditTreeSummaryDto,
   PublicVoteReceiptLookupDto,
   PublicPollAuditDto,
 } from "../types/contracts";
-import type { PollOptionRow, PollRootRow, PollRow } from "../types/db";
+import type {
+  PollOptionRow,
+  PollRootRow,
+  PollRow,
+  PollTallyProofRow,
+} from "../types/db";
+import type { JsonValue } from "../types/json";
 import { CIVIC_PRODUCTION_VOTE_PRIVACY_MODE } from "./groth16ProofVerifierService";
+import {
+  verifyGroth16TallyProofForPoll,
+  type Groth16TallyProofEnvelopeDto,
+} from "./groth16TallyProofVerifierService";
 import { hashCanonicalJson } from "./pollPolicyService";
 import solanaAuditPublisherService, {
   type SolanaAuditPublicationResult,
@@ -244,7 +256,15 @@ const buildResultHash = (input: {
   totalValidVoteCount: number;
   nullifierRoot: string;
   voteCommitmentRoot: string;
+  encryptedVoteRoot: string;
   finalResult: PollResultsSummaryDto;
+  tallyProof: Pick<
+    PollTallyProofRow,
+    | "tally_proof_hash"
+    | "tally_public_inputs_hash"
+    | "tally_verifier_key_hash"
+    | "tally_circuit_id"
+  > | null;
 }): string =>
   hashCanonicalJson({
     version: PUBLIC_AUDIT_RESULT_HASH_VERSION,
@@ -252,10 +272,16 @@ const buildResultHash = (input: {
     pollStatus: input.poll.status,
     pollPolicyHash: input.poll.poll_policy_hash ?? null,
     credentialSchemaHash: input.poll.credential_schema_hash ?? null,
+    optionSetHash: input.poll.option_set_hash ?? null,
     acceptedVoteCount: input.acceptedVoteCount,
     totalValidVoteCount: input.totalValidVoteCount,
     finalNullifierRoot: input.nullifierRoot,
     finalVoteCommitmentRoot: input.voteCommitmentRoot,
+    finalEncryptedVoteRoot: input.encryptedVoteRoot,
+    tallyProofHash: input.tallyProof?.tally_proof_hash ?? null,
+    tallyPublicInputsHash: input.tallyProof?.tally_public_inputs_hash ?? null,
+    tallyVerifierKeyHash: input.tallyProof?.tally_verifier_key_hash ?? null,
+    tallyCircuitId: input.tallyProof?.tally_circuit_id ?? null,
     result: {
       totalVotes: input.finalResult.totalVotes,
       optionResults: input.finalResult.optionResults.map((entry) => ({
@@ -271,6 +297,7 @@ const buildWarnings = (input: {
   acceptedVoteCount: number;
   totalValidVoteCount: number;
   publishedRootCount: number;
+  tallyProof: PollTallyProofRow | null;
 }): string[] => {
   const warnings: string[] = [];
 
@@ -292,6 +319,14 @@ const buildWarnings = (input: {
     warnings.push("On-chain audit publication is not enabled yet.");
   }
 
+  if (
+    isProductionZkpPoll(input.poll) &&
+    input.acceptedVoteCount > 0 &&
+    !input.tallyProof
+  ) {
+    warnings.push("No verified tally proof has been recorded for this poll yet.");
+  }
+
   return warnings;
 };
 
@@ -300,6 +335,7 @@ const buildAuditTrees = (
 ): {
   nullifierTree: PublicAuditMerkleTree;
   voteCommitmentTree: PublicAuditMerkleTree;
+  encryptedVoteTree: PublicAuditMerkleTree;
 } => {
   const nullifierLeafHashes = records.map((record) =>
     hashPublicAuditLeaf("nullifier", record.nullifier ?? ""),
@@ -307,10 +343,17 @@ const buildAuditTrees = (
   const voteCommitmentLeafHashes = records.map((record) =>
     hashPublicAuditLeaf("vote_commitment", record.vote_commitment ?? ""),
   );
+  const encryptedVoteLeafHashes = records
+    .map((record) => record.encrypted_vote_hash ?? "")
+    .filter((encryptedVoteHash) => normalizeHex64(encryptedVoteHash))
+    .map((encryptedVoteHash) =>
+      hashPublicAuditLeaf("encrypted_vote", encryptedVoteHash),
+    );
 
   return {
     nullifierTree: buildPublicAuditMerkleTree(nullifierLeafHashes),
     voteCommitmentTree: buildPublicAuditMerkleTree(voteCommitmentLeafHashes),
+    encryptedVoteTree: buildPublicAuditMerkleTree(encryptedVoteLeafHashes),
   };
 };
 
@@ -320,6 +363,7 @@ type PublicAuditRecordRow = {
   nullifier: string | null;
   vote_commitment: string | null;
   proof_hash: string | null;
+  encrypted_vote_hash?: string | null;
   accepted_at: string | null;
   batch_id: string | null;
   created_at: string;
@@ -332,6 +376,8 @@ type PollAuditMaterial = Readonly<{
   acceptedVoteCount: number;
   nullifierTree: PublicAuditMerkleTree;
   voteCommitmentTree: PublicAuditMerkleTree;
+  encryptedVoteTree: PublicAuditMerkleTree;
+  tallyProof: PollTallyProofRow | null;
   finalResult: PollResultsSummaryDto;
   resultHash: string;
 }>;
@@ -355,7 +401,10 @@ const parseBatchIndex = (batchId: string): number => {
   return Number.isFinite(parsed) && parsed >= 0 ? parsed : 0;
 };
 
-const mapRootCommit = (root: PollRootRow): PublicAuditRootCommitDto | null => {
+const mapRootCommit = (
+  root: PollRootRow,
+  encryptedVoteRoot: string,
+): PublicAuditRootCommitDto | null => {
   if (!root.solana_tx_signature) {
     return null;
   }
@@ -366,6 +415,7 @@ const mapRootCommit = (root: PollRootRow): PublicAuditRootCommitDto | null => {
     acceptedCount: root.accepted_count,
     nullifierRoot: root.nullifier_root,
     voteCommitmentRoot: root.vote_commitment_root,
+    encryptedVoteRoot,
     transactionSignature: root.solana_tx_signature,
     explorerUrl: buildSolanaExplorerUrl(root.solana_tx_signature) || "",
     submittedAt: root.created_at,
@@ -387,6 +437,67 @@ const isPollFinalResultPublishable = (poll: PollRow): boolean => {
 const isProductionZkpPoll = (poll: PollRow): boolean =>
   poll.vote_privacy_mode === CIVIC_PRODUCTION_VOTE_PRIVACY_MODE;
 
+const mapTallyProofSummary = (
+  tallyProof: PollTallyProofRow | null,
+): PublicAuditTallyProofSummaryDto | null =>
+  tallyProof
+    ? {
+        resultHash: tallyProof.result_hash,
+        tallyProofHash: tallyProof.tally_proof_hash,
+        tallyPublicInputsHash: tallyProof.tally_public_inputs_hash,
+        tallyVerifierKeyHash: tallyProof.tally_verifier_key_hash,
+        tallyCircuitId: tallyProof.tally_circuit_id,
+        nullifierRoot: tallyProof.nullifier_root,
+        voteCommitmentRoot: tallyProof.vote_commitment_root,
+        encryptedVoteRoot: tallyProof.encrypted_vote_root,
+        acceptedCount: tallyProof.accepted_count,
+        verifiedAt: tallyProof.verified_at,
+      }
+    : null;
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  value !== null && typeof value === "object" && !Array.isArray(value);
+
+const readTallyProofCounts = (
+  tallyProof: PollTallyProofRow | null,
+): Record<string, number> | null => {
+  if (!tallyProof || !isRecord(tallyProof.proof_envelope_json)) {
+    return null;
+  }
+
+  const publicInputs = tallyProof.proof_envelope_json.publicInputs;
+  if (!isRecord(publicInputs) || !Array.isArray(publicInputs.optionResults)) {
+    return null;
+  }
+
+  return publicInputs.optionResults.reduce<Record<string, number> | null>(
+    (acc, entry) => {
+      if (!acc || !isRecord(entry)) {
+        return null;
+      }
+
+      const optionId =
+        typeof entry.optionId === "string" ? entry.optionId.trim() : "";
+      const count = typeof entry.count === "number" ? entry.count : NaN;
+      if (!optionId || !Number.isInteger(count) || count < 0) {
+        return null;
+      }
+
+      acc[optionId] = count;
+      return acc;
+    },
+    {},
+  );
+};
+
+const buildCountsFromOptionResults = (
+  optionResults: readonly { optionId: string; count: number }[],
+): Record<string, number> =>
+  optionResults.reduce<Record<string, number>>((acc, entry) => {
+    acc[entry.optionId] = Math.max(0, Math.trunc(entry.count));
+    return acc;
+  }, {});
+
 const getAcceptedAuditRecordsByPoll = async (
   poll: PollRow,
 ): Promise<PublicAuditRecordRow[]> =>
@@ -401,7 +512,13 @@ const countValidVotesByPoll = async (poll: PollRow): Promise<number> =>
 
 const loadPollAuditMaterial = async (poll: PollRow): Promise<PollAuditMaterial> => {
   const productionPoll = isProductionZkpPoll(poll);
-  const [options, auditRecords, totalValidVoteCount, latestSubmittedAt] =
+  const [
+    options,
+    auditRecords,
+    totalValidVoteCount,
+    latestSubmittedAt,
+    tallyProof,
+  ] =
     await Promise.all([
       pollRepository.getOptionsByPollId(poll.id),
       getAcceptedAuditRecordsByPoll(poll),
@@ -409,10 +526,14 @@ const loadPollAuditMaterial = async (poll: PollRow): Promise<PollAuditMaterial> 
       productionPoll
         ? Promise.resolve(null)
         : voteRepository.getLatestValidSubmittedAtByPollId(poll.id),
+      productionPoll
+        ? pollTallyProofRepository.getLatestByPollId(poll.id)
+        : Promise.resolve(null),
     ]);
 
+  const tallyCounts = readTallyProofCounts(tallyProof);
   const optionCountEntries = productionPoll
-    ? options.map((option) => [option.id, 0] as const)
+    ? options.map((option) => [option.id, tallyCounts?.[option.id] ?? 0] as const)
     : await Promise.all(
         options.map(async (option) => [
           option.id,
@@ -428,11 +549,12 @@ const loadPollAuditMaterial = async (poll: PollRow): Promise<PollAuditMaterial> 
   );
 
   const acceptedVoteCount = auditRecords.length;
-  const { nullifierTree, voteCommitmentTree } = buildAuditTrees(auditRecords);
+  const { nullifierTree, voteCommitmentTree, encryptedVoteTree } =
+    buildAuditTrees(auditRecords);
   const finalResult = buildResultsSummary(poll.id, options, {
     countsByOptionId,
     totalVotes: totalValidVoteCount,
-    updatedAt: latestSubmittedAt || poll.updated_at,
+    updatedAt: tallyProof?.verified_at || latestSubmittedAt || poll.updated_at,
   });
   const resultHash = buildResultHash({
     poll,
@@ -440,7 +562,9 @@ const loadPollAuditMaterial = async (poll: PollRow): Promise<PollAuditMaterial> 
     totalValidVoteCount,
     nullifierRoot: nullifierTree.root,
     voteCommitmentRoot: voteCommitmentTree.root,
+    encryptedVoteRoot: encryptedVoteTree.root,
     finalResult,
+    tallyProof,
   });
 
   return Object.freeze({
@@ -450,6 +574,8 @@ const loadPollAuditMaterial = async (poll: PollRow): Promise<PollAuditMaterial> 
     acceptedVoteCount,
     nullifierTree,
     voteCommitmentTree,
+    encryptedVoteTree,
+    tallyProof,
     finalResult,
     resultHash,
   });
@@ -467,7 +593,7 @@ export const pollPublicAuditService = {
       pollAuditRepository.listRootsByPollId(poll.id),
     ]);
     const rootCommits = publishedRoots
-      .map(mapRootCommit)
+      .map((root) => mapRootCommit(root, material.encryptedVoteTree.root))
       .filter((entry): entry is PublicAuditRootCommitDto => Boolean(entry));
     const generatedAt = new Date().toISOString();
     const publicationStatus =
@@ -493,6 +619,10 @@ export const pollPublicAuditService = {
           "vote_commitment",
           material.voteCommitmentTree,
         ),
+        encryptedVote: buildTreeSummary(
+          "encrypted_vote",
+          material.encryptedVoteTree,
+        ),
       },
       computedCurrentRootBatch:
         material.acceptedVoteCount > 0 && rootCommits.length === 0
@@ -502,6 +632,7 @@ export const pollPublicAuditService = {
               acceptedCount: material.acceptedVoteCount,
               nullifierRoot: material.nullifierTree.root,
               voteCommitmentRoot: material.voteCommitmentTree.root,
+              encryptedVoteRoot: material.encryptedVoteTree.root,
               transactionSignature: null,
               explorerUrl: null,
               submittedAt: null,
@@ -509,7 +640,10 @@ export const pollPublicAuditService = {
           : null,
       rootCommits,
       resultHash: material.resultHash,
-      tallyProofHash: null,
+      tallyProofHash: material.tallyProof?.tally_proof_hash ?? null,
+      tallyPublicInputsHash:
+        material.tallyProof?.tally_public_inputs_hash ?? null,
+      tallyProof: mapTallyProofSummary(material.tallyProof),
       finalResult: material.finalResult,
       solana: {
         cluster: env.solanaAudit.cluster,
@@ -518,7 +652,7 @@ export const pollPublicAuditService = {
       },
       inclusionCheck: {
         route: `/polls/${encodeURIComponent(poll.id)}/audit/inclusion`,
-        acceptedTrees: ["vote_commitment", "nullifier"],
+        acceptedTrees: ["vote_commitment", "nullifier", "encrypted_vote"],
         expectsLeafHash: true,
       },
       warnings: buildWarnings({
@@ -526,6 +660,7 @@ export const pollPublicAuditService = {
         acceptedVoteCount: material.acceptedVoteCount,
         totalValidVoteCount: material.totalValidVoteCount,
         publishedRootCount: rootCommits.length,
+        tallyProof: material.tallyProof,
       }),
     };
   },
@@ -597,7 +732,7 @@ export const pollPublicAuditService = {
         voteCommitmentRoot: material.voteCommitmentTree.root,
         acceptedVoteCount: material.acceptedVoteCount,
         resultHash: material.resultHash,
-        tallyProofHash: null,
+        tallyProofHash: material.tallyProof?.tally_proof_hash ?? null,
         publishFinalResult: isPollFinalResultPublishable(poll),
       });
 
@@ -631,6 +766,10 @@ export const pollPublicAuditService = {
             acceptedVoteCount: material.acceptedVoteCount,
             nullifierRoot: material.nullifierTree.root,
             voteCommitmentRoot: material.voteCommitmentTree.root,
+            encryptedVoteRoot: material.encryptedVoteTree.root,
+            tallyProofHash: material.tallyProof?.tally_proof_hash ?? null,
+            tallyPublicInputsHash:
+              material.tallyProof?.tally_public_inputs_hash ?? null,
             pollAddress: publication.pollAddress,
             rootAddress: publication.rootAddress,
           },
@@ -647,6 +786,12 @@ export const pollPublicAuditService = {
             resultHash: material.resultHash,
             finalResultAddress: publication.finalResultAddress,
             acceptedVoteCount: material.acceptedVoteCount,
+            nullifierRoot: material.nullifierTree.root,
+            voteCommitmentRoot: material.voteCommitmentTree.root,
+            encryptedVoteRoot: material.encryptedVoteTree.root,
+            tallyProofHash: material.tallyProof?.tally_proof_hash ?? null,
+            tallyPublicInputsHash:
+              material.tallyProof?.tally_public_inputs_hash ?? null,
           },
           solana_tx_signature: publication.finalResultSignature,
         });
@@ -675,6 +820,141 @@ export const pollPublicAuditService = {
     }
   },
 
+  async submitTallyProof(input: {
+    pollId: string;
+    viewerUserId: string;
+    proof: Groth16TallyProofEnvelopeDto;
+  }): Promise<
+    | {
+        success: true;
+        message: string;
+        tallyProof: PublicAuditTallyProofSummaryDto;
+        audit: PublicPollAuditDto;
+      }
+    | {
+        success: false;
+        errorCode:
+          | "POLL_NOT_FOUND"
+          | "POLL_NOT_OWNED"
+          | "POLL_NOT_PRODUCTION_ZKP"
+          | "NO_ACCEPTED_AUDIT_VOTES"
+          | "TALLY_PROOF_INVALID";
+        message: string;
+      }
+  > {
+    const poll = await pollRepository.getById(input.pollId);
+    if (!poll) {
+      return {
+        success: false,
+        errorCode: "POLL_NOT_FOUND",
+        message: "The requested poll does not exist.",
+      };
+    }
+
+    if (poll.created_by_user_id !== input.viewerUserId) {
+      return {
+        success: false,
+        errorCode: "POLL_NOT_OWNED",
+        message: "Only the poll creator can submit tally proofs.",
+      };
+    }
+
+    if (!isProductionZkpPoll(poll)) {
+      return {
+        success: false,
+        errorCode: "POLL_NOT_PRODUCTION_ZKP",
+        message: "Only production ZKP polls accept Groth16 tally proofs.",
+      };
+    }
+
+    const material = await loadPollAuditMaterial(poll);
+    if (material.acceptedVoteCount <= 0) {
+      return {
+        success: false,
+        errorCode: "NO_ACCEPTED_AUDIT_VOTES",
+        message: "This poll has no accepted proof-backed votes to tally.",
+      };
+    }
+
+    const verification = await verifyGroth16TallyProofForPoll({
+      poll,
+      proof: input.proof,
+      nullifierRoot: material.nullifierTree.root,
+      voteCommitmentRoot: material.voteCommitmentTree.root,
+      encryptedVoteRoot: material.encryptedVoteTree.root,
+      acceptedVoteCount: material.acceptedVoteCount,
+    });
+    if (!verification.ok) {
+      return {
+        success: false,
+        errorCode: "TALLY_PROOF_INVALID",
+        message: verification.message,
+      };
+    }
+
+    const tallyMaterial = verification.auditMaterial;
+    const tallyCounts = buildCountsFromOptionResults(
+      input.proof.publicInputs.optionResults,
+    );
+    const finalResult = buildResultsSummary(poll.id, material.options, {
+      countsByOptionId: tallyCounts,
+      totalVotes: material.totalValidVoteCount,
+      updatedAt: new Date().toISOString(),
+    });
+    const resultHash = buildResultHash({
+      poll,
+      acceptedVoteCount: material.acceptedVoteCount,
+      totalValidVoteCount: material.totalValidVoteCount,
+      nullifierRoot: material.nullifierTree.root,
+      voteCommitmentRoot: material.voteCommitmentTree.root,
+      encryptedVoteRoot: material.encryptedVoteTree.root,
+      finalResult,
+      tallyProof: {
+        tally_proof_hash: tallyMaterial.tallyProofHash,
+        tally_public_inputs_hash: tallyMaterial.tallyPublicInputsHash,
+        tally_verifier_key_hash: tallyMaterial.tallyVerifierKeyHash,
+        tally_circuit_id: tallyMaterial.tallyCircuitId,
+      },
+    });
+
+    const inserted = await pollTallyProofRepository.insertVerified({
+      poll_id: poll.id,
+      result_hash: resultHash,
+      tally_proof_hash: tallyMaterial.tallyProofHash,
+      tally_public_inputs_hash: tallyMaterial.tallyPublicInputsHash,
+      tally_verifier_key_hash: tallyMaterial.tallyVerifierKeyHash,
+      tally_circuit_id: tallyMaterial.tallyCircuitId,
+      nullifier_root: tallyMaterial.nullifierRoot,
+      vote_commitment_root: tallyMaterial.voteCommitmentRoot,
+      encrypted_vote_root: tallyMaterial.encryptedVoteRoot,
+      accepted_count: tallyMaterial.acceptedCount,
+      proof_envelope_json: tallyMaterial.proofEnvelopeJson as unknown as JsonValue,
+    });
+
+    const audit = await this.getPublicPollAudit(poll.id);
+    if (!audit) {
+      throw new Error("Verified tally proof could not be reloaded.");
+    }
+
+    return {
+      success: true,
+      message: "Poll tally proof was verified and recorded.",
+      tallyProof: mapTallyProofSummary(inserted) || {
+        resultHash: inserted.result_hash,
+        tallyProofHash: inserted.tally_proof_hash,
+        tallyPublicInputsHash: inserted.tally_public_inputs_hash,
+        tallyVerifierKeyHash: inserted.tally_verifier_key_hash,
+        tallyCircuitId: inserted.tally_circuit_id,
+        nullifierRoot: inserted.nullifier_root,
+        voteCommitmentRoot: inserted.vote_commitment_root,
+        encryptedVoteRoot: inserted.encrypted_vote_root,
+        acceptedCount: inserted.accepted_count,
+        verifiedAt: inserted.verified_at,
+      },
+      audit,
+    };
+  },
+
   async getPublicPollAuditInclusionProof(input: {
     pollId: string;
     tree: PublicAuditTreeKind;
@@ -699,9 +979,14 @@ export const pollPublicAuditService = {
     }
 
     const auditRecords = await getAcceptedAuditRecordsByPoll(poll);
-    const { nullifierTree, voteCommitmentTree } = buildAuditTrees(auditRecords);
+    const { nullifierTree, voteCommitmentTree, encryptedVoteTree } =
+      buildAuditTrees(auditRecords);
     const tree =
-      input.tree === "nullifier" ? nullifierTree : voteCommitmentTree;
+      input.tree === "nullifier"
+        ? nullifierTree
+        : input.tree === "encrypted_vote"
+          ? encryptedVoteTree
+          : voteCommitmentTree;
     const leafIndex = tree.leafHashes.findIndex(
       (leafHash) => leafHash === normalizedLeafHash,
     );

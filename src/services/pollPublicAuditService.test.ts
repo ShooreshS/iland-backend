@@ -164,14 +164,18 @@ describe("Phase 8 public poll audit service", () => {
       expect(audit?.trees.voteCommitment.root).toBe(
         expectedVoteCommitmentTree.root,
       );
+      expect(audit?.trees.encryptedVote.root).toBe(PUBLIC_AUDIT_ZERO_ROOT);
       expect(audit?.computedCurrentRootBatch).toMatchObject({
         status: "pending_on_chain_publication",
         batchIndex: 0,
         acceptedCount: 2,
+        encryptedVoteRoot: PUBLIC_AUDIT_ZERO_ROOT,
         transactionSignature: null,
       });
       expect(audit?.rootCommits).toEqual([]);
       expect(audit?.tallyProofHash).toBeNull();
+      expect(audit?.tallyPublicInputsHash).toBeNull();
+      expect(audit?.tallyProof).toBeNull();
       expect(audit?.resultHash).toMatch(/^[0-9a-f]{64}$/);
       expect(audit?.finalResult.optionResults).toMatchObject([
         { optionId: optionA.id, label: "Option A", count: 1 },

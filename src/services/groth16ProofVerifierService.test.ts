@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -26,6 +26,10 @@ import {
   type Groth16VotePublicInputsDto,
   verifyGroth16VoteProofForPoll,
 } from "./groth16ProofVerifierService";
+import {
+  encodeGroth16VotePublicSignals,
+  verifyGroth16ProofWithSnarkjs,
+} from "./groth16SnarkjsVerifierEngine";
 
 const FIXED_TIME = "2026-07-07T12:00:00.000Z";
 const POLL_POLICY_HASH = "1".repeat(64);
@@ -40,6 +44,36 @@ const TRUSTED_SETUP_TRANSCRIPT_HASH = "9".repeat(64);
 const PROVING_KEY_HASH = "a".repeat(64);
 const PROVER_ARTIFACT_HASH = "b".repeat(64);
 const CIRCUIT_ID = "civicos-groth16-vote-circuit-v1";
+const fixtureUrl = new URL("./__fixtures__/groth16-vote/", import.meta.url);
+const fixtureManifestPath = new URL(
+  "credential_commitment_vote.manifest.json",
+  fixtureUrl,
+);
+const fixtureManifest = JSON.parse(
+  readFileSync(fixtureManifestPath, "utf8"),
+) as Groth16ArtifactManifest;
+const fixtureManifestHash = readFileSync(
+  new URL("credential_commitment_vote.manifest-hash.txt", fixtureUrl),
+  "utf8",
+).trim();
+const fixtureEnvelope = JSON.parse(
+  readFileSync(
+    new URL("credential_commitment_vote.envelope.json", fixtureUrl),
+    "utf8",
+  ),
+) as Groth16VoteProofEnvelopeDto;
+const fixturePublicSignals = JSON.parse(
+  readFileSync(
+    new URL("credential_commitment_vote.public.json", fixtureUrl),
+    "utf8",
+  ),
+) as string[];
+const fixtureVerificationKey = JSON.parse(
+  readFileSync(
+    new URL("credential_commitment_vote.vkey.json", fixtureUrl),
+    "utf8",
+  ),
+);
 
 const createArtifactManifest = (
   overrides: Partial<Groth16ArtifactManifest> = {},
@@ -267,7 +301,7 @@ describe("groth16ProofVerifierService", () => {
     }
   });
 
-  it("fails closed when artifacts are configured but no verifier engine exists", async () => {
+  it("fails closed when the default verifier cannot load the pinned key", async () => {
     const result = await verifyGroth16VoteProofForPoll(
       {
         poll: createPoll(),
@@ -281,7 +315,7 @@ describe("groth16ProofVerifierService", () => {
 
     expect(result.ok).toBe(false);
     if (!result.ok) {
-      expect(result.reason).toBe("VERIFIER_UNAVAILABLE");
+      expect(result.reason).toBe("VERIFIER_REJECTED");
     }
   });
 
@@ -353,6 +387,79 @@ describe("groth16ProofVerifierService", () => {
       expect(result.auditMaterial?.proofEnvelopeHash).toBe(
         result.auditMaterial?.proofHash,
       );
+    }
+  });
+
+  it("verifies the local CredentialCommitmentVote proof fixture with snarkjs", async () => {
+    expect(encodeGroth16VotePublicSignals(fixtureEnvelope.publicInputs)).toEqual(
+      fixturePublicSignals,
+    );
+
+    await expect(
+      verifyGroth16ProofWithSnarkjs({
+        verificationKey: fixtureVerificationKey,
+        proof: fixtureEnvelope.proof,
+        publicSignals: fixturePublicSignals,
+      }),
+    ).resolves.toBe(true);
+
+    await expect(
+      verifyGroth16ProofWithSnarkjs({
+        verificationKey: fixtureVerificationKey,
+        proof: fixtureEnvelope.proof,
+        publicSignals: [
+          (BigInt(fixturePublicSignals[0]) + 1n).toString(10),
+          ...fixturePublicSignals.slice(1),
+        ],
+      }),
+    ).resolves.toBe(false);
+  });
+
+  it("accepts the local CredentialCommitmentVote fixture through the default verifier engine", async () => {
+    const registryRecord = buildGroth16VerifierKeyRegistryRecord(
+      fixtureManifest,
+      fixtureManifestHash,
+    );
+    const fixtureConfig: Groth16VerifierConfig = {
+      voteVerifierEnabled: true,
+      voteCircuitId: fixtureManifest.circuitId,
+      voteVerifierKeyHash: fixtureManifest.verifierKeyHash,
+      publicInputSchemaVersion: fixtureManifest.publicInputSchemaVersion,
+      trustedSetupTranscriptHash: fixtureManifest.trustedSetupTranscriptHash,
+      voteArtifactManifestPath: fixtureManifestPath.pathname,
+      voteArtifactManifestHash: fixtureManifestHash,
+      voteArtifactManifest: fixtureManifest,
+      voteArtifactManifestStatus: "loaded",
+      voteArtifactManifestError: null,
+      voteVerifierKeyRegistryRecord: registryRecord,
+    };
+
+    const result = await verifyGroth16VoteProofForPoll(
+      {
+        poll: createPoll({
+          id: fixtureEnvelope.publicInputs.pollId,
+          poll_policy_hash: fixtureEnvelope.publicInputs.pollPolicyHash,
+          credential_schema_hash:
+            fixtureEnvelope.publicInputs.credentialSchemaHash,
+          option_set_hash: fixtureEnvelope.publicInputs.optionSetHash,
+        }),
+        proof: fixtureEnvelope,
+        encryptedVoteHash: fixtureEnvelope.publicInputs.encryptedVoteHash,
+        expectedVoteCommitment: fixtureEnvelope.publicInputs.voteCommitment,
+      },
+      { config: fixtureConfig },
+    );
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.auditMaterial).toMatchObject({
+        nullifier: fixtureEnvelope.publicInputs.nullifier,
+        voteCommitment: fixtureEnvelope.publicInputs.voteCommitment,
+        encryptedVoteHash: fixtureEnvelope.publicInputs.encryptedVoteHash,
+        proofVerificationStatus: "verified",
+        verifierKeyHash: fixtureManifest.verifierKeyHash,
+        circuitId: fixtureManifest.circuitId,
+      });
     }
   });
 

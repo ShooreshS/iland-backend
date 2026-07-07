@@ -4,6 +4,7 @@ import { json } from "../middleware/json";
 import pollDraftService from "../services/pollDraftService";
 import pollPublicAuditService from "../services/pollPublicAuditService";
 import pollVotingService from "../services/pollVotingService";
+import type { Groth16TallyProofEnvelopeDto } from "../services/groth16TallyProofVerifierService";
 import type {
   CreatePollRequestDto,
   PollManagementErrorCode,
@@ -95,6 +96,50 @@ const productionVoteProofEnvelopeSchema = z
   })
   .strict();
 
+const tallyProofPublicInputsSchema = z
+  .object({
+    version: z.string().trim().min(1),
+    pollId: z.string().trim().min(1),
+    pollPolicyHash: hex64Schema,
+    credentialSchemaHash: hex64Schema,
+    optionSetHash: hex64Schema,
+    nullifierRoot: hex64Schema,
+    voteCommitmentRoot: hex64Schema,
+    encryptedVoteRoot: hex64Schema,
+    acceptedVoteCount: z.number().int().nonnegative(),
+    optionResults: z.array(
+      z
+        .object({
+          optionId: z.string().trim().min(1),
+          count: z.number().int().nonnegative(),
+        })
+        .strict(),
+    ),
+    optionCountsHash: hex64Schema,
+    proofSystemVersion: z.string().trim().min(1),
+    hashSuite: z.string().trim().min(1),
+    circuitId: z.string().trim().min(1),
+    verifierKeyHash: hex64Schema,
+    publicInputSchemaVersion: z.string().trim().min(1),
+  })
+  .strict();
+
+const tallyProofEnvelopeSchema = z
+  .object({
+    version: z.string().trim().min(1),
+    protocol: z.literal("groth16"),
+    proofSystemVersion: z.string().trim().min(1),
+    status: z.string().trim().min(1),
+    hashSuite: z.string().trim().min(1),
+    circuitId: z.string().trim().min(1),
+    verifierKeyHash: hex64Schema,
+    publicInputSchemaVersion: z.string().trim().min(1),
+    proof: z.record(z.unknown()),
+    publicInputs: tallyProofPublicInputsSchema,
+    publicInputsHash: hex64Schema,
+  })
+  .strict();
+
 const preproverVotePrivacySchema = z
   .object({
     version: z.string().trim().min(1),
@@ -158,8 +203,14 @@ const voteRequestSchema = z
   })
   .strict();
 
+const tallyProofRequestSchema = z
+  .object({
+    proof: tallyProofEnvelopeSchema,
+  })
+  .strict();
+
 const auditInclusionQuerySchema = z.object({
-  tree: z.enum(["vote_commitment", "nullifier"]),
+  tree: z.enum(["vote_commitment", "nullifier", "encrypted_vote"]),
   leafHash: hex64Schema,
 });
 
@@ -235,6 +286,14 @@ const auditPublishErrorStatusMap: Record<string, number> = {
   NO_ACCEPTED_AUDIT_VOTES: 409,
   TRANSACTIONS_DISABLED: 409,
   PUBLICATION_FAILED: 502,
+};
+
+const tallyProofErrorStatusMap: Record<string, number> = {
+  POLL_NOT_FOUND: 404,
+  POLL_NOT_OWNED: 403,
+  POLL_NOT_PRODUCTION_ZKP: 409,
+  NO_ACCEPTED_AUDIT_VOTES: 409,
+  TALLY_PROOF_INVALID: 400,
 };
 
 const getPollsRoute: RouteDefinition = {
@@ -677,6 +736,64 @@ const publishPollAuditRoute: RouteDefinition = {
   },
 };
 
+const submitTallyProofRoute: RouteDefinition = {
+  method: "POST",
+  path: "/polls/:id/tally-proof",
+  handler: async ({ request, params }) => {
+    const viewerResult = await requireViewer(request);
+    if (!viewerResult.ok) {
+      return viewerResult.response;
+    }
+
+    const pollId = params.id?.trim() || "";
+    if (!pollId) {
+      return json(
+        {
+          error: "invalid_poll_id",
+          message: "A poll id is required.",
+        },
+        400,
+      );
+    }
+
+    let requestBody: unknown;
+    try {
+      requestBody = await request.json();
+    } catch {
+      return json(
+        {
+          error: "invalid_request",
+          message: "Request body must be valid JSON.",
+        },
+        400,
+      );
+    }
+
+    const parsedBody = tallyProofRequestSchema.safeParse(requestBody);
+    if (!parsedBody.success) {
+      return json(
+        {
+          error: "invalid_request",
+          message: "Tally proof request body is invalid.",
+        },
+        400,
+      );
+    }
+
+    const result = await pollPublicAuditService.submitTallyProof({
+      pollId,
+      viewerUserId: viewerResult.viewer.userId,
+      proof: parsedBody.data.proof as Groth16TallyProofEnvelopeDto,
+    });
+
+    if (result.success) {
+      return json(result);
+    }
+
+    return json(result, tallyProofErrorStatusMap[result.errorCode] || 400);
+  },
+};
+
 const buildVotePrivacyFromRequest = (
   requestBody: z.infer<typeof voteRequestSchema>,
 ): VoteSubmissionRequestDto["privacy"] => {
@@ -884,6 +1001,7 @@ export const pollRoutes: RouteDefinition[] = [
   getPollAuditInclusionRoute,
   getPollReceiptRoute,
   publishPollAuditRoute,
+  submitTallyProofRoute,
   getPollDetailsRoute,
   submitVoteRoute,
   submitVotePhase10Route,

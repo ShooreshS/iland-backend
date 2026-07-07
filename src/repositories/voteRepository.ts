@@ -89,7 +89,9 @@ export type PublicAuditVoteRecordRow = Pick<
   | "accepted_at"
   | "batch_id"
   | "created_at"
->;
+> & {
+  encrypted_vote_hash?: string | null;
+};
 
 const withSnapshotDefaults = (row: PartialVoteRow): VoteRow => ({
   ...row,

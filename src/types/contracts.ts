@@ -77,7 +77,10 @@ export type PollResultsSummaryDto = {
   updatedAt: string;
 };
 
-export type PublicAuditTreeKind = "nullifier" | "vote_commitment";
+export type PublicAuditTreeKind =
+  | "nullifier"
+  | "vote_commitment"
+  | "encrypted_vote";
 
 export type PublicAuditHashAlgorithm = "sha256";
 
@@ -101,6 +104,7 @@ export type PublicAuditComputedRootBatchDto = {
   acceptedCount: number;
   nullifierRoot: string;
   voteCommitmentRoot: string;
+  encryptedVoteRoot: string;
   transactionSignature: string | null;
   explorerUrl: string | null;
   submittedAt: string | null;
@@ -112,9 +116,23 @@ export type PublicAuditRootCommitDto = {
   acceptedCount: number;
   nullifierRoot: string;
   voteCommitmentRoot: string;
+  encryptedVoteRoot: string;
   transactionSignature: string;
   explorerUrl: string;
   submittedAt: string;
+};
+
+export type PublicAuditTallyProofSummaryDto = {
+  resultHash: string;
+  tallyProofHash: string;
+  tallyPublicInputsHash: string;
+  tallyVerifierKeyHash: string;
+  tallyCircuitId: string;
+  nullifierRoot: string;
+  voteCommitmentRoot: string;
+  encryptedVoteRoot: string;
+  acceptedCount: number;
+  verifiedAt: string;
 };
 
 export type PublicPollAuditDto = {
@@ -133,11 +151,14 @@ export type PublicPollAuditDto = {
   trees: {
     nullifier: PublicAuditTreeSummaryDto;
     voteCommitment: PublicAuditTreeSummaryDto;
+    encryptedVote: PublicAuditTreeSummaryDto;
   };
   computedCurrentRootBatch: PublicAuditComputedRootBatchDto | null;
   rootCommits: PublicAuditRootCommitDto[];
   resultHash: string;
   tallyProofHash: string | null;
+  tallyPublicInputsHash: string | null;
+  tallyProof: PublicAuditTallyProofSummaryDto | null;
   finalResult: PollResultsSummaryDto;
   solana: {
     cluster: string;

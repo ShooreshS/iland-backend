@@ -8,6 +8,7 @@ import {
   type Groth16ArtifactManifest,
   type Groth16VerifierKeyRegistryRecord,
 } from "./groth16ArtifactManifestService";
+import { verifyGroth16VoteProofWithSnarkjs } from "./groth16SnarkjsVerifierEngine";
 import { canonicalizeJson } from "./pollPolicyService";
 
 export const CIVIC_PRODUCTION_VOTE_PRIVACY_MODE =
@@ -89,6 +90,7 @@ export type Groth16VoteVerifierEngine = (input: {
   verifierKeyHash: string;
   trustedSetupTranscriptHash: string;
   artifactManifest: Groth16ArtifactManifest;
+  artifactManifestPath: string | null;
   artifactManifestHash: string;
   verifierKeyRegistryRecord: Groth16VerifierKeyRegistryRecord;
 }) => boolean | Promise<boolean>;
@@ -394,12 +396,8 @@ export const verifyGroth16VoteProofForPoll = async (
     );
   }
 
-  if (!dependencies.verifyProof) {
-    return reject(
-      "VERIFIER_UNAVAILABLE",
-      "Groth16 verifier engine is not integrated into this backend build.",
-    );
-  }
+  const verifyProof =
+    dependencies.verifyProof ?? verifyGroth16VoteProofWithSnarkjs;
 
   const proof = params.proof;
   if (
@@ -530,16 +528,22 @@ export const verifyGroth16VoteProofForPoll = async (
     );
   }
 
-  const verifierAccepted = await dependencies.verifyProof({
-    proof: proof.proof,
-    publicInputs,
-    circuitId: configuredCircuitId,
-    verifierKeyHash: configuredVerifierKeyHash,
-    trustedSetupTranscriptHash: configuredTrustedSetupTranscriptHash,
-    artifactManifest,
-    artifactManifestHash,
-    verifierKeyRegistryRecord,
-  });
+  let verifierAccepted = false;
+  try {
+    verifierAccepted = await verifyProof({
+      proof: proof.proof,
+      publicInputs,
+      circuitId: configuredCircuitId,
+      verifierKeyHash: configuredVerifierKeyHash,
+      trustedSetupTranscriptHash: configuredTrustedSetupTranscriptHash,
+      artifactManifest,
+      artifactManifestPath: config.voteArtifactManifestPath,
+      artifactManifestHash,
+      verifierKeyRegistryRecord,
+    });
+  } catch {
+    verifierAccepted = false;
+  }
 
   if (!verifierAccepted) {
     return reject(
