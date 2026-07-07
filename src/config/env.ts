@@ -115,6 +115,8 @@ const parsed = z
     ZKP_GROTH16_VOTE_VERIFIER_KEY_HASH: hex64Schema.optional(),
     ZKP_GROTH16_VOTE_PUBLIC_INPUT_SCHEMA_VERSION: z.string().min(1).optional(),
     ZKP_GROTH16_VOTE_TRUSTED_SETUP_TRANSCRIPT_HASH: hex64Schema.optional(),
+    ZKP_GROTH16_PUBLIC_INPUT_SCHEMA_VERSION: z.string().min(1).optional(),
+    ZKP_GROTH16_TRUSTED_SETUP_TRANSCRIPT_HASH: hex64Schema.optional(),
     ZKP_GROTH16_VOTE_ARTIFACT_MANIFEST_PATH: z.string().min(1).optional(),
     ZKP_GROTH16_VOTE_ARTIFACT_MANIFEST_HASH: hex64Schema.optional(),
     ZKP_GROTH16_TALLY_VERIFIER_ENABLED: z.string().optional(),
@@ -273,6 +275,13 @@ const parsed = z
         : false;
 
     if (groth16VoteVerifierEnabled) {
+      const votePublicInputSchemaVersion =
+        input.ZKP_GROTH16_VOTE_PUBLIC_INPUT_SCHEMA_VERSION ??
+        input.ZKP_GROTH16_PUBLIC_INPUT_SCHEMA_VERSION;
+      const voteTrustedSetupTranscriptHash =
+        input.ZKP_GROTH16_VOTE_TRUSTED_SETUP_TRANSCRIPT_HASH ??
+        input.ZKP_GROTH16_TRUSTED_SETUP_TRANSCRIPT_HASH;
+
       if (!input.ZKP_GROTH16_VOTE_CIRCUIT_ID) {
         context.addIssue({
           code: z.ZodIssueCode.custom,
@@ -291,7 +300,7 @@ const parsed = z
         });
       }
 
-      if (!input.ZKP_GROTH16_VOTE_PUBLIC_INPUT_SCHEMA_VERSION) {
+      if (!votePublicInputSchemaVersion) {
         context.addIssue({
           code: z.ZodIssueCode.custom,
           message:
@@ -300,7 +309,7 @@ const parsed = z
         });
       }
 
-      if (!input.ZKP_GROTH16_VOTE_TRUSTED_SETUP_TRANSCRIPT_HASH) {
+      if (!voteTrustedSetupTranscriptHash) {
         context.addIssue({
           code: z.ZodIssueCode.custom,
           message:
@@ -518,6 +527,12 @@ const parsed = z
     ZKP_GROTH16_VOTE_TRUSTED_SETUP_TRANSCRIPT_HASH: emptyToUndefined(
       process.env.ZKP_GROTH16_VOTE_TRUSTED_SETUP_TRANSCRIPT_HASH,
     ),
+    ZKP_GROTH16_PUBLIC_INPUT_SCHEMA_VERSION: emptyToUndefined(
+      process.env.ZKP_GROTH16_PUBLIC_INPUT_SCHEMA_VERSION,
+    ),
+    ZKP_GROTH16_TRUSTED_SETUP_TRANSCRIPT_HASH: emptyToUndefined(
+      process.env.ZKP_GROTH16_TRUSTED_SETUP_TRANSCRIPT_HASH,
+    ),
     ZKP_GROTH16_VOTE_ARTIFACT_MANIFEST_PATH: emptyToUndefined(
       process.env.ZKP_GROTH16_VOTE_ARTIFACT_MANIFEST_PATH,
     ),
@@ -726,9 +741,12 @@ export const env = Object.freeze({
         parsed.ZKP_GROTH16_VOTE_VERIFIER_KEY_HASH,
       ),
       publicInputSchemaVersion:
-        parsed.ZKP_GROTH16_VOTE_PUBLIC_INPUT_SCHEMA_VERSION ?? null,
+        parsed.ZKP_GROTH16_VOTE_PUBLIC_INPUT_SCHEMA_VERSION ??
+        parsed.ZKP_GROTH16_PUBLIC_INPUT_SCHEMA_VERSION ??
+        null,
       trustedSetupTranscriptHash: normalizeHex64Env(
-        parsed.ZKP_GROTH16_VOTE_TRUSTED_SETUP_TRANSCRIPT_HASH,
+        parsed.ZKP_GROTH16_VOTE_TRUSTED_SETUP_TRANSCRIPT_HASH ??
+          parsed.ZKP_GROTH16_TRUSTED_SETUP_TRANSCRIPT_HASH,
       ),
       voteArtifactManifestPath:
         parsed.ZKP_GROTH16_VOTE_ARTIFACT_MANIFEST_PATH ?? null,

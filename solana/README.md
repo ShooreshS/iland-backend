@@ -110,3 +110,22 @@ Last Deployed In Slot: 474682189
 Data Length: 285472 (0x45b20) bytes
 Balance: 1.9880892 SOL
 ```
+
+Since you raised local trusted setup power to 19, should we change Railway env vars?
+
+BTW, Railway crashed. Deploy logs:
+34 | return {
+35 | success: false,
+36 | get error() {
+37 | if (this.\_error)
+38 | return this.\_error;
+39 | const error = new ZodError(ctx.common.issues);
+^
+ZodError: [
+{
+"code": "custom",
+"message": "ZKP_GROTH16_PUBLIC_INPUT_SCHEMA_VERSION is required when Groth16 vote verification is enabled.",
+"path": [
+"ZKP_GROTH16_PUBLIC_INPUT_SCHEMA_VERSION"
+]
+},

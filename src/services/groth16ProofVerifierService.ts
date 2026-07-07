@@ -315,10 +315,10 @@ export const getGroth16VerifierConfig = (): Groth16VerifierConfig =>
     ),
     publicInputSchemaVersion: normalizeOptionalString(
       process.env.ZKP_GROTH16_VOTE_PUBLIC_INPUT_SCHEMA_VERSION,
-    ),
+    ) ?? normalizeOptionalString(process.env.ZKP_GROTH16_PUBLIC_INPUT_SCHEMA_VERSION),
     trustedSetupTranscriptHash: normalizeHex64(
       process.env.ZKP_GROTH16_VOTE_TRUSTED_SETUP_TRANSCRIPT_HASH,
-    ),
+    ) ?? normalizeHex64(process.env.ZKP_GROTH16_TRUSTED_SETUP_TRANSCRIPT_HASH),
   });
 
 export const isGroth16VoteVerifierConfigured = (
