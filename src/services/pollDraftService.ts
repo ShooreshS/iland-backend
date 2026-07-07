@@ -1,7 +1,10 @@
 import { randomUUID } from "node:crypto";
 import pollRepository from "../repositories/pollRepository";
 import voteRepository from "../repositories/voteRepository";
-import { buildPollAuditMaterial } from "./pollPolicyService";
+import {
+  buildPollAuditMaterial,
+  hashPollOptionSet,
+} from "./pollPolicyService";
 import type {
   CreatePollRequestDto,
   CreatePollResultDto,
@@ -13,6 +16,7 @@ import type {
   PollOptionDto,
   PollOptionInputDto,
   PollStatus,
+  PollVotePrivacyMode,
   PublishDraftPollResultDto,
   UpdateDraftPollRequestDto,
   UpdateDraftPollResultDto,
@@ -33,6 +37,13 @@ const OPTION_COLOR_PALETTE = [
   "#14B8A6",
 ];
 const MIN_PUBLISHABLE_ACTIVE_OPTIONS = 2;
+const DEFAULT_VOTE_PRIVACY_MODE = "zk_preprover_audit" as const;
+const PRODUCTION_ZKP_VOTE_PRIVACY_MODE = "zk_secret_ballot_v1" as const;
+const KNOWN_VOTE_PRIVACY_MODES = new Set<PollVotePrivacyMode>([
+  "legacy_identity_linked",
+  "zk_preprover_audit",
+  "zk_secret_ballot_v1",
+]);
 
 type NormalizedPollMutationInput = {
   title: string;
@@ -49,6 +60,8 @@ type NormalizedPollMutationInput = {
   jurisdictionLandIds: string[];
   status: PollStatus;
   eligibilityRule: PollEligibilityRule;
+  votePrivacyMode: PollVotePrivacyMode;
+  pollEncryptionKeyId: string | null;
 };
 
 const slugify = (value: string): string =>
@@ -64,6 +77,19 @@ const isUuid = (value: string): boolean =>
 
 const toArray = (value: string[] | null | undefined): string[] =>
   Array.isArray(value) ? value : [];
+
+const normalizeOptionalString = (value: string | null | undefined): string | null => {
+  const normalized = typeof value === "string" ? value.trim() : "";
+  return normalized.length > 0 ? normalized : null;
+};
+
+const normalizeVotePrivacyMode = (
+  value: PollVotePrivacyMode | string | null | undefined,
+): PollVotePrivacyMode =>
+  typeof value === "string" &&
+  KNOWN_VOTE_PRIVACY_MODES.has(value as PollVotePrivacyMode)
+    ? (value as PollVotePrivacyMode)
+    : DEFAULT_VOTE_PRIVACY_MODE;
 
 const mapPoll = (row: PollRow): PollDto => {
   const allowedDocumentCountryCodes = toArray(row.allowed_document_country_codes);
@@ -92,6 +118,9 @@ const mapPoll = (row: PollRow): PollDto => {
     },
     pollPolicyHash: row.poll_policy_hash ?? null,
     credentialSchemaHash: row.credential_schema_hash ?? null,
+    votePrivacyMode: normalizeVotePrivacyMode(row.vote_privacy_mode),
+    optionSetHash: row.option_set_hash ?? null,
+    pollEncryptionKeyId: row.poll_encryption_key_id ?? null,
     startsAt: row.starts_at,
     endsAt: row.ends_at,
     createdAt: row.created_at,
@@ -240,6 +269,33 @@ const normalizeMutationInput = (
     eligibilityRule.allowedLandIds = [...jurisdictionLandIds];
   }
 
+  const votePrivacyMode = normalizeVotePrivacyMode(input.votePrivacyMode);
+  const pollEncryptionKeyId = normalizeOptionalString(input.pollEncryptionKeyId);
+
+  if (
+    votePrivacyMode === PRODUCTION_ZKP_VOTE_PRIVACY_MODE &&
+    !eligibilityRule.requiresVerifiedIdentity
+  ) {
+    return {
+      error: createFailureResult(
+        "VALIDATION_FAILED",
+        "Production ZKP polls require verified identity eligibility.",
+      ),
+    };
+  }
+
+  if (
+    votePrivacyMode === PRODUCTION_ZKP_VOTE_PRIVACY_MODE &&
+    !pollEncryptionKeyId
+  ) {
+    return {
+      error: createFailureResult(
+        "VALIDATION_FAILED",
+        "Production ZKP polls require a poll encryption key id.",
+      ),
+    };
+  }
+
   return {
     data: {
       title,
@@ -252,6 +308,8 @@ const normalizeMutationInput = (
       jurisdictionLandIds,
       status: (input.status || "active") as PollStatus,
       eligibilityRule,
+      votePrivacyMode,
+      pollEncryptionKeyId,
     },
   };
 };
@@ -276,13 +334,10 @@ const buildOptionRows = ({
         : null;
 
     const explicitId = option.id && isUuid(option.id) ? option.id : undefined;
+    const optionId = existingOption?.id || explicitId || randomUUID();
 
     return {
-      ...(existingOption?.id
-        ? { id: existingOption.id }
-        : explicitId
-          ? { id: explicitId }
-          : null),
+      id: optionId,
       poll_id: pollId,
       label: option.label,
       description: option.description ?? null,
@@ -341,6 +396,61 @@ const createEditabilityResult = (
   };
 };
 
+const buildOptionSetHashFromRows = (
+  pollId: string,
+  options: Array<
+    Pick<
+      NewPollOptionRow,
+      "id" | "label" | "description" | "color" | "display_order" | "is_active"
+    >
+  >,
+): string =>
+  hashPollOptionSet({
+    pollId,
+    options: options.map((option) => ({
+      id: option.id ?? "",
+      label: option.label,
+      description: option.description,
+      color: option.color,
+      displayOrder: option.display_order,
+      isActive: option.is_active,
+    })),
+  });
+
+const validateProductionPollContract = (input: {
+  votePrivacyMode: PollVotePrivacyMode;
+  requiresVerifiedIdentity: boolean;
+  pollEncryptionKeyId: string | null | undefined;
+  optionSetHash: string | null | undefined;
+}): CreatePollResultDto | null => {
+  if (input.votePrivacyMode !== PRODUCTION_ZKP_VOTE_PRIVACY_MODE) {
+    return null;
+  }
+
+  if (!input.requiresVerifiedIdentity) {
+    return createFailureResult(
+      "VALIDATION_FAILED",
+      "Production ZKP polls require verified identity eligibility.",
+    );
+  }
+
+  if (!normalizeOptionalString(input.pollEncryptionKeyId)) {
+    return createFailureResult(
+      "VALIDATION_FAILED",
+      "Production ZKP polls require a poll encryption key id.",
+    );
+  }
+
+  if (!input.optionSetHash) {
+    return createFailureResult(
+      "VALIDATION_FAILED",
+      "Production ZKP polls require a frozen option set hash.",
+    );
+  }
+
+  return null;
+};
+
 const buildPollInsertPayload = (
   pollId: string,
   data: NormalizedPollMutationInput,
@@ -348,6 +458,7 @@ const buildPollInsertPayload = (
   slug: string,
   startsAt: string | null,
   endsAt: string | null,
+  optionSetHash: string,
 ): NewPollRow => {
   const auditMaterial = buildPollAuditMaterial({
     pollId,
@@ -389,6 +500,9 @@ const buildPollInsertPayload = (
     poll_policy_hash: pollPolicyHash,
     credential_schema_json: credentialSchema,
     credential_schema_hash: credentialSchemaHash,
+    vote_privacy_mode: data.votePrivacyMode,
+    option_set_hash: optionSetHash,
+    poll_encryption_key_id: data.pollEncryptionKeyId,
   };
 };
 
@@ -435,6 +549,24 @@ export const pollDraftService = {
 
     const now = new Date().toISOString();
     const pollId = randomUUID();
+    const optionRows = buildOptionRows({
+      pollId,
+      options: normalized.data.options,
+      existingOptions: [],
+      createdAt: now,
+    });
+    const optionSetHash = buildOptionSetHashFromRows(pollId, optionRows);
+    const contractFailure = validateProductionPollContract({
+      votePrivacyMode: normalized.data.votePrivacyMode,
+      requiresVerifiedIdentity:
+        normalized.data.eligibilityRule.requiresVerifiedIdentity,
+      pollEncryptionKeyId: normalized.data.pollEncryptionKeyId,
+      optionSetHash,
+    });
+    if (contractFailure) {
+      return contractFailure;
+    }
+
     const createdPoll = await pollRepository.insert(
       buildPollInsertPayload(
         pollId,
@@ -443,15 +575,9 @@ export const pollDraftService = {
         buildCreateSlug(normalized.data.title),
         now,
         null,
+        optionSetHash,
       ),
     );
-
-    const optionRows = buildOptionRows({
-      pollId: createdPoll.id,
-      options: normalized.data.options,
-      existingOptions: [],
-      createdAt: now,
-    });
 
     const createdOptions = await pollRepository.insertOptions(optionRows);
 
@@ -531,12 +657,40 @@ export const pollDraftService = {
       };
     }
 
-    const normalized = normalizeMutationInput(input);
+    const normalized = normalizeMutationInput({
+      ...input,
+      votePrivacyMode:
+        input.votePrivacyMode ??
+        existingPoll.vote_privacy_mode ??
+        DEFAULT_VOTE_PRIVACY_MODE,
+      pollEncryptionKeyId:
+        input.pollEncryptionKeyId === undefined
+          ? existingPoll.poll_encryption_key_id ?? null
+          : input.pollEncryptionKeyId,
+    });
     if (!normalized.data || normalized.error) {
       return normalized.error as UpdateDraftPollResultDto;
     }
 
     const now = new Date().toISOString();
+    const optionRows = buildOptionRows({
+      pollId: existingPoll.id,
+      options: normalized.data.options,
+      existingOptions,
+      createdAt: now,
+    });
+    const optionSetHash = buildOptionSetHashFromRows(existingPoll.id, optionRows);
+    const contractFailure = validateProductionPollContract({
+      votePrivacyMode: normalized.data.votePrivacyMode,
+      requiresVerifiedIdentity:
+        normalized.data.eligibilityRule.requiresVerifiedIdentity,
+      pollEncryptionKeyId: normalized.data.pollEncryptionKeyId,
+      optionSetHash,
+    });
+    if (contractFailure) {
+      return contractFailure as UpdateDraftPollResultDto;
+    }
+
     const updatedPoll = await pollRepository.updateById(
       existingPoll.id,
       buildPollInsertPayload(
@@ -546,6 +700,7 @@ export const pollDraftService = {
         existingPoll.slug,
         existingPoll.starts_at,
         existingPoll.ends_at,
+        optionSetHash,
       ),
     );
 
@@ -559,12 +714,7 @@ export const pollDraftService = {
 
     const updatedOptions = await pollRepository.replaceOptions(
       existingPoll.id,
-      buildOptionRows({
-        pollId: existingPoll.id,
-        options: normalized.data.options,
-        existingOptions,
-        createdAt: now,
-      }),
+      optionRows,
     );
 
     return {
@@ -609,6 +759,24 @@ export const pollDraftService = {
     }
 
     const now = new Date().toISOString();
+    const votePrivacyMode = normalizeVotePrivacyMode(existingPoll.vote_privacy_mode);
+    const pollEncryptionKeyId = normalizeOptionalString(
+      existingPoll.poll_encryption_key_id,
+    );
+    const optionSetHash = buildOptionSetHashFromRows(
+      existingPoll.id,
+      existingOptions,
+    );
+    const contractFailure = validateProductionPollContract({
+      votePrivacyMode,
+      requiresVerifiedIdentity: existingPoll.requires_verified_identity,
+      pollEncryptionKeyId,
+      optionSetHash,
+    });
+    if (contractFailure) {
+      return contractFailure as PublishDraftPollResultDto;
+    }
+
     const publishedPoll = await pollRepository.updateById(
       existingPoll.id,
       buildPollInsertPayload(
@@ -630,11 +798,14 @@ export const pollDraftService = {
             allowedLandIds: existingPoll.allowed_land_ids || [],
             minimumAge: existingPoll.minimum_age,
           },
+          votePrivacyMode,
+          pollEncryptionKeyId,
         },
         existingPoll.created_by_user_id || viewerUserId,
         existingPoll.slug,
         existingPoll.starts_at || now,
         existingPoll.ends_at,
+        optionSetHash,
       ),
     );
 

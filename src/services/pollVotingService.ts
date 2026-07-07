@@ -21,6 +21,7 @@ import type {
   VoteSubmissionErrorCode,
   VoteSubmissionFailureDto,
   VoteSubmissionResultDto,
+  PollVotePrivacyMode,
 } from "../types/contracts";
 import type { PollOptionRow, PollRow, UserRow } from "../types/db";
 
@@ -34,6 +35,20 @@ const POLL_STATUS_SORT_ORDER: Record<PollDto["status"], number> = {
 
 const toArray = (value: string[] | null | undefined): string[] =>
   Array.isArray(value) ? value : [];
+
+const normalizeVotePrivacyMode = (
+  value: PollRow["vote_privacy_mode"],
+): PollVotePrivacyMode => {
+  if (
+    value === "legacy_identity_linked" ||
+    value === "zk_preprover_audit" ||
+    value === "zk_secret_ballot_v1"
+  ) {
+    return value;
+  }
+
+  return "zk_preprover_audit";
+};
 
 const mapPoll = (row: PollRow): PollDto => {
   const allowedDocumentCountryCodes = toArray(row.allowed_document_country_codes);
@@ -62,6 +77,9 @@ const mapPoll = (row: PollRow): PollDto => {
     },
     pollPolicyHash: row.poll_policy_hash ?? null,
     credentialSchemaHash: row.credential_schema_hash ?? null,
+    votePrivacyMode: normalizeVotePrivacyMode(row.vote_privacy_mode),
+    optionSetHash: row.option_set_hash ?? null,
+    pollEncryptionKeyId: row.poll_encryption_key_id ?? null,
     startsAt: row.starts_at,
     endsAt: row.ends_at,
     createdAt: row.created_at,

@@ -4,8 +4,8 @@ import type {
   NewPollRow,
   PollOptionRow,
   PollRow,
-  PollVotePrivacyMode,
 } from "../types/db";
+import type { PollVotePrivacyMode } from "../types/contracts";
 
 const BASE_POLL_COLUMNS =
   "id,slug,created_by_user_id,title,description,status,jurisdiction_type,jurisdiction_country_code,jurisdiction_area_ids,jurisdiction_land_ids,requires_verified_identity,allowed_document_country_codes,allowed_home_area_ids,allowed_land_ids,minimum_age,starts_at,ends_at,poll_policy_json,poll_policy_hash,credential_schema_json,credential_schema_hash,created_at,updated_at";

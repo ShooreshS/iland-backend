@@ -19,6 +19,19 @@ const hex64Schema = z
   .regex(/^[0-9a-f]{64}$/i)
   .transform((value) => value.toLowerCase());
 
+const votePrivacyModeSchema = z.enum([
+  "legacy_identity_linked",
+  "zk_preprover_audit",
+  "zk_secret_ballot_v1",
+]);
+
+const pollEncryptionKeyIdSchema = z
+  .string()
+  .trim()
+  .min(1)
+  .nullable()
+  .optional();
+
 const voteProofPublicInputsSchema = z
   .object({
     pollId: z.string().trim().min(1),
@@ -113,6 +126,8 @@ const createPollRequestSchema = z.object({
     })
     .nullable()
     .optional(),
+  votePrivacyMode: votePrivacyModeSchema.optional(),
+  pollEncryptionKeyId: pollEncryptionKeyIdSchema,
 });
 
 const updateDraftRequestSchema = createPollRequestSchema.extend({
