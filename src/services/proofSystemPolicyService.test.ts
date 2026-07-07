@@ -54,6 +54,8 @@ describe("proofSystemPolicyService", () => {
       anonymousVoteTable: "poll_zk_votes",
       tallyProofRequired: true,
       onChainZkVerifierEnabled: false,
+      artifactManifestConfigured: false,
+      verifierKeyRegistryRecord: null,
     });
   });
 });

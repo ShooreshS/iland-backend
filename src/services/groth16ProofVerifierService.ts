@@ -2,6 +2,12 @@ import { createHash } from "node:crypto";
 
 import type { PollRow } from "../types/db";
 import type { JsonValue } from "../types/json";
+import {
+  loadGroth16ArtifactManifestFile,
+  validateGroth16ArtifactManifestConstraints,
+  type Groth16ArtifactManifest,
+  type Groth16VerifierKeyRegistryRecord,
+} from "./groth16ArtifactManifestService";
 import { canonicalizeJson } from "./pollPolicyService";
 
 export const CIVIC_PRODUCTION_VOTE_PRIVACY_MODE =
@@ -62,6 +68,18 @@ export type Groth16VerifierConfig = {
   voteVerifierKeyHash: string | null;
   publicInputSchemaVersion: string | null;
   trustedSetupTranscriptHash: string | null;
+  voteArtifactManifestPath: string | null;
+  voteArtifactManifestHash: string | null;
+  voteArtifactManifest: Groth16ArtifactManifest | null;
+  voteArtifactManifestStatus:
+    | "not_configured"
+    | "loaded"
+    | "invalid"
+    | "hash_mismatch"
+    | "kind_mismatch"
+    | "config_mismatch";
+  voteArtifactManifestError: string | null;
+  voteVerifierKeyRegistryRecord: Groth16VerifierKeyRegistryRecord | null;
 };
 
 export type Groth16VoteVerifierEngine = (input: {
@@ -70,6 +88,9 @@ export type Groth16VoteVerifierEngine = (input: {
   circuitId: string;
   verifierKeyHash: string;
   trustedSetupTranscriptHash: string;
+  artifactManifest: Groth16ArtifactManifest;
+  artifactManifestHash: string;
+  verifierKeyRegistryRecord: Groth16VerifierKeyRegistryRecord;
 }) => boolean | Promise<boolean>;
 
 export type VerifiedGroth16VoteProofAuditMaterial = {
@@ -131,6 +152,133 @@ const toBoolean = (value: string | undefined): boolean => {
   return normalized === "1" || normalized === "true" || normalized === "yes";
 };
 
+const missingArtifactManifestConfig = (
+  values: Pick<
+    Groth16VerifierConfig,
+    | "voteVerifierEnabled"
+    | "voteCircuitId"
+    | "voteVerifierKeyHash"
+    | "publicInputSchemaVersion"
+    | "trustedSetupTranscriptHash"
+  >,
+): Groth16VerifierConfig => ({
+  ...values,
+  voteArtifactManifestPath: null,
+  voteArtifactManifestHash: null,
+  voteArtifactManifest: null,
+  voteArtifactManifestStatus: "not_configured",
+  voteArtifactManifestError: null,
+  voteVerifierKeyRegistryRecord: null,
+});
+
+const loadVoteArtifactManifestFromEnv = (values: {
+  voteVerifierEnabled: boolean;
+  voteCircuitId: string | null;
+  voteVerifierKeyHash: string | null;
+  publicInputSchemaVersion: string | null;
+  trustedSetupTranscriptHash: string | null;
+}): Groth16VerifierConfig => {
+  const voteArtifactManifestPath = normalizeOptionalString(
+    process.env.ZKP_GROTH16_VOTE_ARTIFACT_MANIFEST_PATH,
+  );
+  const rawVoteArtifactManifestHash = normalizeOptionalString(
+    process.env.ZKP_GROTH16_VOTE_ARTIFACT_MANIFEST_HASH,
+  );
+  const voteArtifactManifestHash = normalizeHex64(
+    process.env.ZKP_GROTH16_VOTE_ARTIFACT_MANIFEST_HASH,
+  );
+
+  if (!voteArtifactManifestPath) {
+    return missingArtifactManifestConfig(values);
+  }
+
+  if (!rawVoteArtifactManifestHash || !voteArtifactManifestHash) {
+    return {
+      ...values,
+      voteArtifactManifestPath,
+      voteArtifactManifestHash,
+      voteArtifactManifest: null,
+      voteArtifactManifestStatus: "invalid",
+      voteArtifactManifestError:
+        "Groth16 vote artifact manifest hash must be pinned.",
+      voteVerifierKeyRegistryRecord: null,
+    };
+  }
+
+  const loaded = loadGroth16ArtifactManifestFile({
+    manifestPath: voteArtifactManifestPath,
+    expectedManifestHash: voteArtifactManifestHash,
+    expectedArtifactKind: "vote",
+  });
+
+  if (!loaded.ok) {
+    const status =
+      loaded.reason === "MANIFEST_HASH_MISMATCH"
+        ? "hash_mismatch"
+        : loaded.reason === "ARTIFACT_KIND_MISMATCH"
+          ? "kind_mismatch"
+          : "invalid";
+    return {
+      ...values,
+      voteArtifactManifestPath,
+      voteArtifactManifestHash,
+      voteArtifactManifest: null,
+      voteArtifactManifestStatus: status,
+      voteArtifactManifestError: loaded.message,
+      voteVerifierKeyRegistryRecord: null,
+    };
+  }
+
+  const voteCircuitId = values.voteCircuitId ?? loaded.manifest.circuitId;
+  const voteVerifierKeyHash =
+    values.voteVerifierKeyHash ?? loaded.manifest.verifierKeyHash;
+  const publicInputSchemaVersion =
+    values.publicInputSchemaVersion ??
+    loaded.manifest.publicInputSchemaVersion;
+  const trustedSetupTranscriptHash =
+    values.trustedSetupTranscriptHash ??
+    loaded.manifest.trustedSetupTranscriptHash;
+
+  const constraints = validateGroth16ArtifactManifestConstraints(
+    loaded.manifest,
+    {
+      artifactKind: "vote",
+      circuitId: voteCircuitId,
+      verifierKeyHash: voteVerifierKeyHash,
+      publicInputSchemaVersion,
+      trustedSetupTranscriptHash,
+      hashSuite: CIVIC_PRODUCTION_HASH_SUITE,
+      protocol: CIVIC_PRODUCTION_PROOF_PROTOCOL,
+    },
+  );
+
+  if (!constraints.ok) {
+    return {
+      ...values,
+      voteArtifactManifestPath,
+      voteArtifactManifestHash,
+      voteArtifactManifest: loaded.manifest,
+      voteArtifactManifestStatus: "config_mismatch",
+      voteArtifactManifestError: constraints.message,
+      voteVerifierKeyRegistryRecord: null,
+    };
+  }
+
+  return {
+    voteVerifierEnabled: values.voteVerifierEnabled,
+    voteCircuitId,
+    voteVerifierKeyHash,
+    publicInputSchemaVersion,
+    trustedSetupTranscriptHash,
+    voteArtifactManifestPath,
+    voteArtifactManifestHash: loaded.manifestHash,
+    voteArtifactManifest: loaded.manifest,
+    voteArtifactManifestStatus: "loaded",
+    voteArtifactManifestError: null,
+    voteVerifierKeyRegistryRecord: loaded.registryRecord,
+  };
+};
+
 export const hashGroth16VotePublicInputs = (
   publicInputs: Groth16VotePublicInputsDto,
 ): string =>
@@ -150,19 +298,24 @@ export const hashEncryptedVotePayload = (encryptedVote: JsonValue): string =>
     `${CIVIC_ZKP_DOMAIN}|encrypted-vote|${canonicalizeJson(encryptedVote)}`,
   );
 
-export const getGroth16VerifierConfig = (): Groth16VerifierConfig => ({
-  voteVerifierEnabled: toBoolean(process.env.ZKP_GROTH16_VOTE_VERIFIER_ENABLED),
-  voteCircuitId: normalizeOptionalString(process.env.ZKP_GROTH16_VOTE_CIRCUIT_ID),
-  voteVerifierKeyHash: normalizeHex64(
-    process.env.ZKP_GROTH16_VOTE_VERIFIER_KEY_HASH,
-  ),
-  publicInputSchemaVersion: normalizeOptionalString(
-    process.env.ZKP_GROTH16_PUBLIC_INPUT_SCHEMA_VERSION,
-  ),
-  trustedSetupTranscriptHash: normalizeHex64(
-    process.env.ZKP_GROTH16_TRUSTED_SETUP_TRANSCRIPT_HASH,
-  ),
-});
+export const getGroth16VerifierConfig = (): Groth16VerifierConfig =>
+  loadVoteArtifactManifestFromEnv({
+    voteVerifierEnabled: toBoolean(
+      process.env.ZKP_GROTH16_VOTE_VERIFIER_ENABLED,
+    ),
+    voteCircuitId: normalizeOptionalString(
+      process.env.ZKP_GROTH16_VOTE_CIRCUIT_ID,
+    ),
+    voteVerifierKeyHash: normalizeHex64(
+      process.env.ZKP_GROTH16_VOTE_VERIFIER_KEY_HASH,
+    ),
+    publicInputSchemaVersion: normalizeOptionalString(
+      process.env.ZKP_GROTH16_PUBLIC_INPUT_SCHEMA_VERSION,
+    ),
+    trustedSetupTranscriptHash: normalizeHex64(
+      process.env.ZKP_GROTH16_TRUSTED_SETUP_TRANSCRIPT_HASH,
+    ),
+  });
 
 export const isGroth16VoteVerifierConfigured = (
   config: Groth16VerifierConfig = getGroth16VerifierConfig(),
@@ -172,7 +325,10 @@ export const isGroth16VoteVerifierConfigured = (
       config.voteCircuitId &&
       config.voteVerifierKeyHash &&
       config.publicInputSchemaVersion &&
-      config.trustedSetupTranscriptHash,
+      config.trustedSetupTranscriptHash &&
+      config.voteArtifactManifestStatus === "loaded" &&
+      config.voteArtifactManifest &&
+      config.voteVerifierKeyRegistryRecord,
   );
 
 const hasProductionZkpPrivacyMode = (
@@ -226,6 +382,17 @@ export const verifyGroth16VoteProofForPoll = async (
     config.publicInputSchemaVersion || "";
   const configuredTrustedSetupTranscriptHash =
     config.trustedSetupTranscriptHash || "";
+  const artifactManifest = config.voteArtifactManifest;
+  const verifierKeyRegistryRecord = config.voteVerifierKeyRegistryRecord;
+  const artifactManifestHash =
+    verifierKeyRegistryRecord?.artifactManifestHash || "";
+
+  if (!artifactManifest || !verifierKeyRegistryRecord || !artifactManifestHash) {
+    return reject(
+      "VERIFIER_UNCONFIGURED",
+      "Groth16 vote proof verification is enabled but the pinned artifact manifest is unavailable.",
+    );
+  }
 
   if (!dependencies.verifyProof) {
     return reject(
@@ -369,6 +536,9 @@ export const verifyGroth16VoteProofForPoll = async (
     circuitId: configuredCircuitId,
     verifierKeyHash: configuredVerifierKeyHash,
     trustedSetupTranscriptHash: configuredTrustedSetupTranscriptHash,
+    artifactManifest,
+    artifactManifestHash,
+    verifierKeyRegistryRecord,
   });
 
   if (!verifierAccepted) {

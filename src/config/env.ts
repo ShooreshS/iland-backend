@@ -115,11 +115,15 @@ const parsed = z
     ZKP_GROTH16_VOTE_VERIFIER_KEY_HASH: hex64Schema.optional(),
     ZKP_GROTH16_PUBLIC_INPUT_SCHEMA_VERSION: z.string().min(1).optional(),
     ZKP_GROTH16_TRUSTED_SETUP_TRANSCRIPT_HASH: hex64Schema.optional(),
+    ZKP_GROTH16_VOTE_ARTIFACT_MANIFEST_PATH: z.string().min(1).optional(),
+    ZKP_GROTH16_VOTE_ARTIFACT_MANIFEST_HASH: hex64Schema.optional(),
     ZKP_GROTH16_TALLY_VERIFIER_ENABLED: z.string().optional(),
     ZKP_GROTH16_TALLY_CIRCUIT_ID: z.string().min(1).optional(),
     ZKP_GROTH16_TALLY_VERIFIER_KEY_HASH: hex64Schema.optional(),
     ZKP_GROTH16_TALLY_PUBLIC_INPUT_SCHEMA_VERSION: z.string().min(1).optional(),
     ZKP_GROTH16_TALLY_TRUSTED_SETUP_TRANSCRIPT_HASH: hex64Schema.optional(),
+    ZKP_GROTH16_TALLY_ARTIFACT_MANIFEST_PATH: z.string().min(1).optional(),
+    ZKP_GROTH16_TALLY_ARTIFACT_MANIFEST_HASH: hex64Schema.optional(),
   })
   .superRefine((input, context) => {
     const hasUrl = Boolean(input.SUPABASE_URL);
@@ -304,6 +308,24 @@ const parsed = z
           path: ["ZKP_GROTH16_TRUSTED_SETUP_TRANSCRIPT_HASH"],
         });
       }
+
+      if (!input.ZKP_GROTH16_VOTE_ARTIFACT_MANIFEST_PATH) {
+        context.addIssue({
+          code: z.ZodIssueCode.custom,
+          message:
+            "ZKP_GROTH16_VOTE_ARTIFACT_MANIFEST_PATH is required when Groth16 vote verification is enabled.",
+          path: ["ZKP_GROTH16_VOTE_ARTIFACT_MANIFEST_PATH"],
+        });
+      }
+
+      if (!input.ZKP_GROTH16_VOTE_ARTIFACT_MANIFEST_HASH) {
+        context.addIssue({
+          code: z.ZodIssueCode.custom,
+          message:
+            "ZKP_GROTH16_VOTE_ARTIFACT_MANIFEST_HASH is required when Groth16 vote verification is enabled.",
+          path: ["ZKP_GROTH16_VOTE_ARTIFACT_MANIFEST_HASH"],
+        });
+      }
     }
 
     const groth16TallyVerifierEnabled =
@@ -345,6 +367,24 @@ const parsed = z
           message:
             "ZKP_GROTH16_TALLY_TRUSTED_SETUP_TRANSCRIPT_HASH is required when Groth16 tally verification is enabled.",
           path: ["ZKP_GROTH16_TALLY_TRUSTED_SETUP_TRANSCRIPT_HASH"],
+        });
+      }
+
+      if (!input.ZKP_GROTH16_TALLY_ARTIFACT_MANIFEST_PATH) {
+        context.addIssue({
+          code: z.ZodIssueCode.custom,
+          message:
+            "ZKP_GROTH16_TALLY_ARTIFACT_MANIFEST_PATH is required when Groth16 tally verification is enabled.",
+          path: ["ZKP_GROTH16_TALLY_ARTIFACT_MANIFEST_PATH"],
+        });
+      }
+
+      if (!input.ZKP_GROTH16_TALLY_ARTIFACT_MANIFEST_HASH) {
+        context.addIssue({
+          code: z.ZodIssueCode.custom,
+          message:
+            "ZKP_GROTH16_TALLY_ARTIFACT_MANIFEST_HASH is required when Groth16 tally verification is enabled.",
+          path: ["ZKP_GROTH16_TALLY_ARTIFACT_MANIFEST_HASH"],
         });
       }
     }
@@ -478,6 +518,12 @@ const parsed = z
     ZKP_GROTH16_TRUSTED_SETUP_TRANSCRIPT_HASH: emptyToUndefined(
       process.env.ZKP_GROTH16_TRUSTED_SETUP_TRANSCRIPT_HASH,
     ),
+    ZKP_GROTH16_VOTE_ARTIFACT_MANIFEST_PATH: emptyToUndefined(
+      process.env.ZKP_GROTH16_VOTE_ARTIFACT_MANIFEST_PATH,
+    ),
+    ZKP_GROTH16_VOTE_ARTIFACT_MANIFEST_HASH: emptyToUndefined(
+      process.env.ZKP_GROTH16_VOTE_ARTIFACT_MANIFEST_HASH,
+    ),
     ZKP_GROTH16_TALLY_VERIFIER_ENABLED: emptyToUndefined(
       process.env.ZKP_GROTH16_TALLY_VERIFIER_ENABLED,
     ),
@@ -492,6 +538,12 @@ const parsed = z
     ),
     ZKP_GROTH16_TALLY_TRUSTED_SETUP_TRANSCRIPT_HASH: emptyToUndefined(
       process.env.ZKP_GROTH16_TALLY_TRUSTED_SETUP_TRANSCRIPT_HASH,
+    ),
+    ZKP_GROTH16_TALLY_ARTIFACT_MANIFEST_PATH: emptyToUndefined(
+      process.env.ZKP_GROTH16_TALLY_ARTIFACT_MANIFEST_PATH,
+    ),
+    ZKP_GROTH16_TALLY_ARTIFACT_MANIFEST_HASH: emptyToUndefined(
+      process.env.ZKP_GROTH16_TALLY_ARTIFACT_MANIFEST_HASH,
     ),
   });
 
@@ -678,6 +730,11 @@ export const env = Object.freeze({
       trustedSetupTranscriptHash: normalizeHex64Env(
         parsed.ZKP_GROTH16_TRUSTED_SETUP_TRANSCRIPT_HASH,
       ),
+      voteArtifactManifestPath:
+        parsed.ZKP_GROTH16_VOTE_ARTIFACT_MANIFEST_PATH ?? null,
+      voteArtifactManifestHash: normalizeHex64Env(
+        parsed.ZKP_GROTH16_VOTE_ARTIFACT_MANIFEST_HASH,
+      ),
       tallyVerifierEnabled: zkpGroth16TallyVerifierEnabled,
       tallyCircuitId: parsed.ZKP_GROTH16_TALLY_CIRCUIT_ID ?? null,
       tallyVerifierKeyHash: normalizeHex64Env(
@@ -687,6 +744,11 @@ export const env = Object.freeze({
         parsed.ZKP_GROTH16_TALLY_PUBLIC_INPUT_SCHEMA_VERSION ?? null,
       tallyTrustedSetupTranscriptHash: normalizeHex64Env(
         parsed.ZKP_GROTH16_TALLY_TRUSTED_SETUP_TRANSCRIPT_HASH,
+      ),
+      tallyArtifactManifestPath:
+        parsed.ZKP_GROTH16_TALLY_ARTIFACT_MANIFEST_PATH ?? null,
+      tallyArtifactManifestHash: normalizeHex64Env(
+        parsed.ZKP_GROTH16_TALLY_ARTIFACT_MANIFEST_HASH,
       ),
     }),
   }),

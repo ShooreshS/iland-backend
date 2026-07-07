@@ -1,0 +1,42 @@
+{
+  "version": "civicos-groth16-artifact-manifest-v1",
+  "artifactKind": "vote",
+  "circuitId": "civicos-groth16-vote-circuit-v1",
+  "proofSystem": "groth16",
+  "protocol": "groth16",
+  "curve": "bn254",
+  "hashSuite": "poseidon-bn254-v1",
+  "publicInputSchemaVersion": "civicos-groth16-vote-public-inputs-v1",
+  "trustedSetupTranscriptHash": "<sha256-of-trusted-setup-transcript>",
+  "verifierKeyHash": "<sha256-of-verification-key-json>",
+  "provingKeyHash": "<sha256-of-final-zkey>",
+  "wasmOrNativeArtifactHash": "<sha256-of-mobile-witness-wasm-or-native-prover>",
+  "artifacts": [
+    {
+      "role": "verification_key",
+      "path": "vote.vkey.json",
+      "sha256": "<sha256-of-verification-key-json>",
+      "format": "snarkjs-vkey-json"
+    },
+    {
+      "role": "proving_key",
+      "path": "vote.zkey",
+      "sha256": "<sha256-of-final-zkey>",
+      "format": "zkey"
+    },
+    {
+      "role": "witness_wasm",
+      "path": "vote.wasm",
+      "sha256": "<sha256-of-mobile-witness-wasm>",
+      "format": "wasm"
+    }
+  ],
+  "trustedSetup": {
+    "ceremony": "civicos-vote-v1",
+    "phase1TranscriptHash": "<sha256-of-phase1-transcript>",
+    "phase2TranscriptHash": "<sha256-of-phase2-transcript>",
+    "contributionCount": 0,
+    "notes": "Replace placeholders with real audited ceremony metadata before enabling production verification."
+  },
+  "notes": "Template only. This file intentionally contains placeholders and must not be used as a production manifest."
+}

@@ -1,6 +1,16 @@
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
 import { describe, expect, it } from "bun:test";
 
 import type { PollRow } from "../types/db";
+import {
+  GROTH16_ARTIFACT_MANIFEST_VERSION,
+  buildGroth16VerifierKeyRegistryRecord,
+  hashGroth16ArtifactManifest,
+  type Groth16ArtifactManifest,
+} from "./groth16ArtifactManifestService";
 import {
   CIVIC_PRODUCTION_HASH_SUITE,
   CIVIC_PRODUCTION_PROOF_ENVELOPE_VERSION,
@@ -8,6 +18,7 @@ import {
   CIVIC_PRODUCTION_PROOF_PROTOCOL,
   CIVIC_PRODUCTION_PROOF_SYSTEM_VERSION,
   CIVIC_PRODUCTION_PUBLIC_INPUT_SCHEMA_VERSION,
+  getGroth16VerifierConfig,
   hashGroth16VotePublicInputs,
   isGroth16VoteVerifierConfigured,
   type Groth16VerifierConfig,
@@ -26,7 +37,54 @@ const VOTE_COMMITMENT = "6".repeat(64);
 const ENCRYPTED_VOTE_HASH = "7".repeat(64);
 const VERIFIER_KEY_HASH = "8".repeat(64);
 const TRUSTED_SETUP_TRANSCRIPT_HASH = "9".repeat(64);
+const PROVING_KEY_HASH = "a".repeat(64);
+const PROVER_ARTIFACT_HASH = "b".repeat(64);
 const CIRCUIT_ID = "civicos-groth16-vote-circuit-v1";
+
+const createArtifactManifest = (
+  overrides: Partial<Groth16ArtifactManifest> = {},
+): Groth16ArtifactManifest => ({
+  version: GROTH16_ARTIFACT_MANIFEST_VERSION,
+  artifactKind: "vote",
+  circuitId: CIRCUIT_ID,
+  proofSystem: "groth16",
+  protocol: "groth16",
+  curve: "bn254",
+  hashSuite: CIVIC_PRODUCTION_HASH_SUITE,
+  publicInputSchemaVersion: CIVIC_PRODUCTION_PUBLIC_INPUT_SCHEMA_VERSION,
+  trustedSetupTranscriptHash: TRUSTED_SETUP_TRANSCRIPT_HASH,
+  verifierKeyHash: VERIFIER_KEY_HASH,
+  provingKeyHash: PROVING_KEY_HASH,
+  wasmOrNativeArtifactHash: PROVER_ARTIFACT_HASH,
+  artifacts: [
+    {
+      role: "verification_key",
+      path: "vote.vkey.json",
+      sha256: VERIFIER_KEY_HASH,
+      format: "snarkjs-vkey-json",
+    },
+    {
+      role: "proving_key",
+      path: "vote.zkey",
+      sha256: PROVING_KEY_HASH,
+      format: "zkey",
+    },
+    {
+      role: "witness_wasm",
+      path: "vote.wasm",
+      sha256: PROVER_ARTIFACT_HASH,
+      format: "wasm",
+    },
+  ],
+  ...overrides,
+});
+
+const artifactManifest = createArtifactManifest();
+const artifactManifestHash = hashGroth16ArtifactManifest(artifactManifest);
+const verifierKeyRegistryRecord = buildGroth16VerifierKeyRegistryRecord(
+  artifactManifest,
+  artifactManifestHash,
+);
 
 const configuredVerifier: Groth16VerifierConfig = {
   voteVerifierEnabled: true,
@@ -34,6 +92,12 @@ const configuredVerifier: Groth16VerifierConfig = {
   voteVerifierKeyHash: VERIFIER_KEY_HASH,
   publicInputSchemaVersion: CIVIC_PRODUCTION_PUBLIC_INPUT_SCHEMA_VERSION,
   trustedSetupTranscriptHash: TRUSTED_SETUP_TRANSCRIPT_HASH,
+  voteArtifactManifestPath: "/zkp/vote.manifest.json",
+  voteArtifactManifestHash: artifactManifestHash,
+  voteArtifactManifest: artifactManifest,
+  voteArtifactManifestStatus: "loaded",
+  voteArtifactManifestError: null,
+  voteVerifierKeyRegistryRecord: verifierKeyRegistryRecord,
 };
 
 const disabledVerifier: Groth16VerifierConfig = {
@@ -136,6 +200,51 @@ describe("groth16ProofVerifierService", () => {
         voteVerifierKeyHash: null,
       }),
     ).toBe(false);
+    expect(
+      isGroth16VoteVerifierConfigured({
+        ...configuredVerifier,
+        voteArtifactManifestStatus: "not_configured",
+        voteArtifactManifest: null,
+        voteVerifierKeyRegistryRecord: null,
+      }),
+    ).toBe(false);
+  });
+
+  it("keeps env-loaded manifests unconfigured without a pinned manifest hash", () => {
+    const oldPath = process.env.ZKP_GROTH16_VOTE_ARTIFACT_MANIFEST_PATH;
+    const oldHash = process.env.ZKP_GROTH16_VOTE_ARTIFACT_MANIFEST_HASH;
+    const oldEnabled = process.env.ZKP_GROTH16_VOTE_VERIFIER_ENABLED;
+    const dir = mkdtempSync(join(tmpdir(), "civicos-groth16-config-"));
+    const manifestPath = join(dir, "vote.manifest.json");
+    writeFileSync(manifestPath, JSON.stringify(artifactManifest, null, 2));
+
+    try {
+      process.env.ZKP_GROTH16_VOTE_VERIFIER_ENABLED = "true";
+      process.env.ZKP_GROTH16_VOTE_ARTIFACT_MANIFEST_PATH = manifestPath;
+      delete process.env.ZKP_GROTH16_VOTE_ARTIFACT_MANIFEST_HASH;
+
+      const config = getGroth16VerifierConfig();
+      expect(config.voteArtifactManifestStatus).toBe("invalid");
+      expect(config.voteArtifactManifestError).toContain("must be pinned");
+      expect(isGroth16VoteVerifierConfigured(config)).toBe(false);
+    } finally {
+      if (oldPath === undefined) {
+        delete process.env.ZKP_GROTH16_VOTE_ARTIFACT_MANIFEST_PATH;
+      } else {
+        process.env.ZKP_GROTH16_VOTE_ARTIFACT_MANIFEST_PATH = oldPath;
+      }
+      if (oldHash === undefined) {
+        delete process.env.ZKP_GROTH16_VOTE_ARTIFACT_MANIFEST_HASH;
+      } else {
+        process.env.ZKP_GROTH16_VOTE_ARTIFACT_MANIFEST_HASH = oldHash;
+      }
+      if (oldEnabled === undefined) {
+        delete process.env.ZKP_GROTH16_VOTE_VERIFIER_ENABLED;
+      } else {
+        process.env.ZKP_GROTH16_VOTE_VERIFIER_ENABLED = oldEnabled;
+      }
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it("fails closed when production ZKP poll verification is disabled", async () => {
@@ -176,6 +285,33 @@ describe("groth16ProofVerifierService", () => {
     }
   });
 
+  it("fails closed when loose verifier fields are set without a pinned artifact manifest", async () => {
+    const result = await verifyGroth16VoteProofForPoll(
+      {
+        poll: createPoll(),
+        proof: createProof(),
+        encryptedVoteHash: ENCRYPTED_VOTE_HASH,
+      },
+      {
+        config: {
+          ...configuredVerifier,
+          voteArtifactManifestPath: null,
+          voteArtifactManifestHash: null,
+          voteArtifactManifest: null,
+          voteArtifactManifestStatus: "not_configured",
+          voteArtifactManifestError: null,
+          voteVerifierKeyRegistryRecord: null,
+        },
+        verifyProof: () => true,
+      },
+    );
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.reason).toBe("VERIFIER_UNCONFIGURED");
+    }
+  });
+
   it("accepts a configured verifier engine result and returns anonymous audit material", async () => {
     const result = await verifyGroth16VoteProofForPoll(
       {
@@ -191,6 +327,11 @@ describe("groth16ProofVerifierService", () => {
           expect(input.verifierKeyHash).toBe(VERIFIER_KEY_HASH);
           expect(input.trustedSetupTranscriptHash).toBe(
             TRUSTED_SETUP_TRANSCRIPT_HASH,
+          );
+          expect(input.artifactManifest).toBe(artifactManifest);
+          expect(input.artifactManifestHash).toBe(artifactManifestHash);
+          expect(input.verifierKeyRegistryRecord).toEqual(
+            verifierKeyRegistryRecord,
           );
           return true;
         },

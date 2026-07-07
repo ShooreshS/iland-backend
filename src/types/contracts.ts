@@ -379,6 +379,20 @@ export type ProofSystemPolicyDto = {
     anonymousVoteTable: "poll_zk_votes";
     tallyProofRequired: true;
     onChainZkVerifierEnabled: false;
+    artifactManifestConfigured: boolean;
+    verifierKeyRegistryRecord: {
+      version: "civicos-groth16-verifier-key-registry-v1";
+      artifactKind: "vote" | "tally";
+      proofSystem: "groth16";
+      protocol: "groth16";
+      curve: "bn254";
+      hashSuite: "poseidon-bn254-v1";
+      circuitId: string;
+      verifierKeyHash: string;
+      publicInputSchemaVersion: string;
+      trustedSetupTranscriptHash: string;
+      artifactManifestHash: string;
+    } | null;
   };
   notes: string[];
 };
