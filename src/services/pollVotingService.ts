@@ -253,12 +253,14 @@ const normalizeProductionPrivacyPayload = (
   proof: Groth16VoteProofEnvelopeDto;
   voteCommitment: string;
   encryptedVoteHash: string;
+  encryptedVoteCommitment: string;
 } | null => {
   const candidate = privacy as
     | (VotePrivacyPayloadDto & {
         votePrivacyMode?: unknown;
         voteCommitment?: unknown;
         encryptedVoteHash?: unknown;
+        encryptedVoteCommitment?: unknown;
         proof?: unknown;
       })
     | null
@@ -282,6 +284,9 @@ const normalizeProductionPrivacyPayload = (
   const encryptedVoteHash =
     normalizeHex64(candidate.encryptedVoteHash) ||
     normalizeHex64(proofPublicInputs.encryptedVoteHash);
+  const encryptedVoteCommitment =
+    normalizeHex64(candidate.encryptedVoteCommitment) ||
+    normalizeHex64(proofPublicInputs.encryptedVoteCommitment);
 
   if (
     toStringOrEmpty(candidate.version) !== "civicos-vote-privacy-v1" ||
@@ -291,7 +296,8 @@ const normalizeProductionPrivacyPayload = (
     !proofNullifier ||
     nullifier !== proofNullifier ||
     !voteCommitment ||
-    !encryptedVoteHash
+    !encryptedVoteHash ||
+    !encryptedVoteCommitment
   ) {
     return null;
   }
@@ -300,6 +306,7 @@ const normalizeProductionPrivacyPayload = (
     proof: candidate.proof as Groth16VoteProofEnvelopeDto,
     voteCommitment,
     encryptedVoteHash,
+    encryptedVoteCommitment,
   };
 };
 
@@ -855,6 +862,7 @@ export const createPollVotingService = (
           vote_commitment: proofAuditMaterial.voteCommitment,
           encrypted_vote: encryptedVoteJson,
           encrypted_vote_hash: proofAuditMaterial.encryptedVoteHash,
+          encrypted_vote_commitment: proofAuditMaterial.encryptedVoteCommitment,
           proof_hash: proofAuditMaterial.proofHash,
           proof_system_version: proofAuditMaterial.proofSystemVersion,
           verification_method_version:

@@ -82,7 +82,7 @@ writeJson(resolve(vectorDir, "encrypted_choice_tally.summary.json"), {
   validInput: "encrypted_choice_tally.valid.input.json",
   validPublicSignals: "encrypted_choice_tally.valid.public.json",
   validPublicSignalsByName: "encrypted_choice_tally.valid.public.named.json",
-  encryptedVoteHashes: tally.encryptedVoteHashes,
+  encryptedVoteCommitments: tally.encryptedVoteCommitments,
   voteCommitments: tally.voteCommitments,
   nullifierLeaves: tally.nullifierLeaves,
   voteCommitmentLeaves: tally.voteCommitmentLeaves,

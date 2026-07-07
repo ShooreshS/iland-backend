@@ -18,13 +18,13 @@ template CredentialCommitmentVote(depth) {
     signal input credentialRoot;
     signal input nullifier;
     signal input voteCommitment;
-    signal input encryptedVoteHash;
+    signal input encryptedVoteCommitment;
 
     // Private witness material.
     signal input identitySecret;
     signal input credentialSalt;
     signal input optionIndex;
-    signal input optionIndexBits[2];
+    signal input optionIndexBits[3];
     signal input encryptedVoteRandomness;
     signal input voteRandomness;
     signal input documentValid;
@@ -44,7 +44,7 @@ template CredentialCommitmentVote(depth) {
     component countryEligibleIsBoolean = AssertBoolean();
     component homeAreaEligibleIsBoolean = AssertBoolean();
     component landEligibleIsBoolean = AssertBoolean();
-    component optionIndexBitIsBoolean[2];
+    component optionIndexBitIsBoolean[3];
 
     documentValidIsBoolean.in <== documentValid;
     livenessPassedIsBoolean.in <== livenessPassed;
@@ -55,10 +55,12 @@ template CredentialCommitmentVote(depth) {
     landEligibleIsBoolean.in <== landEligible;
     optionIndexBitIsBoolean[0] = AssertBoolean();
     optionIndexBitIsBoolean[1] = AssertBoolean();
+    optionIndexBitIsBoolean[2] = AssertBoolean();
     optionIndexBitIsBoolean[0].in <== optionIndexBits[0];
     optionIndexBitIsBoolean[1].in <== optionIndexBits[1];
+    optionIndexBitIsBoolean[2].in <== optionIndexBits[2];
 
-    optionIndex === optionIndexBits[0] + 2 * optionIndexBits[1];
+    optionIndex === optionIndexBits[0] + 2 * optionIndexBits[1] + 4 * optionIndexBits[2];
     documentValid === 1;
     livenessPassed === 1;
     faceMatchedDocument === 1;
@@ -90,11 +92,11 @@ template CredentialCommitmentVote(depth) {
     encryptedVoteHasher.inputs[1] <== optionIndex;
     encryptedVoteHasher.inputs[2] <== encryptedVoteRandomness;
     encryptedVoteHasher.inputs[3] <== optionSetHash;
-    encryptedVoteHasher.out === encryptedVoteHash;
+    encryptedVoteHasher.out === encryptedVoteCommitment;
 
     component voteCommitmentHasher = Poseidon(4);
     voteCommitmentHasher.inputs[0] <== nullifier;
-    voteCommitmentHasher.inputs[1] <== encryptedVoteHash;
+    voteCommitmentHasher.inputs[1] <== encryptedVoteCommitment;
     voteCommitmentHasher.inputs[2] <== optionSetHash;
     voteCommitmentHasher.inputs[3] <== voteRandomness;
     voteCommitmentHasher.out === voteCommitment;
@@ -134,6 +136,6 @@ component main {
         credentialRoot,
         nullifier,
         voteCommitment,
-        encryptedVoteHash
+        encryptedVoteCommitment
     ]
-} = CredentialCommitmentVote(4);
+} = CredentialCommitmentVote(24);

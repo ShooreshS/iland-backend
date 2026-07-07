@@ -34,7 +34,7 @@ export const GROTH16_VOTE_PUBLIC_SIGNAL_ORDER = Object.freeze([
   "credentialRoot",
   "nullifier",
   "voteCommitment",
-  "encryptedVoteHash",
+  "encryptedVoteCommitment",
 ] as const);
 
 type Groth16VotePublicSignalName =

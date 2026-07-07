@@ -344,10 +344,13 @@ const buildAuditTrees = (
     hashPublicAuditLeaf("vote_commitment", record.vote_commitment ?? ""),
   );
   const encryptedVoteLeafHashes = records
-    .map((record) => record.encrypted_vote_hash ?? "")
-    .filter((encryptedVoteHash) => normalizeHex64(encryptedVoteHash))
-    .map((encryptedVoteHash) =>
-      hashPublicAuditLeaf("encrypted_vote", encryptedVoteHash),
+    .map(
+      (record) =>
+        record.encrypted_vote_commitment ?? record.encrypted_vote_hash ?? "",
+    )
+    .filter((encryptedVoteCommitment) => normalizeHex64(encryptedVoteCommitment))
+    .map((encryptedVoteCommitment) =>
+      hashPublicAuditLeaf("encrypted_vote", encryptedVoteCommitment),
     );
 
   return {
@@ -364,6 +367,7 @@ type PublicAuditRecordRow = {
   vote_commitment: string | null;
   proof_hash: string | null;
   encrypted_vote_hash?: string | null;
+  encrypted_vote_commitment?: string | null;
   accepted_at: string | null;
   batch_id: string | null;
   created_at: string;

@@ -25,6 +25,8 @@ export const CIVIC_TALLY_PROOF_ENVELOPE_VERSION =
   "civicos-groth16-tally-proof-envelope-v1" as const;
 export const CIVIC_TALLY_PUBLIC_INPUT_SCHEMA_VERSION =
   "civicos-groth16-tally-public-inputs-v1" as const;
+export const CIVIC_TALLY_MAX_VOTES = 64 as const;
+export const CIVIC_TALLY_MAX_OPTIONS = 8 as const;
 
 const CIVIC_ZKP_DOMAIN = "org.civicos.zkp" as const;
 const HEX_64_PATTERN = /^[0-9a-f]{64}$/;
@@ -294,7 +296,9 @@ export const hashGroth16TallyOptionCounts = (
 ): Promise<string> =>
   poseidonHashHex64([
     1201,
-    ...optionResults.map((entry) => Math.max(0, Math.trunc(entry.count))),
+    ...Array.from({ length: CIVIC_TALLY_MAX_OPTIONS }, (_, index) =>
+      Math.max(0, Math.trunc(optionResults[index]?.count ?? 0)),
+    ),
   ]);
 
 export const hashGroth16TallyPublicInputs = (
@@ -489,6 +493,18 @@ export const verifyGroth16TallyProofForPoll = async (
   const optionCountsHash = await hashGroth16TallyOptionCounts(
     publicInputs.optionResults,
   );
+  if (publicInputs.optionResults.length > CIVIC_TALLY_MAX_OPTIONS) {
+    return reject(
+      "PROOF_INVALID",
+      `Groth16 tally proof supports at most ${CIVIC_TALLY_MAX_OPTIONS} options.`,
+    );
+  }
+  if (publicInputs.acceptedVoteCount > CIVIC_TALLY_MAX_VOTES) {
+    return reject(
+      "PROOF_INVALID",
+      `Groth16 tally proof supports at most ${CIVIC_TALLY_MAX_VOTES} votes per batch.`,
+    );
+  }
   if (publicInputs.optionCountsHash !== optionCountsHash) {
     return reject(
       "PROOF_INVALID",

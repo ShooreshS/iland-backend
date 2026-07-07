@@ -37,6 +37,7 @@ const OPTION_COLOR_PALETTE = [
   "#14B8A6",
 ];
 const MIN_PUBLISHABLE_ACTIVE_OPTIONS = 2;
+const PRODUCTION_ZKP_MAX_OPTIONS = 8;
 const DEFAULT_VOTE_PRIVACY_MODE = "zk_preprover_audit" as const;
 const PRODUCTION_ZKP_VOTE_PRIVACY_MODE = "zk_secret_ballot_v1" as const;
 const KNOWN_VOTE_PRIVACY_MODES = new Set<PollVotePrivacyMode>([
@@ -271,6 +272,18 @@ const normalizeMutationInput = (
 
   const votePrivacyMode = normalizeVotePrivacyMode(input.votePrivacyMode);
   const pollEncryptionKeyId = normalizeOptionalString(input.pollEncryptionKeyId);
+
+  if (
+    votePrivacyMode === PRODUCTION_ZKP_VOTE_PRIVACY_MODE &&
+    normalizedOptions.length > PRODUCTION_ZKP_MAX_OPTIONS
+  ) {
+    return {
+      error: createFailureResult(
+        "VALIDATION_FAILED",
+        `Production ZKP polls support at most ${PRODUCTION_ZKP_MAX_OPTIONS} options.`,
+      ),
+    };
+  }
 
   if (
     votePrivacyMode === PRODUCTION_ZKP_VOTE_PRIVACY_MODE &&

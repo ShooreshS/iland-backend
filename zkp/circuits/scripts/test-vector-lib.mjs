@@ -7,9 +7,9 @@ export const PUBLIC_INPUT_SCHEMA_VERSION =
 export const TALLY_PUBLIC_INPUT_SCHEMA_VERSION =
   "civicos-groth16-tally-public-inputs-v1";
 export const HASH_SUITE = "poseidon-bn254-v1";
-export const MERKLE_DEPTH = 4;
-export const TALLY_MAX_VOTES = 1;
-export const TALLY_MAX_OPTIONS = 2;
+export const MERKLE_DEPTH = 24;
+export const TALLY_MAX_VOTES = 64;
+export const TALLY_MAX_OPTIONS = 8;
 
 const ENCRYPTED_VOTE_TAG = "1001";
 const NULLIFIER_LEAF_TAG = "1101";
@@ -27,7 +27,7 @@ export const PUBLIC_SIGNAL_NAMES = Object.freeze([
   "credentialRoot",
   "nullifier",
   "voteCommitment",
-  "encryptedVoteHash",
+  "encryptedVoteCommitment",
 ]);
 
 export const TALLY_PUBLIC_SIGNAL_NAMES = Object.freeze([
@@ -50,7 +50,7 @@ export const createBaseWitness = () => ({
   identitySecret: "7001",
   credentialSalt: "7002",
   optionIndex: "1",
-  optionIndexBits: ["1", "0"],
+  optionIndexBits: ["1", "0", "0"],
   encryptedVoteRandomness: "7004",
   voteRandomness: "7003",
   documentValid: "1",
@@ -60,8 +60,12 @@ export const createBaseWitness = () => ({
   countryEligible: "1",
   homeAreaEligible: "1",
   landEligible: "1",
-  credentialRootSiblings: ["9001", "9002", "9003", "9004"],
-  credentialRootPathIndices: ["0", "1", "0", "1"],
+  credentialRootSiblings: Array.from({ length: MERKLE_DEPTH }, (_, index) =>
+    (9001n + BigInt(index)).toString(10),
+  ),
+  credentialRootPathIndices: Array.from({ length: MERKLE_DEPTH }, (_, index) =>
+    index % 2 === 0 ? "0" : "1",
+  ),
 });
 
 export const createPoseidonContext = async () => {
@@ -127,7 +131,7 @@ export const deriveCircuitValues = async (witness = createBaseWitness()) => {
     witness.pollId,
     witness.pollPolicyHash,
   ]);
-  const encryptedVoteHash = poseidonHash([
+  const encryptedVoteCommitment = poseidonHash([
     ENCRYPTED_VOTE_TAG,
     witness.optionIndex,
     witness.encryptedVoteRandomness,
@@ -135,7 +139,7 @@ export const deriveCircuitValues = async (witness = createBaseWitness()) => {
   ]);
   const voteCommitment = poseidonHash([
     nullifier,
-    encryptedVoteHash,
+    encryptedVoteCommitment,
     witness.optionSetHash,
     witness.voteRandomness,
   ]);
@@ -145,7 +149,7 @@ export const deriveCircuitValues = async (witness = createBaseWitness()) => {
     credentialRoot,
     nullifier,
     voteCommitment,
-    encryptedVoteHash,
+    encryptedVoteCommitment,
   };
 
   const publicSignalsByName = {
@@ -156,7 +160,7 @@ export const deriveCircuitValues = async (witness = createBaseWitness()) => {
     credentialRoot: toDecimalString(input.credentialRoot),
     nullifier: toDecimalString(input.nullifier),
     voteCommitment: toDecimalString(input.voteCommitment),
-    encryptedVoteHash: toDecimalString(input.encryptedVoteHash),
+    encryptedVoteCommitment: toDecimalString(input.encryptedVoteCommitment),
   };
 
   return {
@@ -189,13 +193,25 @@ export const createBaseTallyWitness = () => ({
   pollPolicyHash: "202",
   credentialSchemaHash: "303",
   optionSetHash: "404",
-  isActive: ["1"],
-  nullifiers: ["2101"],
-  encryptedVoteRandomness: ["3101"],
-  voteRandomness: ["4101"],
-  optionSelections: [
-    ["0", "1"],
-  ],
+  isActive: Array.from({ length: TALLY_MAX_VOTES }, (_, index) =>
+    index < 3 ? "1" : "0",
+  ),
+  nullifiers: Array.from({ length: TALLY_MAX_VOTES }, (_, index) =>
+    (2101n + BigInt(index)).toString(10),
+  ),
+  encryptedVoteRandomness: Array.from({ length: TALLY_MAX_VOTES }, (_, index) =>
+    (3101n + BigInt(index)).toString(10),
+  ),
+  voteRandomness: Array.from({ length: TALLY_MAX_VOTES }, (_, index) =>
+    (4101n + BigInt(index)).toString(10),
+  ),
+  optionSelections: Array.from({ length: TALLY_MAX_VOTES }, (_, index) =>
+    Array.from({ length: TALLY_MAX_OPTIONS }, (_, optionIndex) =>
+      index < 3 && optionIndex === ((index + 1) % TALLY_MAX_OPTIONS)
+        ? "1"
+        : "0",
+    ),
+  ),
 });
 
 const selectedOptionIndex = (selection) =>
@@ -219,7 +235,7 @@ export const deriveTallyCircuitValues = async (
       .toString(10),
   );
 
-  const encryptedVoteHashes = witness.isActive.map((active, index) => {
+  const encryptedVoteCommitments = witness.isActive.map((active, index) => {
     if (BigInt(active) === 0n) {
       return "0";
     }
@@ -231,10 +247,10 @@ export const deriveTallyCircuitValues = async (
     ]);
   });
 
-  const voteCommitments = encryptedVoteHashes.map((encryptedVoteHash, index) =>
+  const voteCommitments = encryptedVoteCommitments.map((encryptedVoteCommitment, index) =>
     poseidonHash([
       witness.nullifiers[index],
-      encryptedVoteHash,
+      encryptedVoteCommitment,
       witness.optionSetHash,
       witness.voteRandomness[index],
     ]),
@@ -250,10 +266,11 @@ export const deriveTallyCircuitValues = async (
       ? "0"
       : poseidonHash([VOTE_COMMITMENT_LEAF_TAG, voteCommitment]),
   );
-  const encryptedVoteLeaves = encryptedVoteHashes.map((encryptedVoteHash, index) =>
-    BigInt(witness.isActive[index]) === 0n
-      ? "0"
-      : poseidonHash([ENCRYPTED_VOTE_LEAF_TAG, encryptedVoteHash]),
+  const encryptedVoteLeaves = encryptedVoteCommitments.map(
+    (encryptedVoteCommitment, index) =>
+      BigInt(witness.isActive[index]) === 0n
+        ? "0"
+        : poseidonHash([ENCRYPTED_VOTE_LEAF_TAG, encryptedVoteCommitment]),
   );
 
   const nullifierRoot = deriveFixedPoseidonRoot({
@@ -272,7 +289,7 @@ export const deriveTallyCircuitValues = async (
 
   const input = {
     ...witness,
-    encryptedVoteHashes,
+    encryptedVoteCommitments,
     optionCounts,
     nullifierRoot,
     voteCommitmentRoot,
@@ -302,7 +319,7 @@ export const deriveTallyCircuitValues = async (
       maxOptions: TALLY_MAX_OPTIONS,
       publicSignalNames: TALLY_PUBLIC_SIGNAL_NAMES,
     },
-    encryptedVoteHashes,
+    encryptedVoteCommitments,
     voteCommitments,
     nullifierLeaves,
     voteCommitmentLeaves,

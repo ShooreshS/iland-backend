@@ -55,6 +55,7 @@ const productionVoteProofPublicInputsSchema = z
     nullifier: hex64Schema,
     voteCommitment: hex64Schema,
     encryptedVoteHash: hex64Schema,
+    encryptedVoteCommitment: hex64Schema,
     verificationMethodVersion: z.string().trim().min(1),
     proofSystemVersion: z.string().trim().min(1),
     hashSuite: z.string().trim().min(1),
@@ -157,6 +158,7 @@ const productionVotePrivacySchema = z
     nullifier: hex64Schema,
     voteCommitment: hex64Schema,
     encryptedVoteHash: hex64Schema,
+    encryptedVoteCommitment: hex64Schema,
     proof: productionVoteProofEnvelopeSchema,
   })
   .strict();
@@ -816,6 +818,8 @@ const buildVotePrivacyFromRequest = (
       nullifier: requestBody.nullifier || productionProof.publicInputs.nullifier,
       voteCommitment: productionProof.publicInputs.voteCommitment,
       encryptedVoteHash: productionProof.publicInputs.encryptedVoteHash,
+      encryptedVoteCommitment:
+        productionProof.publicInputs.encryptedVoteCommitment,
       proof: productionProof,
     } as VoteSubmissionRequestDto["privacy"];
   }
@@ -863,6 +867,7 @@ const publicInputsMatch = (
     left.credentialRoot === right.credentialRoot &&
     left.voteCommitment === right.voteCommitment &&
     left.encryptedVoteHash === right.encryptedVoteHash &&
+    left.encryptedVoteCommitment === right.encryptedVoteCommitment &&
     left.hashSuite === right.hashSuite &&
     left.circuitId === right.circuitId &&
     left.verifierKeyHash === right.verifierKeyHash &&

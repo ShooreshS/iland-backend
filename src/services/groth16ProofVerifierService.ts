@@ -41,6 +41,7 @@ export type Groth16VotePublicInputsDto = {
   nullifier: string;
   voteCommitment: string;
   encryptedVoteHash: string;
+  encryptedVoteCommitment: string;
   verificationMethodVersion: string;
   proofSystemVersion: string;
   hashSuite: string;
@@ -99,6 +100,7 @@ export type VerifiedGroth16VoteProofAuditMaterial = {
   nullifier: string;
   voteCommitment: string;
   encryptedVoteHash: string;
+  encryptedVoteCommitment: string;
   proofHash: string;
   proofSystemVersion: typeof CIVIC_PRODUCTION_PROOF_SYSTEM_VERSION;
   verificationMethodVersion: string;
@@ -312,10 +314,10 @@ export const getGroth16VerifierConfig = (): Groth16VerifierConfig =>
       process.env.ZKP_GROTH16_VOTE_VERIFIER_KEY_HASH,
     ),
     publicInputSchemaVersion: normalizeOptionalString(
-      process.env.ZKP_GROTH16_PUBLIC_INPUT_SCHEMA_VERSION,
+      process.env.ZKP_GROTH16_VOTE_PUBLIC_INPUT_SCHEMA_VERSION,
     ),
     trustedSetupTranscriptHash: normalizeHex64(
-      process.env.ZKP_GROTH16_TRUSTED_SETUP_TRANSCRIPT_HASH,
+      process.env.ZKP_GROTH16_VOTE_TRUSTED_SETUP_TRANSCRIPT_HASH,
     ),
   });
 
@@ -500,11 +502,20 @@ export const verifyGroth16VoteProofForPoll = async (
   const nullifier = normalizeHex64(publicInputs.nullifier);
   const voteCommitment = normalizeHex64(publicInputs.voteCommitment);
   const encryptedVoteHash = normalizeHex64(publicInputs.encryptedVoteHash);
+  const encryptedVoteCommitment = normalizeHex64(
+    publicInputs.encryptedVoteCommitment,
+  );
   const expectedEncryptedVoteHash = normalizeHex64(params.encryptedVoteHash);
   const expectedVoteCommitment = normalizeHex64(params.expectedVoteCommitment);
   const credentialRoot = normalizeHex64(publicInputs.credentialRoot);
 
-  if (!nullifier || !voteCommitment || !encryptedVoteHash || !credentialRoot) {
+  if (
+    !nullifier ||
+    !voteCommitment ||
+    !encryptedVoteHash ||
+    !encryptedVoteCommitment ||
+    !credentialRoot
+  ) {
     return reject(
       "PROOF_INVALID",
       "Groth16 vote proof contains malformed 32-byte public inputs.",
@@ -560,6 +571,7 @@ export const verifyGroth16VoteProofForPoll = async (
       nullifier,
       voteCommitment,
       encryptedVoteHash,
+      encryptedVoteCommitment,
       proofHash,
       proofSystemVersion: CIVIC_PRODUCTION_PROOF_SYSTEM_VERSION,
       verificationMethodVersion: publicInputs.verificationMethodVersion,

@@ -39,6 +39,7 @@ const CREDENTIAL_ROOT = "4".repeat(64);
 const NULLIFIER = "5".repeat(64);
 const VOTE_COMMITMENT = "6".repeat(64);
 const ENCRYPTED_VOTE_HASH = "7".repeat(64);
+const ENCRYPTED_VOTE_COMMITMENT = "c".repeat(64);
 const VERIFIER_KEY_HASH = "8".repeat(64);
 const TRUSTED_SETUP_TRANSCRIPT_HASH = "9".repeat(64);
 const PROVING_KEY_HASH = "a".repeat(64);
@@ -187,6 +188,8 @@ const createProof = (
     nullifier: overrides.nullifier ?? NULLIFIER,
     voteCommitment: overrides.voteCommitment ?? VOTE_COMMITMENT,
     encryptedVoteHash: overrides.encryptedVoteHash ?? ENCRYPTED_VOTE_HASH,
+    encryptedVoteCommitment:
+      overrides.encryptedVoteCommitment ?? ENCRYPTED_VOTE_COMMITMENT,
     verificationMethodVersion:
       overrides.verificationMethodVersion ??
       "civicos-mobile-verification-v1",
@@ -378,6 +381,7 @@ describe("groth16ProofVerifierService", () => {
         nullifier: NULLIFIER,
         voteCommitment: VOTE_COMMITMENT,
         encryptedVoteHash: ENCRYPTED_VOTE_HASH,
+        encryptedVoteCommitment: ENCRYPTED_VOTE_COMMITMENT,
         proofSystemVersion: "civicos-zk-proof-v1",
         proofVerificationStatus: "verified",
         verifierKeyHash: VERIFIER_KEY_HASH,
@@ -456,6 +460,8 @@ describe("groth16ProofVerifierService", () => {
         nullifier: fixtureEnvelope.publicInputs.nullifier,
         voteCommitment: fixtureEnvelope.publicInputs.voteCommitment,
         encryptedVoteHash: fixtureEnvelope.publicInputs.encryptedVoteHash,
+        encryptedVoteCommitment:
+          fixtureEnvelope.publicInputs.encryptedVoteCommitment,
         proofVerificationStatus: "verified",
         verifierKeyHash: fixtureManifest.verifierKeyHash,
         circuitId: fixtureManifest.circuitId,

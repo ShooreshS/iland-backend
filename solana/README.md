@@ -59,3 +59,54 @@ The existing SHOLAN mint can be recorded in `PollRegistry` when the registry is 
 - Name/symbol from on-chain Token-2022 metadata: `Sholan token` / `SHOLAN`
 
 Because mint and freeze authorities are disabled, future rewards or staking must use funded treasury token accounts rather than newly minted supply.
+
+## Wallets
+
+| Role                        | Public key   | Keypair file                                          | Balance                              |
+| --------------------------- | ------------ | ----------------------------------------------------- | ------------------------------------ |
+| Personal/default CLI wallet | 4eDF...Ghcm  | ~/.config/solana/id.json                              | mainnet 0.07509741 SOL, devnet 0 SOL |
+| Backend audit fee-payer     | 2s5L...FUhX5 | ~/.config/solana/civicos/devnet-audit-fee-payer.json  | devnet 12 SOL                        |
+| Devnet program deployer     | CyB8...KkwC  | ~/.config/solana/civicos/devnet-program-deployer.json | devnet 0 SOL                         |
+
+```
+shooresh@MacBookPro solana % NO_DNA=1 solana transfer "$DEPLOYER" 3 \
+  --from ~/.config/solana/civicos/devnet-audit-fee-payer.json \
+  --fee-payer ~/.config/solana/civicos/devnet-audit-fee-payer.json \
+  --url devnet \
+  --allow-unfunded-recipient
+
+Signature: 2ANcmzVcTsjLAdx4xsAERDPzxPhSSe7ygWf6cWrDSaDKrRs8PQhzPih8tnFknHxdJTJgcaU9aPRJt3KKgdCbg8o9
+
+shooresh@MacBookPro solana % NO_DNA=1 solana balance "$DEPLOYER" --url devnet
+3 SOL
+shooresh@MacBookPro solana % cd /Users/shooresh/Documents/hello1/iland24/back/solana
+
+NO_DNA=1 anchor deploy \
+  --provider.cluster devnet \
+  --provider.wallet ~/.config/solana/civicos/devnet-program-deployer.json
+Deploying cluster: https://api.devnet.solana.com
+Upgrade authority: /Users/shooresh/.config/solana/civicos/devnet-program-deployer.json
+Deploying program "civicos_audit"...
+Program path: /Users/shooresh/Documents/hello1/iland24/back/solana/target/deploy/civicos_audit.so...
+Program Id: FsXuodQtkWjE1EZEAUskvRuj4bGMrKZAHAEf4WEk4oRo
+
+Signature: 4YHeA1YVcraxnDLwG5UNRRnUPWz1XgRqRZf6ahck2nssmDmJiFyyo8qFmxUzBGBtuLyYx7KtH6E96fK9RoXynjdx
+
+Waiting for program FsXuodQtkWjE1EZEAUskvRuj4bGMrKZAHAEf4WEk4oRo to be confirmed...
+Program confirmed on-chain
+Idl data length: 1491 bytes
+Step 0/1491
+Step 600/1491
+Step 1200/1491
+Idl account created: C5WWz269riZFngbSJSAuiYAUEYbb7FxVe5tpoRPEhgMk
+Deploy success
+shooresh@MacBookPro solana % NO_DNA=1 solana program show FsXuodQtkWjE1EZEAUskvRuj4bGMrKZAHAEf4WEk4oRo --url devnet
+
+Program Id: FsXuodQtkWjE1EZEAUskvRuj4bGMrKZAHAEf4WEk4oRo
+Owner: BPFLoaderUpgradeab1e11111111111111111111111
+ProgramData Address: BeHBmueTyD3pxSV33s3BjXoqQXwgBXTUnfwG9Tq8xk7p
+Authority: CyB8BhqNfEz3xS5mHc39y6VaJHv2NcU5cof7iY7KkwC
+Last Deployed In Slot: 474682189
+Data Length: 285472 (0x45b20) bytes
+Balance: 1.9880892 SOL
+```

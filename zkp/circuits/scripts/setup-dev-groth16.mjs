@@ -6,7 +6,7 @@ import { execFileSync } from "node:child_process";
 const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const buildDir = resolve(packageRoot, "build");
 const snarkjs = resolve(packageRoot, "node_modules/.bin/snarkjs");
-const ptauPower = 14;
+const ptauPower = 19;
 const circuits = Object.freeze([
   "credential_commitment_vote",
   "encrypted_choice_tally",

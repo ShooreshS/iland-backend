@@ -7,11 +7,60 @@ template AssertBoolean() {
     in * (in - 1) === 0;
 }
 
-template PoseidonFixedRoot1() {
-    signal input leaves[1];
+template PoseidonFixedRoot64() {
+    signal input leaves[64];
     signal output root;
+    signal level1[32];
+    signal level2[16];
+    signal level3[8];
+    signal level4[4];
+    signal level5[2];
+    component hash1[32];
+    component hash2[16];
+    component hash3[8];
+    component hash4[4];
+    component hash5[2];
+    component hash6;
 
-    root <== leaves[0];
+    for (var i = 0; i < 32; i++) {
+        hash1[i] = Poseidon(2);
+        hash1[i].inputs[0] <== leaves[i * 2];
+        hash1[i].inputs[1] <== leaves[i * 2 + 1];
+        level1[i] <== hash1[i].out;
+    }
+
+    for (var i = 0; i < 16; i++) {
+        hash2[i] = Poseidon(2);
+        hash2[i].inputs[0] <== level1[i * 2];
+        hash2[i].inputs[1] <== level1[i * 2 + 1];
+        level2[i] <== hash2[i].out;
+    }
+
+    for (var i = 0; i < 8; i++) {
+        hash3[i] = Poseidon(2);
+        hash3[i].inputs[0] <== level2[i * 2];
+        hash3[i].inputs[1] <== level2[i * 2 + 1];
+        level3[i] <== hash3[i].out;
+    }
+
+    for (var i = 0; i < 4; i++) {
+        hash4[i] = Poseidon(2);
+        hash4[i].inputs[0] <== level3[i * 2];
+        hash4[i].inputs[1] <== level3[i * 2 + 1];
+        level4[i] <== hash4[i].out;
+    }
+
+    for (var i = 0; i < 2; i++) {
+        hash5[i] = Poseidon(2);
+        hash5[i].inputs[0] <== level4[i * 2];
+        hash5[i].inputs[1] <== level4[i * 2 + 1];
+        level5[i] <== hash5[i].out;
+    }
+
+    hash6 = Poseidon(2);
+    hash6.inputs[0] <== level5[0];
+    hash6.inputs[1] <== level5[1];
+    root <== hash6.out;
 }
 
 template EncryptedChoiceTally(maxVotes, maxOptions) {
@@ -35,7 +84,7 @@ template EncryptedChoiceTally(maxVotes, maxOptions) {
     // Private vote openings in accepted audit order, padded with inactive slots.
     signal input isActive[maxVotes];
     signal input nullifiers[maxVotes];
-    signal input encryptedVoteHashes[maxVotes];
+    signal input encryptedVoteCommitments[maxVotes];
     signal input encryptedVoteRandomness[maxVotes];
     signal input voteRandomness[maxVotes];
     signal input optionSelections[maxVotes][maxOptions];
@@ -56,7 +105,7 @@ template EncryptedChoiceTally(maxVotes, maxOptions) {
     signal nullifierLeaves[maxVotes];
     signal voteCommitmentLeaves[maxVotes];
     signal encryptedVoteLeaves[maxVotes];
-    signal computedEncryptedVoteHash[maxVotes];
+    signal computedEncryptedVoteCommitment[maxVotes];
     signal computedVoteCommitment[maxVotes];
 
     activeSum[0] <== 0;
@@ -88,12 +137,12 @@ template EncryptedChoiceTally(maxVotes, maxOptions) {
         encryptedVoteHasher[i].inputs[1] <== selectedOptionSums[i][maxOptions];
         encryptedVoteHasher[i].inputs[2] <== encryptedVoteRandomness[i];
         encryptedVoteHasher[i].inputs[3] <== optionSetHash;
-        computedEncryptedVoteHash[i] <== encryptedVoteHasher[i].out;
-        encryptedVoteHashes[i] === isActive[i] * computedEncryptedVoteHash[i];
+        computedEncryptedVoteCommitment[i] <== encryptedVoteHasher[i].out;
+        encryptedVoteCommitments[i] === isActive[i] * computedEncryptedVoteCommitment[i];
 
         voteCommitmentHasher[i] = Poseidon(4);
         voteCommitmentHasher[i].inputs[0] <== nullifiers[i];
-        voteCommitmentHasher[i].inputs[1] <== encryptedVoteHashes[i];
+        voteCommitmentHasher[i].inputs[1] <== encryptedVoteCommitments[i];
         voteCommitmentHasher[i].inputs[2] <== optionSetHash;
         voteCommitmentHasher[i].inputs[3] <== voteRandomness[i];
         computedVoteCommitment[i] <== voteCommitmentHasher[i].out;
@@ -110,7 +159,7 @@ template EncryptedChoiceTally(maxVotes, maxOptions) {
 
         encryptedVoteLeafHasher[i] = Poseidon(2);
         encryptedVoteLeafHasher[i].inputs[0] <== ENCRYPTED_VOTE_LEAF_TAG;
-        encryptedVoteLeafHasher[i].inputs[1] <== encryptedVoteHashes[i];
+        encryptedVoteLeafHasher[i].inputs[1] <== encryptedVoteCommitments[i];
         encryptedVoteLeaves[i] <== isActive[i] * encryptedVoteLeafHasher[i].out;
     }
 
@@ -126,9 +175,9 @@ template EncryptedChoiceTally(maxVotes, maxOptions) {
     }
     optionCountsHasher.out === optionCountsHash;
 
-    component nullifierTree = PoseidonFixedRoot1();
-    component voteCommitmentTree = PoseidonFixedRoot1();
-    component encryptedVoteTree = PoseidonFixedRoot1();
+    component nullifierTree = PoseidonFixedRoot64();
+    component voteCommitmentTree = PoseidonFixedRoot64();
+    component encryptedVoteTree = PoseidonFixedRoot64();
 
     for (var i = 0; i < maxVotes; i++) {
         nullifierTree.leaves[i] <== nullifierLeaves[i];
@@ -153,4 +202,4 @@ component main {
         acceptedVoteCount,
         optionCountsHash
     ]
-} = EncryptedChoiceTally(1, 2);
+} = EncryptedChoiceTally(64, 8);

@@ -42,6 +42,7 @@ const PRODUCTION_VOTE_COMMITMENT = "6".repeat(64);
 const PRODUCTION_CREDENTIAL_ROOT = "7".repeat(64);
 const PRODUCTION_VERIFIER_KEY_HASH = "8".repeat(64);
 const PRODUCTION_PROOF_HASH = "9".repeat(64);
+const PRODUCTION_ENCRYPTED_VOTE_COMMITMENT = "a".repeat(64);
 const PRODUCTION_CIRCUIT_ID = "civicos-groth16-vote-circuit-v1";
 
 const sha256Hex = (value: string): string =>
@@ -187,6 +188,7 @@ const createPollZkVote = (
   vote_commitment: PRODUCTION_VOTE_COMMITMENT,
   encrypted_vote: createEncryptedVotePayload(),
   encrypted_vote_hash: hashEncryptedVotePayload(createEncryptedVotePayload()),
+  encrypted_vote_commitment: PRODUCTION_ENCRYPTED_VOTE_COMMITMENT,
   proof_hash: PRODUCTION_PROOF_HASH,
   proof_system_version: CIVIC_PRODUCTION_PROOF_SYSTEM_VERSION,
   verification_method_version: "civicos-mobile-verification-v1",
@@ -258,6 +260,7 @@ const createProductionVotePrivacyPayload = (
     nullifier: PRODUCTION_NULLIFIER,
     voteCommitment: PRODUCTION_VOTE_COMMITMENT,
     encryptedVoteHash,
+    encryptedVoteCommitment: PRODUCTION_ENCRYPTED_VOTE_COMMITMENT,
     verificationMethodVersion: "civicos-mobile-verification-v1",
     proofSystemVersion: CIVIC_PRODUCTION_PROOF_SYSTEM_VERSION,
     hashSuite: CIVIC_PRODUCTION_HASH_SUITE,
@@ -294,6 +297,7 @@ const createProductionVotePrivacyPayload = (
     nullifier: PRODUCTION_NULLIFIER,
     voteCommitment: PRODUCTION_VOTE_COMMITMENT,
     encryptedVoteHash,
+    encryptedVoteCommitment: PRODUCTION_ENCRYPTED_VOTE_COMMITMENT,
     proof: proof as unknown as ProductionVotePrivacyPayloadDto["proof"],
   };
 };
@@ -588,6 +592,7 @@ describe("pollVotingService.submitVote", () => {
             nullifier: PRODUCTION_NULLIFIER,
             voteCommitment: PRODUCTION_VOTE_COMMITMENT,
             encryptedVoteHash,
+            encryptedVoteCommitment: PRODUCTION_ENCRYPTED_VOTE_COMMITMENT,
             proofHash: PRODUCTION_PROOF_HASH,
             proofSystemVersion: CIVIC_PRODUCTION_PROOF_SYSTEM_VERSION,
             verificationMethodVersion: "civicos-mobile-verification-v1",
@@ -643,6 +648,7 @@ describe("pollVotingService.submitVote", () => {
           vote_commitment: input.vote_commitment,
           encrypted_vote: input.encrypted_vote,
           encrypted_vote_hash: input.encrypted_vote_hash,
+          encrypted_vote_commitment: input.encrypted_vote_commitment,
           proof_hash: input.proof_hash,
           proof_system_version: input.proof_system_version,
           verification_method_version: input.verification_method_version,
@@ -677,6 +683,7 @@ describe("pollVotingService.submitVote", () => {
         vote_commitment: PRODUCTION_VOTE_COMMITMENT,
         encrypted_vote: encryptedVote,
         encrypted_vote_hash: encryptedVoteHash,
+        encrypted_vote_commitment: PRODUCTION_ENCRYPTED_VOTE_COMMITMENT,
         proof_hash: PRODUCTION_PROOF_HASH,
         proof_system_version: CIVIC_PRODUCTION_PROOF_SYSTEM_VERSION,
         proof_verification_status: "verified",
@@ -786,6 +793,7 @@ describe("pollVotingService.submitVote", () => {
           nullifier: PRODUCTION_NULLIFIER,
           voteCommitment: PRODUCTION_VOTE_COMMITMENT,
           encryptedVoteHash,
+          encryptedVoteCommitment: PRODUCTION_ENCRYPTED_VOTE_COMMITMENT,
           proofHash: PRODUCTION_PROOF_HASH,
           proofSystemVersion: CIVIC_PRODUCTION_PROOF_SYSTEM_VERSION,
           verificationMethodVersion: "civicos-mobile-verification-v1",

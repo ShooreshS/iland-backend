@@ -2,7 +2,7 @@ import { requireSupabaseAdminClient } from "../db/supabaseClient";
 import type { NewPollZkVoteRow, PollZkVoteRow } from "../types/db";
 
 const POLL_ZK_VOTE_COLUMNS =
-  "id,poll_id,nullifier,vote_commitment,encrypted_vote,encrypted_vote_hash,proof_hash,proof_system_version,verification_method_version,proof_verification_status,proof_public_inputs_json,proof_envelope_hash,verifier_key_hash,circuit_id,accepted_at,batch_id,created_at";
+  "id,poll_id,nullifier,vote_commitment,encrypted_vote,encrypted_vote_hash,encrypted_vote_commitment,proof_hash,proof_system_version,verification_method_version,proof_verification_status,proof_public_inputs_json,proof_envelope_hash,verifier_key_hash,circuit_id,accepted_at,batch_id,created_at";
 
 export type PublicZkAuditVoteRecordRow = Pick<
   PollZkVoteRow,
@@ -11,6 +11,7 @@ export type PublicZkAuditVoteRecordRow = Pick<
   | "nullifier"
   | "vote_commitment"
   | "encrypted_vote_hash"
+  | "encrypted_vote_commitment"
   | "proof_hash"
   | "accepted_at"
   | "batch_id"
@@ -49,6 +50,7 @@ export const pollZkVoteRepository = {
         vote_commitment: input.vote_commitment,
         encrypted_vote: input.encrypted_vote,
         encrypted_vote_hash: input.encrypted_vote_hash,
+        encrypted_vote_commitment: input.encrypted_vote_commitment,
         proof_hash: input.proof_hash,
         proof_system_version: input.proof_system_version,
         verification_method_version: input.verification_method_version,
@@ -78,7 +80,7 @@ export const pollZkVoteRepository = {
     const { data, error } = await supabase
       .from("poll_zk_votes")
       .select(
-        "id,poll_id,nullifier,vote_commitment,encrypted_vote_hash,proof_hash,accepted_at,batch_id,created_at",
+        "id,poll_id,nullifier,vote_commitment,encrypted_vote_hash,encrypted_vote_commitment,proof_hash,accepted_at,batch_id,created_at",
       )
       .eq("poll_id", pollId)
       .eq("proof_verification_status", "verified")

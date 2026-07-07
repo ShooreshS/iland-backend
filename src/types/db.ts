@@ -606,6 +606,7 @@ export type PollZkVoteRow = {
   vote_commitment: string;
   encrypted_vote: JsonValue;
   encrypted_vote_hash: string;
+  encrypted_vote_commitment: string;
   proof_hash: string;
   proof_system_version: string;
   verification_method_version: string;
@@ -625,6 +626,7 @@ export type NewPollZkVoteRow = {
   vote_commitment: string;
   encrypted_vote: JsonValue;
   encrypted_vote_hash: string;
+  encrypted_vote_commitment: string;
   proof_hash: string;
   proof_system_version: string;
   verification_method_version: string;

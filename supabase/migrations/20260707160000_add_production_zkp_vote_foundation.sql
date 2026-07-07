@@ -51,6 +51,7 @@ create table if not exists public.poll_zk_votes (
   vote_commitment text not null,
   encrypted_vote jsonb not null,
   encrypted_vote_hash text not null,
+  encrypted_vote_commitment text not null,
   proof_hash text not null,
   proof_system_version text not null,
   verification_method_version text not null,
@@ -66,6 +67,7 @@ create table if not exists public.poll_zk_votes (
   check (nullifier ~ '^[0-9a-f]{64}$'),
   check (vote_commitment ~ '^[0-9a-f]{64}$'),
   check (encrypted_vote_hash ~ '^[0-9a-f]{64}$'),
+  check (encrypted_vote_commitment ~ '^[0-9a-f]{64}$'),
   check (proof_hash ~ '^[0-9a-f]{64}$'),
   check (proof_envelope_hash ~ '^[0-9a-f]{64}$'),
   check (verifier_key_hash ~ '^[0-9a-f]{64}$'),
@@ -86,6 +88,10 @@ comment on table public.poll_zk_votes is
   'Production ZKP vote ledger for anonymous secret-ballot polls. This table intentionally has no user_id, verified_identity_id, plaintext option_id, or location snapshot.';
 comment on column public.poll_zk_votes.encrypted_vote is
   'Encrypted vote payload. The backend stores ciphertext for tally/proof workflows, not a plaintext option id.';
+comment on column public.poll_zk_votes.encrypted_vote_hash is
+  'SHA-256 hash of the submitted encrypted vote payload for ciphertext integrity checks.';
+comment on column public.poll_zk_votes.encrypted_vote_commitment is
+  'Poseidon BN254 commitment to the encrypted vote opening used by vote and tally circuits.';
 comment on column public.poll_zk_votes.proof_verification_status is
   'Always verified for this table; pre-prover transition rows stay in public.votes.';
 

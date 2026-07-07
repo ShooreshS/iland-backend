@@ -286,6 +286,7 @@ export type Groth16VoteProofPublicInputsDto = {
   nullifier: string;
   voteCommitment: string;
   encryptedVoteHash: string;
+  encryptedVoteCommitment: string;
   verificationMethodVersion: string;
   proofSystemVersion: string;
   hashSuite: string;
@@ -322,6 +323,7 @@ export type ProductionVotePrivacyPayloadDto = {
   nullifier: string;
   voteCommitment: string;
   encryptedVoteHash: string;
+  encryptedVoteCommitment: string;
   proof: Groth16VoteProofEnvelopeDto;
 };
 
