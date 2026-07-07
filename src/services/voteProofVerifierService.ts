@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import type {
+  PreproverVotePrivacyPayloadDto,
   VotePrivacyPayloadDto,
   VoteProofEnvelopeDto,
   VoteProofPublicInputsDto,
@@ -100,8 +101,15 @@ const pollHasFrozenProofMaterial = (
       normalizeHex64(poll.credential_schema_hash),
   );
 
-const validateProofEnvelopeShape = (
+const isPreproverVotePrivacyPayload = (
   privacy: VotePrivacyPayloadDto,
+): privacy is PreproverVotePrivacyPayloadDto =>
+  !("votePrivacyMode" in privacy) &&
+  "reason" in privacy.proof &&
+  !("protocol" in privacy.proof);
+
+const validateProofEnvelopeShape = (
+  privacy: PreproverVotePrivacyPayloadDto,
 ): VoteProofEnvelopeShapeResult => {
   if (
     privacy.version !== CIVIC_VOTE_PRIVACY_VERSION ||
@@ -180,6 +188,14 @@ export const verifyVoteProofForPoll = (params: {
       ok: false,
       reason: "PROOF_REQUIRED",
       message: "This poll requires vote proof metadata.",
+    };
+  }
+
+  if (!isPreproverVotePrivacyPayload(privacy)) {
+    return {
+      ok: false,
+      reason: "PROOF_INVALID",
+      message: "Production Groth16 proof envelopes must use the production verifier path.",
     };
   }
 

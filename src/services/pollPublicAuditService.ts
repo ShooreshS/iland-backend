@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import env from "../config/env";
 import pollAuditRepository from "../repositories/pollAuditRepository";
 import pollRepository from "../repositories/pollRepository";
+import pollZkVoteRepository from "../repositories/pollZkVoteRepository";
 import voteRepository from "../repositories/voteRepository";
 import type {
   PollOptionResultDto,
@@ -16,6 +17,7 @@ import type {
   PublicPollAuditDto,
 } from "../types/contracts";
 import type { PollOptionRow, PollRootRow, PollRow } from "../types/db";
+import { CIVIC_PRODUCTION_VOTE_PRIVACY_MODE } from "./groth16ProofVerifierService";
 import { hashCanonicalJson } from "./pollPolicyService";
 import solanaAuditPublisherService, {
   type SolanaAuditPublicationResult,
@@ -216,7 +218,7 @@ const buildResultsSummary = (
 ): PollResultsSummaryDto => {
   const optionResults = buildOptionResults(options, params);
   const winningOption =
-    params.totalVotes > 0
+    params.totalVotes > 0 && optionResults.some((entry) => entry.count > 0)
       ? optionResults.reduce<PollOptionResultDto | null>((winner, candidate) => {
           if (!winner || candidate.count > winner.count) {
             return candidate;
@@ -294,9 +296,7 @@ const buildWarnings = (input: {
 };
 
 const buildAuditTrees = (
-  records: Awaited<
-    ReturnType<typeof voteRepository.getAcceptedAuditRecordsByPollId>
-  >,
+  records: PublicAuditRecordRow[],
 ): {
   nullifierTree: PublicAuditMerkleTree;
   voteCommitmentTree: PublicAuditMerkleTree;
@@ -314,9 +314,20 @@ const buildAuditTrees = (
   };
 };
 
+type PublicAuditRecordRow = {
+  id: string;
+  poll_id: string;
+  nullifier: string | null;
+  vote_commitment: string | null;
+  proof_hash: string | null;
+  accepted_at: string | null;
+  batch_id: string | null;
+  created_at: string;
+};
+
 type PollAuditMaterial = Readonly<{
   options: PollOptionRow[];
-  auditRecords: Awaited<ReturnType<typeof voteRepository.getAcceptedAuditRecordsByPollId>>;
+  auditRecords: PublicAuditRecordRow[];
   totalValidVoteCount: number;
   acceptedVoteCount: number;
   nullifierTree: PublicAuditMerkleTree;
@@ -373,21 +384,41 @@ const isPollFinalResultPublishable = (poll: PollRow): boolean => {
   return new Date(poll.ends_at).getTime() <= Date.now();
 };
 
+const isProductionZkpPoll = (poll: PollRow): boolean =>
+  poll.vote_privacy_mode === CIVIC_PRODUCTION_VOTE_PRIVACY_MODE;
+
+const getAcceptedAuditRecordsByPoll = async (
+  poll: PollRow,
+): Promise<PublicAuditRecordRow[]> =>
+  isProductionZkpPoll(poll)
+    ? pollZkVoteRepository.getAcceptedAuditRecordsByPollId(poll.id)
+    : voteRepository.getAcceptedAuditRecordsByPollId(poll.id);
+
+const countValidVotesByPoll = async (poll: PollRow): Promise<number> =>
+  isProductionZkpPoll(poll)
+    ? pollZkVoteRepository.countAcceptedByPollId(poll.id)
+    : voteRepository.countValidByPollId(poll.id);
+
 const loadPollAuditMaterial = async (poll: PollRow): Promise<PollAuditMaterial> => {
+  const productionPoll = isProductionZkpPoll(poll);
   const [options, auditRecords, totalValidVoteCount, latestSubmittedAt] =
     await Promise.all([
       pollRepository.getOptionsByPollId(poll.id),
-      voteRepository.getAcceptedAuditRecordsByPollId(poll.id),
-      voteRepository.countValidByPollId(poll.id),
-      voteRepository.getLatestValidSubmittedAtByPollId(poll.id),
+      getAcceptedAuditRecordsByPoll(poll),
+      countValidVotesByPoll(poll),
+      productionPoll
+        ? Promise.resolve(null)
+        : voteRepository.getLatestValidSubmittedAtByPollId(poll.id),
     ]);
 
-  const optionCountEntries = await Promise.all(
-    options.map(async (option) => [
-      option.id,
-      await voteRepository.countValidByPollIdAndOptionId(poll.id, option.id),
-    ] as const),
-  );
+  const optionCountEntries = productionPoll
+    ? options.map((option) => [option.id, 0] as const)
+    : await Promise.all(
+        options.map(async (option) => [
+          option.id,
+          await voteRepository.countValidByPollIdAndOptionId(poll.id, option.id),
+        ] as const),
+      );
   const countsByOptionId = optionCountEntries.reduce<Record<string, number>>(
     (acc, [optionId, count]) => {
       acc[optionId] = count;
@@ -581,7 +612,10 @@ export const pollPublicAuditService = {
           accepted_count: material.acceptedVoteCount,
           solana_tx_signature: publication.rootCommitSignature,
         });
-        await voteRepository.markAcceptedAuditRecordsBatch({
+        const auditRecordRepository = isProductionZkpPoll(poll)
+          ? pollZkVoteRepository
+          : voteRepository;
+        await auditRecordRepository.markAcceptedAuditRecordsBatch({
           pollId: poll.id,
           batchId: "0",
         });
@@ -664,9 +698,7 @@ export const pollPublicAuditService = {
       };
     }
 
-    const auditRecords = await voteRepository.getAcceptedAuditRecordsByPollId(
-      input.pollId,
-    );
+    const auditRecords = await getAcceptedAuditRecordsByPoll(poll);
     const { nullifierTree, voteCommitmentTree } = buildAuditTrees(auditRecords);
     const tree =
       input.tree === "nullifier" ? nullifierTree : voteCommitmentTree;
@@ -731,9 +763,7 @@ export const pollPublicAuditService = {
       "vote_commitment",
       normalizedVoteCommitment,
     );
-    const auditRecords = await voteRepository.getAcceptedAuditRecordsByPollId(
-      input.pollId,
-    );
+    const auditRecords = await getAcceptedAuditRecordsByPoll(poll);
     const { voteCommitmentTree } = buildAuditTrees(auditRecords);
     const leafIndex = voteCommitmentTree.leafHashes.findIndex(
       (leafHash) => leafHash === voteCommitmentLeafHash,

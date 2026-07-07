@@ -1,8 +1,17 @@
 import identityProfileRepository from "../repositories/identityProfileRepository";
 import pollMapRefreshQueueRepository from "../repositories/pollMapRefreshQueueRepository";
 import pollRepository from "../repositories/pollRepository";
+import pollZkVoteRepository from "../repositories/pollZkVoteRepository";
 import verifiedIdentityRepository from "../repositories/verifiedIdentityRepository";
 import voteRepository from "../repositories/voteRepository";
+import {
+  CIVIC_PRODUCTION_ENCRYPTED_VOTE_VERSION,
+  CIVIC_PRODUCTION_HASH_SUITE,
+  CIVIC_PRODUCTION_VOTE_PRIVACY_MODE,
+  hashEncryptedVotePayload,
+  verifyGroth16VoteProofForPoll,
+  type Groth16VoteProofEnvelopeDto,
+} from "./groth16ProofVerifierService";
 import {
   normalizeCountryCode,
   resolveCivicPollPolicy,
@@ -24,6 +33,7 @@ import type {
   PollVotePrivacyMode,
 } from "../types/contracts";
 import type { PollOptionRow, PollRow, UserRow } from "../types/db";
+import type { JsonValue } from "../types/json";
 
 const POLL_STATUS_SORT_ORDER: Record<PollDto["status"], number> = {
   active: 0,
@@ -115,6 +125,22 @@ const DUPLICATE_NULLIFIER_VOTE_MESSAGE =
   "Only one vote per proof nullifier and poll is allowed.";
 const VERIFIED_IDENTITY_REQUIRED_MESSAGE =
   "This poll requires a linked verified identity.";
+const PRODUCTION_ZKP_ENCRYPTED_VOTE_REQUIRED_MESSAGE =
+  "This poll requires an encrypted vote payload.";
+
+type ProductionEncryptedVotePayload = {
+  version: typeof CIVIC_PRODUCTION_ENCRYPTED_VOTE_VERSION;
+  pollEncryptionKeyId: string;
+  ciphertext: string;
+  nonce: string;
+  algorithm: string;
+  optionSetHash: string;
+};
+
+type PollVotingServiceDependencies = {
+  verifyGroth16VoteProofForPoll?: typeof verifyGroth16VoteProofForPoll;
+  hashEncryptedVotePayload?: typeof hashEncryptedVotePayload;
+};
 
 const buildVoteReceipt = (input: {
   pollId: string;
@@ -146,6 +172,135 @@ const isUniqueViolation = (error: unknown): boolean => {
 
   const maybeCode = (error as { code?: unknown }).code;
   return maybeCode === "23505";
+};
+
+const isPlainObject = (value: unknown): value is Record<string, unknown> =>
+  value !== null && typeof value === "object" && !Array.isArray(value);
+
+const toStringOrEmpty = (value: unknown): string =>
+  typeof value === "string" ? value.trim() : "";
+
+const HEX_64_PATTERN = /^[0-9a-f]{64}$/;
+
+const normalizeHex64 = (value: unknown): string | null => {
+  const normalized = toStringOrEmpty(value).toLowerCase();
+  return HEX_64_PATTERN.test(normalized) ? normalized : null;
+};
+
+const isProductionZkpPoll = (poll: PollRow): boolean =>
+  normalizeVotePrivacyMode(poll.vote_privacy_mode) ===
+  CIVIC_PRODUCTION_VOTE_PRIVACY_MODE;
+
+const normalizeProductionEncryptedVotePayload = (
+  encryptedVote: unknown,
+  poll: PollRow,
+): ProductionEncryptedVotePayload | null => {
+  if (!isPlainObject(encryptedVote)) {
+    return null;
+  }
+
+  const allowedKeys = new Set([
+    "version",
+    "pollEncryptionKeyId",
+    "ciphertext",
+    "nonce",
+    "algorithm",
+    "optionSetHash",
+  ]);
+  if (Object.keys(encryptedVote).some((key) => !allowedKeys.has(key))) {
+    return null;
+  }
+
+  const optionSetHash = normalizeHex64(encryptedVote.optionSetHash);
+  const normalized = {
+    version: toStringOrEmpty(encryptedVote.version),
+    pollEncryptionKeyId: toStringOrEmpty(encryptedVote.pollEncryptionKeyId),
+    ciphertext: toStringOrEmpty(encryptedVote.ciphertext),
+    nonce: toStringOrEmpty(encryptedVote.nonce),
+    algorithm: toStringOrEmpty(encryptedVote.algorithm),
+    optionSetHash,
+  };
+
+  if (
+    normalized.version !== CIVIC_PRODUCTION_ENCRYPTED_VOTE_VERSION ||
+    !normalized.pollEncryptionKeyId ||
+    !normalized.ciphertext ||
+    !normalized.nonce ||
+    !normalized.algorithm ||
+    !normalized.optionSetHash
+  ) {
+    return null;
+  }
+
+  if (
+    poll.poll_encryption_key_id &&
+    normalized.pollEncryptionKeyId !== poll.poll_encryption_key_id
+  ) {
+    return null;
+  }
+
+  const pollOptionSetHash = normalizeHex64(poll.option_set_hash);
+  if (!pollOptionSetHash || normalized.optionSetHash !== pollOptionSetHash) {
+    return null;
+  }
+
+  return normalized as ProductionEncryptedVotePayload;
+};
+
+const normalizeProductionPrivacyPayload = (
+  privacy: VotePrivacyPayloadDto | null | undefined,
+): {
+  proof: Groth16VoteProofEnvelopeDto;
+  voteCommitment: string;
+  encryptedVoteHash: string;
+} | null => {
+  const candidate = privacy as
+    | (VotePrivacyPayloadDto & {
+        votePrivacyMode?: unknown;
+        voteCommitment?: unknown;
+        encryptedVoteHash?: unknown;
+        proof?: unknown;
+      })
+    | null
+    | undefined;
+
+  if (!candidate || !isPlainObject(candidate.proof)) {
+    return null;
+  }
+
+  const nullifier = normalizeHex64(candidate.nullifier);
+  const proofPublicInputs = (candidate.proof as { publicInputs?: unknown })
+    .publicInputs;
+  if (!isPlainObject(proofPublicInputs)) {
+    return null;
+  }
+
+  const proofNullifier = normalizeHex64(proofPublicInputs.nullifier);
+  const voteCommitment =
+    normalizeHex64(candidate.voteCommitment) ||
+    normalizeHex64(proofPublicInputs.voteCommitment);
+  const encryptedVoteHash =
+    normalizeHex64(candidate.encryptedVoteHash) ||
+    normalizeHex64(proofPublicInputs.encryptedVoteHash);
+
+  if (
+    toStringOrEmpty(candidate.version) !== "civicos-vote-privacy-v1" ||
+    toStringOrEmpty(candidate.votePrivacyMode) !== CIVIC_PRODUCTION_VOTE_PRIVACY_MODE ||
+    toStringOrEmpty(candidate.hashSuite) !== CIVIC_PRODUCTION_HASH_SUITE ||
+    !nullifier ||
+    !proofNullifier ||
+    nullifier !== proofNullifier ||
+    !voteCommitment ||
+    !encryptedVoteHash
+  ) {
+    return null;
+  }
+
+  return {
+    proof: candidate.proof as Groth16VoteProofEnvelopeDto,
+    voteCommitment,
+    encryptedVoteHash,
+  };
 };
 
 const sortSummaries = (summaries: PollSummaryDto[]): PollSummaryDto[] =>
@@ -188,7 +343,7 @@ const buildResults = (
   });
 
   const winningOption =
-    normalizedTotalVotes > 0
+    normalizedTotalVotes > 0 && optionResults.some((entry) => entry.count > 0)
       ? optionResults.reduce<typeof optionResults[number] | null>((winner, candidate) => {
           if (!winner || candidate.count > winner.count) {
             return candidate;
@@ -384,7 +539,15 @@ const resolveVoteLocationSnapshot = (
   };
 };
 
-export const pollVotingService = {
+export const createPollVotingService = (
+  dependencies: PollVotingServiceDependencies = {},
+) => {
+  const verifyProductionVoteProof =
+    dependencies.verifyGroth16VoteProofForPoll ?? verifyGroth16VoteProofForPoll;
+  const hashProductionEncryptedVote =
+    dependencies.hashEncryptedVotePayload ?? hashEncryptedVotePayload;
+
+  return {
   async getPollSummaries(viewerUserId: string): Promise<PollSummaryDto[]> {
     const polls = await pollRepository.listAll();
     if (polls.length === 0) {
@@ -393,13 +556,22 @@ export const pollVotingService = {
 
     const pollIds = polls.map((poll) => poll.id);
 
+    const productionPollIds = new Set(
+      polls.filter(isProductionZkpPoll).map((poll) => poll.id),
+    );
+
     const [options, viewerVotes, totalValidVotesByPoll] = await Promise.all([
       pollRepository.getOptionsByPollIds(pollIds),
       voteRepository.getViewerVotesByPollIds(viewerUserId, pollIds),
       Promise.all(
-        pollIds.map(
-          async (pollId) =>
-            [pollId, await voteRepository.countValidByPollId(pollId)] as const,
+        polls.map(
+          async (poll) =>
+            [
+              poll.id,
+              productionPollIds.has(poll.id)
+                ? await pollZkVoteRepository.countAcceptedByPollId(poll.id)
+                : await voteRepository.countValidByPollId(poll.id),
+            ] as const,
         ),
       ),
     ]);
@@ -417,7 +589,11 @@ export const pollVotingService = {
       {},
     );
 
-    const viewerVotedPollIds = new Set(viewerVotes.map((vote) => vote.poll_id));
+    const viewerVotedPollIds = new Set(
+      viewerVotes
+        .filter((vote) => !productionPollIds.has(vote.poll_id))
+        .map((vote) => vote.poll_id),
+    );
 
     const summaries = polls.map((poll) => ({
       poll: mapPoll(poll),
@@ -435,19 +611,28 @@ export const pollVotingService = {
       return null;
     }
 
+    const productionPoll = isProductionZkpPoll(pollRow);
     const [optionRows, viewerVote, exactTotalVotes, latestSubmittedAt] = await Promise.all([
       pollRepository.getOptionsByPollId(pollId),
-      voteRepository.getByUserIdAndPollId(viewerUserId, pollId),
-      voteRepository.countValidByPollId(pollId),
-      voteRepository.getLatestValidSubmittedAtByPollId(pollId),
+      productionPoll
+        ? Promise.resolve(null)
+        : voteRepository.getByUserIdAndPollId(viewerUserId, pollId),
+      productionPoll
+        ? pollZkVoteRepository.countAcceptedByPollId(pollId)
+        : voteRepository.countValidByPollId(pollId),
+      productionPoll
+        ? Promise.resolve(null)
+        : voteRepository.getLatestValidSubmittedAtByPollId(pollId),
     ]);
 
-    const optionCountEntries = await Promise.all(
-      optionRows.map(async (option) => [
-        option.id,
-        await voteRepository.countValidByPollIdAndOptionId(pollId, option.id),
-      ] as const),
-    );
+    const optionCountEntries = productionPoll
+      ? optionRows.map((option) => [option.id, 0] as const)
+      : await Promise.all(
+          optionRows.map(async (option) => [
+            option.id,
+            await voteRepository.countValidByPollIdAndOptionId(pollId, option.id),
+          ] as const),
+        );
     const countsByOptionId = optionCountEntries.reduce<Record<string, number>>(
       (acc, [optionId, count]) => {
         acc[optionId] = count;
@@ -485,6 +670,7 @@ export const pollVotingService = {
     viewer: UserRow;
     privacy?: VotePrivacyPayloadDto | null;
     expectedVoteCommitment?: string | null;
+    encryptedVote?: unknown;
   }): Promise<VoteSubmissionResultDto> {
     const { pollId, optionId, viewer, privacy } = params;
 
@@ -511,6 +697,7 @@ export const pollVotingService = {
     const pollPolicy = resolvePolicyForPoll(poll);
     const requiresVerifiedIdentity =
       pollPolicy.eligibilityRules.requiresVerifiedIdentity;
+    const productionZkpPoll = isProductionZkpPoll(poll);
 
     const optionInPoll = await pollRepository.getOptionByIdForPoll(pollId, optionId);
     if (!optionInPoll) {
@@ -546,14 +733,23 @@ export const pollVotingService = {
       }
 
       verifiedIdentityId = verifiedIdentity.id;
-      const existingVote = await voteRepository.getByVerifiedIdentityIdAndPollId(
-        verifiedIdentity.id,
-        pollId,
-      );
-      if (existingVote) {
-        return buildFailure("ALREADY_VOTED", DUPLICATE_VERIFIED_IDENTITY_VOTE_MESSAGE);
+      if (!productionZkpPoll) {
+        const existingVote = await voteRepository.getByVerifiedIdentityIdAndPollId(
+          verifiedIdentity.id,
+          pollId,
+        );
+        if (existingVote) {
+          return buildFailure("ALREADY_VOTED", DUPLICATE_VERIFIED_IDENTITY_VOTE_MESSAGE);
+        }
       }
     } else {
+      if (productionZkpPoll) {
+        return buildFailure(
+          "ELIGIBILITY_FAILED",
+          "Production ZKP polls require verified identity eligibility.",
+        );
+      }
+
       const existingVote = await voteRepository.getByUserIdAndPollId(viewer.id, pollId);
       if (existingVote) {
         return buildFailure("ALREADY_VOTED", DUPLICATE_USER_VOTE_MESSAGE);
@@ -588,6 +784,113 @@ export const pollVotingService = {
     );
     if (eligibilityFailure) {
       return eligibilityFailure;
+    }
+
+    if (productionZkpPoll) {
+      const normalizedEncryptedVote = normalizeProductionEncryptedVotePayload(
+        params.encryptedVote,
+        poll,
+      );
+      if (!normalizedEncryptedVote) {
+        return buildFailure(
+          "PROOF_REQUIRED",
+          PRODUCTION_ZKP_ENCRYPTED_VOTE_REQUIRED_MESSAGE,
+        );
+      }
+
+      const productionPrivacy = normalizeProductionPrivacyPayload(privacy);
+      if (!productionPrivacy) {
+        return buildFailure(
+          "PROOF_REQUIRED",
+          "This poll requires production Groth16 vote proof metadata.",
+        );
+      }
+
+      const encryptedVoteJson = normalizedEncryptedVote as JsonValue;
+      const encryptedVoteHash = hashProductionEncryptedVote(encryptedVoteJson);
+      if (productionPrivacy.encryptedVoteHash !== encryptedVoteHash) {
+        return buildFailure(
+          "PROOF_INVALID",
+          "Encrypted vote hash does not match the submitted encrypted vote payload.",
+        );
+      }
+
+      const proofVerification = await verifyProductionVoteProof({
+        poll,
+        proof: productionPrivacy.proof,
+        encryptedVoteHash,
+        expectedVoteCommitment:
+          params.expectedVoteCommitment || productionPrivacy.voteCommitment,
+      });
+      if (!proofVerification.ok) {
+        return buildFailure(
+          proofVerification.reason === "PROOF_REQUIRED"
+            ? "PROOF_REQUIRED"
+            : "PROOF_INVALID",
+          proofVerification.message,
+        );
+      }
+
+      const proofAuditMaterial = proofVerification.auditMaterial;
+      if (!proofAuditMaterial) {
+        return buildFailure(
+          "PROOF_INVALID",
+          "Production ZKP vote proof did not produce audit material.",
+        );
+      }
+
+      const existingNullifierVote =
+        await pollZkVoteRepository.getByPollIdAndNullifier(
+          pollId,
+          proofAuditMaterial.nullifier,
+        );
+      if (existingNullifierVote) {
+        return buildFailure("ALREADY_VOTED", DUPLICATE_NULLIFIER_VOTE_MESSAGE);
+      }
+
+      try {
+        const insertedVote = await pollZkVoteRepository.insertVerified({
+          poll_id: pollId,
+          nullifier: proofAuditMaterial.nullifier,
+          vote_commitment: proofAuditMaterial.voteCommitment,
+          encrypted_vote: encryptedVoteJson,
+          encrypted_vote_hash: proofAuditMaterial.encryptedVoteHash,
+          proof_hash: proofAuditMaterial.proofHash,
+          proof_system_version: proofAuditMaterial.proofSystemVersion,
+          verification_method_version:
+            proofAuditMaterial.verificationMethodVersion,
+          proof_verification_status: proofAuditMaterial.proofVerificationStatus,
+          proof_public_inputs_json:
+            proofAuditMaterial.proofPublicInputsJson as unknown as JsonValue,
+          proof_envelope_hash: proofAuditMaterial.proofEnvelopeHash,
+          verifier_key_hash: proofAuditMaterial.verifierKeyHash,
+          circuit_id: proofAuditMaterial.circuitId,
+          accepted_at: submittedAt,
+          batch_id: null,
+        });
+
+        return {
+          success: true,
+          viewerVote: {
+            pollId: insertedVote.poll_id,
+            optionId,
+            submittedAt: insertedVote.accepted_at,
+          },
+          receipt: buildVoteReceipt({
+            pollId: insertedVote.poll_id,
+            optionId,
+            voteCommitment: insertedVote.vote_commitment,
+            proofHash: insertedVote.proof_hash,
+            acceptedAt: insertedVote.accepted_at,
+          }),
+        };
+      } catch (error) {
+        if (isUniqueViolation(error)) {
+          return buildFailure("ALREADY_VOTED", DUPLICATE_NULLIFIER_VOTE_MESSAGE);
+        }
+
+        throw error;
+      }
     }
 
     const proofVerification = verifyVoteProofForPoll({
@@ -695,6 +998,9 @@ export const pollVotingService = {
       throw error;
     }
   },
+  };
 };
+
+export const pollVotingService = createPollVotingService();
 
 export default pollVotingService;

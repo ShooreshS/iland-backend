@@ -43,6 +43,26 @@ const voteProofPublicInputsSchema = z
   })
   .strict();
 
+const productionVoteProofPublicInputsSchema = z
+  .object({
+    version: z.string().trim().min(1),
+    pollId: z.string().trim().min(1),
+    pollPolicyHash: hex64Schema,
+    credentialSchemaHash: hex64Schema,
+    optionSetHash: hex64Schema,
+    credentialRoot: hex64Schema,
+    nullifier: hex64Schema,
+    voteCommitment: hex64Schema,
+    encryptedVoteHash: hex64Schema,
+    verificationMethodVersion: z.string().trim().min(1),
+    proofSystemVersion: z.string().trim().min(1),
+    hashSuite: z.string().trim().min(1),
+    circuitId: z.string().trim().min(1),
+    verifierKeyHash: hex64Schema,
+    publicInputSchemaVersion: z.string().trim().min(1),
+  })
+  .strict();
+
 const voteProofEnvelopeSchema = z
   .object({
     version: z.string().trim().min(1),
@@ -59,7 +79,23 @@ const voteProofEnvelopeSchema = z
     publicInputsHash: value.publicInputsHash ?? null,
   }));
 
-const votePrivacySchema = z
+const productionVoteProofEnvelopeSchema = z
+  .object({
+    version: z.string().trim().min(1),
+    protocol: z.literal("groth16"),
+    proofSystemVersion: z.string().trim().min(1),
+    status: z.string().trim().min(1),
+    hashSuite: z.string().trim().min(1),
+    circuitId: z.string().trim().min(1),
+    verifierKeyHash: hex64Schema,
+    publicInputSchemaVersion: z.string().trim().min(1),
+    proof: z.record(z.unknown()),
+    publicInputs: productionVoteProofPublicInputsSchema,
+    publicInputsHash: hex64Schema,
+  })
+  .strict();
+
+const preproverVotePrivacySchema = z
   .object({
     version: z.string().trim().min(1),
     hashSuite: z.string().trim().min(1),
@@ -68,9 +104,43 @@ const votePrivacySchema = z
   })
   .strict();
 
+const productionVotePrivacySchema = z
+  .object({
+    version: z.string().trim().min(1),
+    votePrivacyMode: z.literal("zk_secret_ballot_v1"),
+    hashSuite: z.string().trim().min(1),
+    nullifier: hex64Schema,
+    voteCommitment: hex64Schema,
+    encryptedVoteHash: hex64Schema,
+    proof: productionVoteProofEnvelopeSchema,
+  })
+  .strict();
+
+const votePrivacySchema = z.union([
+  preproverVotePrivacySchema,
+  productionVotePrivacySchema,
+]);
+
+const encryptedVoteSchema = z
+  .object({
+    version: z.literal("civicos-encrypted-vote-v1"),
+    pollEncryptionKeyId: z.string().trim().min(1),
+    ciphertext: z.string().trim().min(1),
+    nonce: z.string().trim().min(1),
+    algorithm: z.string().trim().min(1),
+    optionSetHash: hex64Schema,
+  })
+  .strict();
+
 const phase10ProofSchema = z.union([
   voteProofEnvelopeSchema,
+  productionVoteProofEnvelopeSchema,
   z.string().trim().min(1),
+]);
+
+const voteRequestPublicInputsSchema = z.union([
+  voteProofPublicInputsSchema,
+  productionVoteProofPublicInputsSchema,
 ]);
 
 const voteRequestSchema = z
@@ -80,9 +150,9 @@ const voteRequestSchema = z
     pollPolicyHash: hex64Schema.optional(),
     nullifier: hex64Schema.optional(),
     voteCommitment: hex64Schema.nullable().optional(),
-    encryptedVote: z.unknown().optional(),
+    encryptedVote: encryptedVoteSchema.optional(),
     proof: phase10ProofSchema.optional(),
-    publicInputs: voteProofPublicInputsSchema.optional(),
+    publicInputs: voteRequestPublicInputsSchema.optional(),
     feeMode: z.enum(["civicos-sponsored", "user-paid"]).nullable().optional(),
     privacy: votePrivacySchema.nullable().optional(),
   })
@@ -618,24 +688,70 @@ const buildVotePrivacyFromRequest = (
     return null;
   }
 
+  if ("protocol" in requestBody.proof && requestBody.proof.protocol === "groth16") {
+    const productionProof = requestBody.proof as z.infer<
+      typeof productionVoteProofEnvelopeSchema
+    >;
+    return {
+      version: "civicos-vote-privacy-v1",
+      votePrivacyMode: "zk_secret_ballot_v1",
+      hashSuite: productionProof.hashSuite,
+      nullifier: requestBody.nullifier || productionProof.publicInputs.nullifier,
+      voteCommitment: productionProof.publicInputs.voteCommitment,
+      encryptedVoteHash: productionProof.publicInputs.encryptedVoteHash,
+      proof: productionProof,
+    } as VoteSubmissionRequestDto["privacy"];
+  }
+
+  const preproverProof = requestBody.proof as z.infer<
+    typeof voteProofEnvelopeSchema
+  >;
   return {
     version: "civicos-vote-privacy-v1",
     hashSuite: "sha256-sha512-preposeidon-v1",
-    nullifier: requestBody.nullifier || requestBody.proof.publicInputs.nullifier,
-    proof: requestBody.proof,
+    nullifier: requestBody.nullifier || preproverProof.publicInputs.nullifier,
+    proof: preproverProof,
   };
 };
 
 const publicInputsMatch = (
-  left: z.infer<typeof voteProofPublicInputsSchema>,
-  right: z.infer<typeof voteProofPublicInputsSchema>,
-): boolean =>
-  left.pollId === right.pollId &&
-  left.pollPolicyHash === right.pollPolicyHash &&
-  left.credentialSchemaHash === right.credentialSchemaHash &&
-  left.nullifier === right.nullifier &&
-  left.verificationMethodVersion === right.verificationMethodVersion &&
-  left.proofSystemVersion === right.proofSystemVersion;
+  left: z.infer<typeof voteRequestPublicInputsSchema>,
+  right: z.infer<typeof voteRequestPublicInputsSchema>,
+): boolean => {
+  const baseMatches =
+    left.pollId === right.pollId &&
+    left.pollPolicyHash === right.pollPolicyHash &&
+    left.credentialSchemaHash === right.credentialSchemaHash &&
+    left.nullifier === right.nullifier &&
+    left.verificationMethodVersion === right.verificationMethodVersion &&
+    left.proofSystemVersion === right.proofSystemVersion;
+
+  if (!baseMatches) {
+    return false;
+  }
+
+  const leftProduction = "publicInputSchemaVersion" in left;
+  const rightProduction = "publicInputSchemaVersion" in right;
+  if (leftProduction !== rightProduction) {
+    return false;
+  }
+
+  if (!leftProduction || !rightProduction) {
+    return true;
+  }
+
+  return (
+    left.version === right.version &&
+    left.optionSetHash === right.optionSetHash &&
+    left.credentialRoot === right.credentialRoot &&
+    left.voteCommitment === right.voteCommitment &&
+    left.encryptedVoteHash === right.encryptedVoteHash &&
+    left.hashSuite === right.hashSuite &&
+    left.circuitId === right.circuitId &&
+    left.verifierKeyHash === right.verifierKeyHash &&
+    left.publicInputSchemaVersion === right.publicInputSchemaVersion
+  );
+};
 
 const createSubmitVoteRoute = (path: string): RouteDefinition => ({
   method: "POST",
@@ -739,6 +855,7 @@ const createSubmitVoteRoute = (path: string): RouteDefinition => ({
       optionId: parsedBody.data.optionId,
       privacy,
       expectedVoteCommitment: parsedBody.data.voteCommitment ?? null,
+      encryptedVote: parsedBody.data.encryptedVote,
       viewer: viewerResult.viewer.user,
     });
 

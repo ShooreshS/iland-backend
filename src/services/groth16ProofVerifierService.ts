@@ -18,6 +18,8 @@ export const CIVIC_PRODUCTION_PROOF_GENERATED_STATUS = "generated" as const;
 export const CIVIC_PRODUCTION_PROOF_VERIFICATION_MODE =
   "off_chain_groth16" as const;
 export const CIVIC_PRODUCTION_PROOF_VERIFICATION_STATUS = "verified" as const;
+export const CIVIC_PRODUCTION_ENCRYPTED_VOTE_VERSION =
+  "civicos-encrypted-vote-v1" as const;
 
 const CIVIC_ZKP_DOMAIN = "org.civicos.zkp" as const;
 const HEX_64_PATTERN = /^[0-9a-f]{64}$/;
@@ -141,6 +143,11 @@ export const hashGroth16VoteProofEnvelope = (
 ): string =>
   sha256Hex(
     `${CIVIC_ZKP_DOMAIN}|groth16-vote-proof-envelope|${canonicalizeJson(proof)}`,
+  );
+
+export const hashEncryptedVotePayload = (encryptedVote: JsonValue): string =>
+  sha256Hex(
+    `${CIVIC_ZKP_DOMAIN}|encrypted-vote|${canonicalizeJson(encryptedVote)}`,
   );
 
 export const getGroth16VerifierConfig = (): Groth16VerifierConfig => ({
@@ -393,6 +400,7 @@ export const verifyGroth16VoteProofForPoll = async (
 
 export default {
   getGroth16VerifierConfig,
+  hashEncryptedVotePayload,
   hashGroth16VoteProofEnvelope,
   hashGroth16VotePublicInputs,
   isGroth16VoteVerifierConfigured,

@@ -7,7 +7,10 @@ import {
   verifyVoteProofForPoll,
 } from "./voteProofVerifierService";
 import type { PollRow } from "../types/db";
-import type { VotePrivacyPayloadDto } from "../types/contracts";
+import type {
+  PreproverVotePrivacyPayloadDto,
+  VotePrivacyPayloadDto,
+} from "../types/contracts";
 
 const FIXED_TIME = "2026-07-04T12:00:00.000Z";
 const POLL_POLICY_HASH = "1".repeat(64);
@@ -52,7 +55,7 @@ const createPrivacy = (
     nullifier?: string;
     publicInputsHash?: string | null;
   } = {},
-): VotePrivacyPayloadDto => {
+): PreproverVotePrivacyPayloadDto => {
   const publicInputs = {
     pollId: overrides.pollId ?? "poll-1",
     pollPolicyHash: overrides.pollPolicyHash ?? POLL_POLICY_HASH,

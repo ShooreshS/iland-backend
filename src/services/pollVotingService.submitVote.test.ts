@@ -3,24 +3,46 @@ import { createHash } from "node:crypto";
 import identityProfileRepository from "../repositories/identityProfileRepository";
 import pollMapRefreshQueueRepository from "../repositories/pollMapRefreshQueueRepository";
 import pollRepository from "../repositories/pollRepository";
+import pollZkVoteRepository from "../repositories/pollZkVoteRepository";
 import verifiedIdentityRepository from "../repositories/verifiedIdentityRepository";
 import voteRepository from "../repositories/voteRepository";
+import {
+  CIVIC_PRODUCTION_HASH_SUITE,
+  CIVIC_PRODUCTION_PROOF_ENVELOPE_VERSION,
+  CIVIC_PRODUCTION_PROOF_GENERATED_STATUS,
+  CIVIC_PRODUCTION_PROOF_PROTOCOL,
+  CIVIC_PRODUCTION_PROOF_SYSTEM_VERSION,
+  CIVIC_PRODUCTION_PUBLIC_INPUT_SCHEMA_VERSION,
+  hashEncryptedVotePayload,
+  hashGroth16VotePublicInputs,
+  type Groth16VoteProofEnvelopeDto,
+  type Groth16VotePublicInputsDto,
+} from "./groth16ProofVerifierService";
 import { canonicalizeJson } from "./pollPolicyService";
-import { pollVotingService } from "./pollVotingService";
+import { createPollVotingService, pollVotingService } from "./pollVotingService";
 import type {
   IdentityProfileRow,
   PollMapRefreshQueueRow,
   PollOptionRow,
   PollRow,
+  PollZkVoteRow,
   UserRow,
   VerifiedIdentityRow,
   VoteRow,
 } from "../types/db";
+import type { ProductionVotePrivacyPayloadDto } from "../types/contracts";
 
 const FIXED_TIME = "2026-04-06T12:00:00.000Z";
 const POLL_POLICY_HASH = "1".repeat(64);
 const CREDENTIAL_SCHEMA_HASH = "2".repeat(64);
 const NULLIFIER = "3".repeat(64);
+const OPTION_SET_HASH = "4".repeat(64);
+const PRODUCTION_NULLIFIER = "5".repeat(64);
+const PRODUCTION_VOTE_COMMITMENT = "6".repeat(64);
+const PRODUCTION_CREDENTIAL_ROOT = "7".repeat(64);
+const PRODUCTION_VERIFIER_KEY_HASH = "8".repeat(64);
+const PRODUCTION_PROOF_HASH = "9".repeat(64);
+const PRODUCTION_CIRCUIT_ID = "civicos-groth16-vote-circuit-v1";
 
 const sha256Hex = (value: string): string =>
   createHash("sha256").update(value, "utf8").digest("hex");
@@ -156,6 +178,29 @@ const createVote = (overrides: Partial<VoteRow> = {}): VoteRow => ({
   ...overrides,
 });
 
+const createPollZkVote = (
+  overrides: Partial<PollZkVoteRow> = {},
+): PollZkVoteRow => ({
+  id: "zk-vote-1",
+  poll_id: "poll-1",
+  nullifier: PRODUCTION_NULLIFIER,
+  vote_commitment: PRODUCTION_VOTE_COMMITMENT,
+  encrypted_vote: createEncryptedVotePayload(),
+  encrypted_vote_hash: hashEncryptedVotePayload(createEncryptedVotePayload()),
+  proof_hash: PRODUCTION_PROOF_HASH,
+  proof_system_version: CIVIC_PRODUCTION_PROOF_SYSTEM_VERSION,
+  verification_method_version: "civicos-mobile-verification-v1",
+  proof_verification_status: "verified",
+  proof_public_inputs_json: {},
+  proof_envelope_hash: PRODUCTION_PROOF_HASH,
+  verifier_key_hash: PRODUCTION_VERIFIER_KEY_HASH,
+  circuit_id: PRODUCTION_CIRCUIT_ID,
+  accepted_at: FIXED_TIME,
+  batch_id: null,
+  created_at: FIXED_TIME,
+  ...overrides,
+});
+
 const createVotePrivacyPayload = (
   overrides: {
     pollId?: string;
@@ -188,6 +233,68 @@ const createVotePrivacyPayload = (
         `org.civicos.identity|proof-public-inputs|${canonicalizeJson(publicInputs)}`,
       ),
     },
+  };
+};
+
+const createEncryptedVotePayload = () => ({
+  version: "civicos-encrypted-vote-v1" as const,
+  pollEncryptionKeyId: "poll-key-1",
+  ciphertext: "base64:ciphertext",
+  nonce: "base64:nonce",
+  algorithm: "xchacha20-poly1305-v1",
+  optionSetHash: OPTION_SET_HASH,
+});
+
+const createProductionVotePrivacyPayload = (
+  encryptedVoteHash: string,
+): ProductionVotePrivacyPayloadDto => {
+  const publicInputs: Groth16VotePublicInputsDto = {
+    version: CIVIC_PRODUCTION_PUBLIC_INPUT_SCHEMA_VERSION,
+    pollId: "poll-1",
+    pollPolicyHash: POLL_POLICY_HASH,
+    credentialSchemaHash: CREDENTIAL_SCHEMA_HASH,
+    optionSetHash: OPTION_SET_HASH,
+    credentialRoot: PRODUCTION_CREDENTIAL_ROOT,
+    nullifier: PRODUCTION_NULLIFIER,
+    voteCommitment: PRODUCTION_VOTE_COMMITMENT,
+    encryptedVoteHash,
+    verificationMethodVersion: "civicos-mobile-verification-v1",
+    proofSystemVersion: CIVIC_PRODUCTION_PROOF_SYSTEM_VERSION,
+    hashSuite: CIVIC_PRODUCTION_HASH_SUITE,
+    circuitId: PRODUCTION_CIRCUIT_ID,
+    verifierKeyHash: PRODUCTION_VERIFIER_KEY_HASH,
+    publicInputSchemaVersion: CIVIC_PRODUCTION_PUBLIC_INPUT_SCHEMA_VERSION,
+  };
+  const proof: Groth16VoteProofEnvelopeDto = {
+    version: CIVIC_PRODUCTION_PROOF_ENVELOPE_VERSION,
+    protocol: CIVIC_PRODUCTION_PROOF_PROTOCOL,
+    proofSystemVersion: CIVIC_PRODUCTION_PROOF_SYSTEM_VERSION,
+    status: CIVIC_PRODUCTION_PROOF_GENERATED_STATUS,
+    hashSuite: CIVIC_PRODUCTION_HASH_SUITE,
+    circuitId: PRODUCTION_CIRCUIT_ID,
+    verifierKeyHash: PRODUCTION_VERIFIER_KEY_HASH,
+    publicInputSchemaVersion: CIVIC_PRODUCTION_PUBLIC_INPUT_SCHEMA_VERSION,
+    proof: {
+      pi_a: ["1", "2", "1"],
+      pi_b: [
+        ["3", "4"],
+        ["5", "6"],
+        ["1", "0"],
+      ],
+      pi_c: ["7", "8", "1"],
+    },
+    publicInputs,
+    publicInputsHash: hashGroth16VotePublicInputs(publicInputs),
+  };
+
+  return {
+    version: "civicos-vote-privacy-v1" as const,
+    votePrivacyMode: "zk_secret_ballot_v1" as const,
+    hashSuite: CIVIC_PRODUCTION_HASH_SUITE,
+    nullifier: PRODUCTION_NULLIFIER,
+    voteCommitment: PRODUCTION_VOTE_COMMITMENT,
+    encryptedVoteHash,
+    proof: proof as unknown as ProductionVotePrivacyPayloadDto["proof"],
   };
 };
 
@@ -449,6 +556,287 @@ describe("pollVotingService.submitVote", () => {
       expect(result.receipt?.voteCommitmentLeafHash).toMatch(/^[0-9a-f]{64}$/);
       expect(result.receipt?.proofHash).toMatch(/^[0-9a-f]{64}$/);
       expect(enqueueCalls).toBe(1);
+    } finally {
+      restoreFns.reverse().forEach((restore) => restore());
+    }
+  });
+
+  it("routes production ZKP votes to anonymous poll_zk_votes storage", async () => {
+    const viewer = createViewer();
+    const poll = createPoll({
+      requires_verified_identity: true,
+      poll_policy_hash: POLL_POLICY_HASH,
+      credential_schema_hash: CREDENTIAL_SCHEMA_HASH,
+      vote_privacy_mode: "zk_secret_ballot_v1",
+      option_set_hash: OPTION_SET_HASH,
+      poll_encryption_key_id: "poll-key-1",
+    });
+    const option = createOption();
+    const verifiedIdentity = createVerifiedIdentity();
+    const identityProfile = createIdentityProfile();
+    const encryptedVote = createEncryptedVotePayload();
+    const encryptedVoteHash = hashEncryptedVotePayload(encryptedVote);
+    const privacy = createProductionVotePrivacyPayload(encryptedVoteHash);
+    const service = createPollVotingService({
+      verifyGroth16VoteProofForPoll: async (input) => {
+        expect(input.poll.id).toBe(poll.id);
+        expect(input.encryptedVoteHash).toBe(encryptedVoteHash);
+        expect(input.expectedVoteCommitment).toBe(PRODUCTION_VOTE_COMMITMENT);
+        return {
+          ok: true,
+          auditMaterial: {
+            nullifier: PRODUCTION_NULLIFIER,
+            voteCommitment: PRODUCTION_VOTE_COMMITMENT,
+            encryptedVoteHash,
+            proofHash: PRODUCTION_PROOF_HASH,
+            proofSystemVersion: CIVIC_PRODUCTION_PROOF_SYSTEM_VERSION,
+            verificationMethodVersion: "civicos-mobile-verification-v1",
+            proofVerificationStatus: "verified",
+            proofPublicInputsJson: privacy.proof.publicInputs,
+            proofEnvelopeHash: PRODUCTION_PROOF_HASH,
+            verifierKeyHash: PRODUCTION_VERIFIER_KEY_HASH,
+            circuitId: PRODUCTION_CIRCUIT_ID,
+          },
+        };
+      },
+    });
+
+    let insertedPayload: Record<string, unknown> | null = null;
+    let legacyInsertCalls = 0;
+    let verifiedIdentityDuplicateChecks = 0;
+
+    const restoreFns = [
+      patchMethod(pollRepository, "getById", async () => poll),
+      patchMethod(pollRepository, "getOptionByIdForPoll", async () => option),
+      patchMethod(
+        verifiedIdentityRepository,
+        "getByUserId",
+        async () => verifiedIdentity,
+      ),
+      patchMethod(
+        voteRepository,
+        "getByVerifiedIdentityIdAndPollId",
+        async () => {
+          verifiedIdentityDuplicateChecks += 1;
+          return null;
+        },
+      ),
+      patchMethod(identityProfileRepository, "getByUserId", async () => identityProfile),
+      patchMethod(
+        pollZkVoteRepository,
+        "getByPollIdAndNullifier",
+        async () => null,
+      ),
+      patchMethod(voteRepository, "insert", async (input) => {
+        legacyInsertCalls += 1;
+        return createVote({
+          poll_id: input.poll_id,
+          option_id: input.option_id,
+          user_id: input.user_id,
+        });
+      }),
+      patchMethod(pollZkVoteRepository, "insertVerified", async (input) => {
+        insertedPayload = input as Record<string, unknown>;
+        return createPollZkVote({
+          poll_id: input.poll_id,
+          nullifier: input.nullifier,
+          vote_commitment: input.vote_commitment,
+          encrypted_vote: input.encrypted_vote,
+          encrypted_vote_hash: input.encrypted_vote_hash,
+          proof_hash: input.proof_hash,
+          proof_system_version: input.proof_system_version,
+          verification_method_version: input.verification_method_version,
+          proof_verification_status: input.proof_verification_status ?? "verified",
+          proof_public_inputs_json: input.proof_public_inputs_json,
+          proof_envelope_hash: input.proof_envelope_hash,
+          verifier_key_hash: input.verifier_key_hash,
+          circuit_id: input.circuit_id,
+          accepted_at: input.accepted_at ?? FIXED_TIME,
+          batch_id: input.batch_id ?? null,
+        });
+      }),
+    ];
+
+    try {
+      const result = await service.submitVote({
+        pollId: poll.id,
+        optionId: option.id,
+        viewer,
+        privacy,
+        encryptedVote,
+        expectedVoteCommitment: PRODUCTION_VOTE_COMMITMENT,
+      });
+
+      expect(result.success).toBe(true);
+      expect(legacyInsertCalls).toBe(0);
+      expect(verifiedIdentityDuplicateChecks).toBe(0);
+      const insertedRecord = insertedPayload as Record<string, unknown> | null;
+      expect(insertedRecord).toMatchObject({
+        poll_id: poll.id,
+        nullifier: PRODUCTION_NULLIFIER,
+        vote_commitment: PRODUCTION_VOTE_COMMITMENT,
+        encrypted_vote: encryptedVote,
+        encrypted_vote_hash: encryptedVoteHash,
+        proof_hash: PRODUCTION_PROOF_HASH,
+        proof_system_version: CIVIC_PRODUCTION_PROOF_SYSTEM_VERSION,
+        proof_verification_status: "verified",
+        proof_envelope_hash: PRODUCTION_PROOF_HASH,
+        verifier_key_hash: PRODUCTION_VERIFIER_KEY_HASH,
+        circuit_id: PRODUCTION_CIRCUIT_ID,
+        batch_id: null,
+      });
+      expect(insertedRecord?.user_id).toBeUndefined();
+      expect(insertedRecord?.verified_identity_id).toBeUndefined();
+      expect(insertedRecord?.option_id).toBeUndefined();
+      expect(insertedRecord?.vote_latitude_l0).toBeUndefined();
+      if (!result.success) {
+        throw new Error("Expected production vote success.");
+      }
+      expect(result.receipt).toMatchObject({
+        pollId: poll.id,
+        optionId: option.id,
+        voteCommitment: PRODUCTION_VOTE_COMMITMENT,
+        proofHash: PRODUCTION_PROOF_HASH,
+      });
+    } finally {
+      restoreFns.reverse().forEach((restore) => restore());
+    }
+  });
+
+  it("rejects production ZKP encrypted vote hash mismatch before inserting", async () => {
+    const viewer = createViewer();
+    const poll = createPoll({
+      requires_verified_identity: true,
+      poll_policy_hash: POLL_POLICY_HASH,
+      credential_schema_hash: CREDENTIAL_SCHEMA_HASH,
+      vote_privacy_mode: "zk_secret_ballot_v1",
+      option_set_hash: OPTION_SET_HASH,
+      poll_encryption_key_id: "poll-key-1",
+    });
+    const option = createOption();
+    const verifiedIdentity = createVerifiedIdentity();
+    const identityProfile = createIdentityProfile();
+    const encryptedVote = createEncryptedVotePayload();
+    const privacy = createProductionVotePrivacyPayload("a".repeat(64));
+    const service = createPollVotingService({
+      verifyGroth16VoteProofForPoll: async () => {
+        throw new Error("Verifier should not be called for encrypted vote mismatch.");
+      },
+    });
+    let insertCalls = 0;
+
+    const restoreFns = [
+      patchMethod(pollRepository, "getById", async () => poll),
+      patchMethod(pollRepository, "getOptionByIdForPoll", async () => option),
+      patchMethod(
+        verifiedIdentityRepository,
+        "getByUserId",
+        async () => verifiedIdentity,
+      ),
+      patchMethod(identityProfileRepository, "getByUserId", async () => identityProfile),
+      patchMethod(pollZkVoteRepository, "insertVerified", async (input) => {
+        insertCalls += 1;
+        return createPollZkVote({
+          poll_id: input.poll_id,
+          nullifier: input.nullifier,
+        });
+      }),
+    ];
+
+    try {
+      const result = await service.submitVote({
+        pollId: poll.id,
+        optionId: option.id,
+        viewer,
+        privacy,
+        encryptedVote,
+      });
+
+      expect(result.success).toBe(false);
+      if (!result.success) {
+        expect(result.errorCode).toBe("PROOF_INVALID");
+        expect(result.message).toContain("Encrypted vote hash");
+      }
+      expect(insertCalls).toBe(0);
+    } finally {
+      restoreFns.reverse().forEach((restore) => restore());
+    }
+  });
+
+  it("rejects duplicate production ZKP nullifier before inserting", async () => {
+    const viewer = createViewer();
+    const poll = createPoll({
+      requires_verified_identity: true,
+      poll_policy_hash: POLL_POLICY_HASH,
+      credential_schema_hash: CREDENTIAL_SCHEMA_HASH,
+      vote_privacy_mode: "zk_secret_ballot_v1",
+      option_set_hash: OPTION_SET_HASH,
+      poll_encryption_key_id: "poll-key-1",
+    });
+    const option = createOption();
+    const verifiedIdentity = createVerifiedIdentity();
+    const identityProfile = createIdentityProfile();
+    const encryptedVote = createEncryptedVotePayload();
+    const encryptedVoteHash = hashEncryptedVotePayload(encryptedVote);
+    const privacy = createProductionVotePrivacyPayload(encryptedVoteHash);
+    const service = createPollVotingService({
+      verifyGroth16VoteProofForPoll: async () => ({
+        ok: true,
+        auditMaterial: {
+          nullifier: PRODUCTION_NULLIFIER,
+          voteCommitment: PRODUCTION_VOTE_COMMITMENT,
+          encryptedVoteHash,
+          proofHash: PRODUCTION_PROOF_HASH,
+          proofSystemVersion: CIVIC_PRODUCTION_PROOF_SYSTEM_VERSION,
+          verificationMethodVersion: "civicos-mobile-verification-v1",
+          proofVerificationStatus: "verified",
+          proofPublicInputsJson: privacy.proof.publicInputs,
+          proofEnvelopeHash: PRODUCTION_PROOF_HASH,
+          verifierKeyHash: PRODUCTION_VERIFIER_KEY_HASH,
+          circuitId: PRODUCTION_CIRCUIT_ID,
+        },
+      }),
+    });
+    let insertCalls = 0;
+
+    const restoreFns = [
+      patchMethod(pollRepository, "getById", async () => poll),
+      patchMethod(pollRepository, "getOptionByIdForPoll", async () => option),
+      patchMethod(
+        verifiedIdentityRepository,
+        "getByUserId",
+        async () => verifiedIdentity,
+      ),
+      patchMethod(identityProfileRepository, "getByUserId", async () => identityProfile),
+      patchMethod(
+        pollZkVoteRepository,
+        "getByPollIdAndNullifier",
+        async () => createPollZkVote(),
+      ),
+      patchMethod(pollZkVoteRepository, "insertVerified", async (input) => {
+        insertCalls += 1;
+        return createPollZkVote({
+          poll_id: input.poll_id,
+          nullifier: input.nullifier,
+        });
+      }),
+    ];
+
+    try {
+      const result = await service.submitVote({
+        pollId: poll.id,
+        optionId: option.id,
+        viewer,
+        privacy,
+        encryptedVote,
+      });
+
+      expect(result.success).toBe(false);
+      if (!result.success) {
+        expect(result.errorCode).toBe("ALREADY_VOTED");
+        expect(result.message).toContain("proof nullifier");
+      }
+      expect(insertCalls).toBe(0);
     } finally {
       restoreFns.reverse().forEach((restore) => restore());
     }

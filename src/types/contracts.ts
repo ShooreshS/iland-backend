@@ -255,12 +255,58 @@ export type VoteProofEnvelopeDto = {
   publicInputsHash: string | null;
 };
 
-export type VotePrivacyPayloadDto = {
+export type Groth16VoteProofPublicInputsDto = {
+  version: string;
+  pollId: string;
+  pollPolicyHash: string;
+  credentialSchemaHash: string;
+  optionSetHash: string;
+  credentialRoot: string;
+  nullifier: string;
+  voteCommitment: string;
+  encryptedVoteHash: string;
+  verificationMethodVersion: string;
+  proofSystemVersion: string;
+  hashSuite: string;
+  circuitId: string;
+  verifierKeyHash: string;
+  publicInputSchemaVersion: string;
+};
+
+export type Groth16VoteProofEnvelopeDto = {
+  version: string;
+  protocol: "groth16";
+  proofSystemVersion: string;
+  status: string;
+  hashSuite: string;
+  circuitId: string;
+  verifierKeyHash: string;
+  publicInputSchemaVersion: string;
+  proof: unknown;
+  publicInputs: Groth16VoteProofPublicInputsDto;
+  publicInputsHash: string;
+};
+
+export type PreproverVotePrivacyPayloadDto = {
   version: string;
   hashSuite: string;
   nullifier: string;
   proof: VoteProofEnvelopeDto;
 };
+
+export type ProductionVotePrivacyPayloadDto = {
+  version: string;
+  votePrivacyMode: "zk_secret_ballot_v1";
+  hashSuite: string;
+  nullifier: string;
+  voteCommitment: string;
+  encryptedVoteHash: string;
+  proof: Groth16VoteProofEnvelopeDto;
+};
+
+export type VotePrivacyPayloadDto =
+  | PreproverVotePrivacyPayloadDto
+  | ProductionVotePrivacyPayloadDto;
 
 export type VoteSubmissionRequestDto = {
   optionId: string;
