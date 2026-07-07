@@ -93,15 +93,19 @@ const parsed = z
     POLL_MAP_REFRESH_FAILURE_COOLDOWN_MS: z.coerce.number().int().min(0).optional(),
     MAP_ENABLE_ALL_POLLS_DEBUG: z.string().optional(),
     SOLANA_AUDIT_CLUSTER: z.enum(SOLANA_AUDIT_CLUSTERS).optional(),
+    SOLANA_AUDIT_RPC_URL: z.string().url().optional(),
     SOLANA_AUDIT_TOKEN_MINT: solanaPublicKeySchema.optional(),
     SOLANA_AUDIT_TOKEN_PROGRAM: solanaPublicKeySchema.optional(),
     SOLANA_AUDIT_PROGRAM_ID: solanaPublicKeySchema.optional(),
     SOLANA_AUDIT_REGISTRY_AUTHORITY: solanaPublicKeySchema.optional(),
     SOLANA_AUDIT_TREASURY: solanaPublicKeySchema.optional(),
     SOLANA_AUDIT_FEE_PAYER_PUBLIC_KEY: solanaPublicKeySchema.optional(),
+    SOLANA_AUDIT_FEE_PAYER_SECRET_KEY: z.string().min(1).optional(),
     SOLANA_AUDIT_DEFAULT_FEE_MODE: z.enum(SOLANA_AUDIT_FEE_MODES).optional(),
     SOLANA_AUDIT_SPONSORSHIP_ENABLED: z.string().optional(),
     SOLANA_AUDIT_USER_PAID_FEES_ENABLED: z.string().optional(),
+    SOLANA_AUDIT_TRANSACTIONS_ENABLED: z.string().optional(),
+    SOLANA_AUDIT_MAINNET_CONFIRMED: z.string().optional(),
   })
   .superRefine((input, context) => {
     const hasUrl = Boolean(input.SUPABASE_URL);
@@ -204,6 +208,46 @@ const parsed = z
           : ["SOLANA_AUDIT_TOKEN_MINT"],
       });
     }
+
+    const solanaAuditTransactionsEnabled =
+      input.SOLANA_AUDIT_TRANSACTIONS_ENABLED !== undefined
+        ? toBoolean(input.SOLANA_AUDIT_TRANSACTIONS_ENABLED)
+        : false;
+
+    if (solanaAuditTransactionsEnabled) {
+      if (!input.SOLANA_AUDIT_FEE_PAYER_PUBLIC_KEY) {
+        context.addIssue({
+          code: z.ZodIssueCode.custom,
+          message:
+            "SOLANA_AUDIT_FEE_PAYER_PUBLIC_KEY is required when Solana audit transactions are enabled.",
+          path: ["SOLANA_AUDIT_FEE_PAYER_PUBLIC_KEY"],
+        });
+      }
+
+      if (!input.SOLANA_AUDIT_FEE_PAYER_SECRET_KEY) {
+        context.addIssue({
+          code: z.ZodIssueCode.custom,
+          message:
+            "SOLANA_AUDIT_FEE_PAYER_SECRET_KEY is required when Solana audit transactions are enabled.",
+          path: ["SOLANA_AUDIT_FEE_PAYER_SECRET_KEY"],
+        });
+      }
+
+      const cluster = input.SOLANA_AUDIT_CLUSTER || SHOLAN_TOKEN_DEFAULTS.cluster;
+      const mainnetConfirmed =
+        input.SOLANA_AUDIT_MAINNET_CONFIRMED !== undefined
+          ? toBoolean(input.SOLANA_AUDIT_MAINNET_CONFIRMED)
+          : false;
+
+      if (cluster === "mainnet-beta" && !mainnetConfirmed) {
+        context.addIssue({
+          code: z.ZodIssueCode.custom,
+          message:
+            "SOLANA_AUDIT_MAINNET_CONFIRMED must be true before enabling Solana audit transactions on mainnet-beta.",
+          path: ["SOLANA_AUDIT_MAINNET_CONFIRMED"],
+        });
+      }
+    }
   })
   .parse({
     NODE_ENV: process.env.NODE_ENV,
@@ -284,6 +328,7 @@ const parsed = z
     SOLANA_AUDIT_CLUSTER: emptyToUndefined(process.env.SOLANA_AUDIT_CLUSTER) as
       | (typeof SOLANA_AUDIT_CLUSTERS)[number]
       | undefined,
+    SOLANA_AUDIT_RPC_URL: emptyToUndefined(process.env.SOLANA_AUDIT_RPC_URL),
     SOLANA_AUDIT_TOKEN_MINT: emptyToUndefined(
       process.env.SOLANA_AUDIT_TOKEN_MINT,
     ),
@@ -300,6 +345,9 @@ const parsed = z
     SOLANA_AUDIT_FEE_PAYER_PUBLIC_KEY: emptyToUndefined(
       process.env.SOLANA_AUDIT_FEE_PAYER_PUBLIC_KEY,
     ),
+    SOLANA_AUDIT_FEE_PAYER_SECRET_KEY: emptyToUndefined(
+      process.env.SOLANA_AUDIT_FEE_PAYER_SECRET_KEY,
+    ),
     SOLANA_AUDIT_DEFAULT_FEE_MODE: emptyToUndefined(
       process.env.SOLANA_AUDIT_DEFAULT_FEE_MODE,
     ) as (typeof SOLANA_AUDIT_FEE_MODES)[number] | undefined,
@@ -308,6 +356,12 @@ const parsed = z
     ),
     SOLANA_AUDIT_USER_PAID_FEES_ENABLED: emptyToUndefined(
       process.env.SOLANA_AUDIT_USER_PAID_FEES_ENABLED,
+    ),
+    SOLANA_AUDIT_TRANSACTIONS_ENABLED: emptyToUndefined(
+      process.env.SOLANA_AUDIT_TRANSACTIONS_ENABLED,
+    ),
+    SOLANA_AUDIT_MAINNET_CONFIRMED: emptyToUndefined(
+      process.env.SOLANA_AUDIT_MAINNET_CONFIRMED,
     ),
   });
 
@@ -393,6 +447,14 @@ const solanaAuditUserPaidFeesEnabled =
   parsed.SOLANA_AUDIT_USER_PAID_FEES_ENABLED !== undefined
     ? toBoolean(parsed.SOLANA_AUDIT_USER_PAID_FEES_ENABLED)
     : false;
+const solanaAuditTransactionsEnabled =
+  parsed.SOLANA_AUDIT_TRANSACTIONS_ENABLED !== undefined
+    ? toBoolean(parsed.SOLANA_AUDIT_TRANSACTIONS_ENABLED)
+    : false;
+const solanaAuditMainnetConfirmed =
+  parsed.SOLANA_AUDIT_MAINNET_CONFIRMED !== undefined
+    ? toBoolean(parsed.SOLANA_AUDIT_MAINNET_CONFIRMED)
+    : false;
 
 export const env = Object.freeze({
   nodeEnv: parsed.NODE_ENV,
@@ -445,6 +507,7 @@ export const env = Object.freeze({
   }),
   solanaAudit: Object.freeze({
     cluster: solanaAuditCluster,
+    rpcUrl: parsed.SOLANA_AUDIT_RPC_URL ?? null,
     programId: solanaAuditProgramId,
     tokenMint: solanaAuditTokenMint,
     tokenProgram: solanaAuditTokenProgram,
@@ -453,13 +516,15 @@ export const env = Object.freeze({
     registryAuthority: parsed.SOLANA_AUDIT_REGISTRY_AUTHORITY ?? null,
     treasury: parsed.SOLANA_AUDIT_TREASURY ?? null,
     feePayerPublicKey: parsed.SOLANA_AUDIT_FEE_PAYER_PUBLIC_KEY ?? null,
+    feePayerSecretKey: parsed.SOLANA_AUDIT_FEE_PAYER_SECRET_KEY ?? null,
     defaultFeeMode: solanaAuditDefaultFeeMode,
     sponsorshipEnabled: solanaAuditSponsorshipEnabled,
     userPaidFeesEnabled: solanaAuditUserPaidFeesEnabled,
+    mainnetConfirmed: solanaAuditMainnetConfirmed,
     networkFeeCurrency: "SOL",
     baseFeeLamportsPerSignature: SOLANA_BASE_FEE_LAMPORTS_PER_SIGNATURE,
     tokenRequiredForBackendProcessing: false,
-    transactionsEnabled: false,
+    transactionsEnabled: solanaAuditTransactionsEnabled,
   }),
 });
 

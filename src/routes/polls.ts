@@ -144,6 +144,14 @@ const draftErrorStatusMap: Partial<Record<PollManagementErrorCode, number>> = {
   POLL_ALREADY_HAS_VOTES: 409,
 };
 
+const auditPublishErrorStatusMap: Record<string, number> = {
+  POLL_NOT_FOUND: 404,
+  POLL_NOT_OWNED: 403,
+  NO_ACCEPTED_AUDIT_VOTES: 409,
+  TRANSACTIONS_DISABLED: 409,
+  PUBLICATION_FAILED: 502,
+};
+
 const getPollsRoute: RouteDefinition = {
   method: "GET",
   path: "/polls",
@@ -548,6 +556,42 @@ export const createGetPollReceiptRoute = (
   };
 };
 
+const publishPollAuditRoute: RouteDefinition = {
+  method: "POST",
+  path: "/polls/:id/audit/publish",
+  handler: async ({ request, params }) => {
+    const viewerResult = await requireViewer(request);
+    if (!viewerResult.ok) {
+      return viewerResult.response;
+    }
+
+    const pollId = params.id?.trim() || "";
+    if (!pollId) {
+      return json(
+        {
+          error: "invalid_poll_id",
+          message: "A poll id is required.",
+        },
+        400,
+      );
+    }
+
+    const result = await pollPublicAuditService.publishPollAudit({
+      pollId,
+      viewerUserId: viewerResult.viewer.userId,
+    });
+
+    if (result.success) {
+      return json(result);
+    }
+
+    return json(
+      result,
+      auditPublishErrorStatusMap[result.errorCode] || 500,
+    );
+  },
+};
+
 const buildVotePrivacyFromRequest = (
   requestBody: z.infer<typeof voteRequestSchema>,
 ): VoteSubmissionRequestDto["privacy"] => {
@@ -707,6 +751,7 @@ export const pollRoutes: RouteDefinition[] = [
   getPollAuditRoute,
   getPollAuditInclusionRoute,
   getPollReceiptRoute,
+  publishPollAuditRoute,
   getPollDetailsRoute,
   submitVoteRoute,
   submitVotePhase10Route,

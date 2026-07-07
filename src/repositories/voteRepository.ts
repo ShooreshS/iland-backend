@@ -461,6 +461,28 @@ export const voteRepository = {
     return (data || []) as PublicAuditVoteRecordRow[];
   },
 
+  async markAcceptedAuditRecordsBatch(input: {
+    pollId: string;
+    batchId: string;
+  }): Promise<void> {
+    const supabase = requireSupabaseAdminClient();
+
+    const { error } = await supabase
+      .from("votes")
+      .update({ batch_id: input.batchId })
+      .eq("poll_id", input.pollId)
+      .eq("is_valid", true)
+      .not("nullifier", "is", null)
+      .not("vote_commitment", "is", null)
+      .not("proof_hash", "is", null)
+      .not("accepted_at", "is", null)
+      .is("batch_id", null);
+
+    if (error) {
+      throw error;
+    }
+  },
+
   async countByPollId(pollId: string): Promise<number> {
     const supabase = requireSupabaseAdminClient();
 

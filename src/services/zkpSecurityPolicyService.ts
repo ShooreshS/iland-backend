@@ -26,9 +26,12 @@ export type ZkpSecurityPolicy = Readonly<{
     rootPublisherPublicKey: string | null;
     feePayerPublicKey: string | null;
     transactionsEnabled: boolean;
-    privateKeyMaterialAcceptedByBackend: false;
+    privateKeyMaterialAcceptedByBackend: boolean;
+    backendEnvFeePayerSecretConfigured: boolean;
     keypairFilesAllowedInRepository: false;
-    custodyModel: "external_kms_hsm_or_multisig_signing_service";
+    custodyModel:
+      | "external_kms_hsm_or_multisig_signing_service"
+      | "backend_env_test_fee_payer_key";
     requiresSolFunding: true;
     dailyFeeLimitRequired: true;
     separateClusterKeysRequired: true;
@@ -72,6 +75,9 @@ export type ZkpSecurityPolicy = Readonly<{
 export const getZkpSecurityPolicy = (): ZkpSecurityPolicy => {
   const feePolicy = getSolanaAuditFeePolicy();
   const proofSystemPolicy = getProofSystemPolicy();
+  const backendEnvFeePayerSecretConfigured =
+    typeof env.solanaAudit.feePayerSecretKey === "string" &&
+    env.solanaAudit.feePayerSecretKey.trim().length > 0;
 
   return Object.freeze({
     version: ZKP_SECURITY_POLICY_VERSION,
@@ -81,9 +87,12 @@ export const getZkpSecurityPolicy = (): ZkpSecurityPolicy => {
       rootPublisherPublicKey: env.solanaAudit.registryAuthority,
       feePayerPublicKey: feePolicy.feePayerPublicKey,
       transactionsEnabled: feePolicy.transactionsEnabled,
-      privateKeyMaterialAcceptedByBackend: false,
+      privateKeyMaterialAcceptedByBackend: backendEnvFeePayerSecretConfigured,
+      backendEnvFeePayerSecretConfigured,
       keypairFilesAllowedInRepository: false,
-      custodyModel: "external_kms_hsm_or_multisig_signing_service",
+      custodyModel: backendEnvFeePayerSecretConfigured
+        ? "backend_env_test_fee_payer_key"
+        : "external_kms_hsm_or_multisig_signing_service",
       requiresSolFunding: true,
       dailyFeeLimitRequired: true,
       separateClusterKeysRequired: true,

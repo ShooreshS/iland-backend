@@ -1,5 +1,6 @@
 import { describe, expect, it } from "bun:test";
 
+import pollAuditRepository from "../repositories/pollAuditRepository";
 import pollRepository from "../repositories/pollRepository";
 import voteRepository, {
   type PublicAuditVoteRecordRow,
@@ -148,6 +149,7 @@ describe("Phase 8 public poll audit service", () => {
       patchMethod(voteRepository, "countValidByPollIdAndOptionId", async (_pollId, optionId) =>
         optionId === optionA.id ? 1 : 1,
       ),
+      patchMethod(pollAuditRepository, "listRootsByPollId", async () => []),
     ];
 
     try {
@@ -255,6 +257,7 @@ describe("Phase 8 public poll audit service", () => {
       patchMethod(voteRepository, "getAcceptedAuditRecordsByPollId", async () =>
         auditRecords,
       ),
+      patchMethod(pollAuditRepository, "getRootByPollIdAndBatchId", async () => null),
     ];
 
     try {

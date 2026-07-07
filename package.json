@@ -12,6 +12,7 @@
   },
   "dependencies": {
     "@peculiar/x509": "^2.0.0",
+    "@solana/web3.js": "^1.98.0",
     "@supabase/supabase-js": "^2.57.4",
     "cbor-x": "^1.6.4",
     "qrcode": "^1.5.4",

@@ -1,6 +1,6 @@
 use anchor_lang::prelude::*;
 
-declare_id!("2hnBkFjtErxbLCtTevhiW2GGTjDp1EHctshX3ebPEfRt");
+declare_id!("FsXuodQtkWjE1EZEAUskvRuj4bGMrKZAHAEf4WEk4oRo");
 
 const ZERO_ROOT: [u8; 32] = [0; 32];
 

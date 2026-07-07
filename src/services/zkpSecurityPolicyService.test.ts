@@ -15,6 +15,7 @@ describe("zkpSecurityPolicyService", () => {
       role: "root_publisher_key",
       transactionsEnabled: false,
       privateKeyMaterialAcceptedByBackend: false,
+      backendEnvFeePayerSecretConfigured: false,
       keypairFilesAllowedInRepository: false,
       custodyModel: "external_kms_hsm_or_multisig_signing_service",
       requiresSolFunding: true,

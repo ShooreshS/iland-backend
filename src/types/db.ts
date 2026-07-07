@@ -547,6 +547,48 @@ export type NewVoteRow = {
   invalid_reason?: string | null;
 };
 
+export type PollRootRow = {
+  id: string;
+  poll_id: string;
+  batch_id: string;
+  previous_nullifier_root: string | null;
+  nullifier_root: string;
+  previous_vote_commitment_root: string | null;
+  vote_commitment_root: string;
+  accepted_count: number;
+  solana_tx_signature: string | null;
+  created_at: string;
+};
+
+export type NewPollRootRow = {
+  poll_id: string;
+  batch_id: string;
+  previous_nullifier_root?: string | null;
+  nullifier_root: string;
+  previous_vote_commitment_root?: string | null;
+  vote_commitment_root: string;
+  accepted_count: number;
+  solana_tx_signature?: string | null;
+};
+
+export type PollAuditEventRow = {
+  id: string;
+  poll_id: string | null;
+  event_type: string;
+  payload_hash: string;
+  payload_json: JsonValue | null;
+  solana_tx_signature: string | null;
+  created_at: string;
+};
+
+export type NewPollAuditEventRow = {
+  poll_id?: string | null;
+  event_type: string;
+  payload_hash: string;
+  payload_json?: JsonValue | null;
+  solana_tx_signature?: string | null;
+};
+
 export type BackendAuditEventDecision =
   | "accepted"
   | "rejected"

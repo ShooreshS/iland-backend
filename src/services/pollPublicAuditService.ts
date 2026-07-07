@@ -1,11 +1,13 @@
 import { createHash } from "node:crypto";
 
 import env from "../config/env";
+import pollAuditRepository from "../repositories/pollAuditRepository";
 import pollRepository from "../repositories/pollRepository";
 import voteRepository from "../repositories/voteRepository";
 import type {
   PollOptionResultDto,
   PollResultsSummaryDto,
+  PublicAuditRootCommitDto,
   PublicAuditInclusionProofResultDto,
   PublicAuditMerkleProofStepDto,
   PublicAuditTreeKind,
@@ -13,8 +15,11 @@ import type {
   PublicVoteReceiptLookupDto,
   PublicPollAuditDto,
 } from "../types/contracts";
-import type { PollOptionRow, PollRow } from "../types/db";
+import type { PollOptionRow, PollRootRow, PollRow } from "../types/db";
 import { hashCanonicalJson } from "./pollPolicyService";
+import solanaAuditPublisherService, {
+  type SolanaAuditPublicationResult,
+} from "./solanaAuditPublisherService";
 
 export const PUBLIC_AUDIT_VERSION = "civicos-public-audit-v1" as const;
 export const PUBLIC_AUDIT_RESULT_HASH_VERSION =
@@ -263,6 +268,7 @@ const buildWarnings = (input: {
   poll: PollRow;
   acceptedVoteCount: number;
   totalValidVoteCount: number;
+  publishedRootCount: number;
 }): string[] => {
   const warnings: string[] = [];
 
@@ -276,7 +282,11 @@ const buildWarnings = (input: {
     );
   }
 
-  if (!env.solanaAudit.transactionsEnabled && input.acceptedVoteCount > 0) {
+  if (
+    !env.solanaAudit.transactionsEnabled &&
+    input.acceptedVoteCount > 0 &&
+    input.publishedRootCount === 0
+  ) {
     warnings.push("On-chain audit publication is not enabled yet.");
   }
 
@@ -304,6 +314,116 @@ const buildAuditTrees = (
   };
 };
 
+type PollAuditMaterial = Readonly<{
+  options: PollOptionRow[];
+  auditRecords: Awaited<ReturnType<typeof voteRepository.getAcceptedAuditRecordsByPollId>>;
+  totalValidVoteCount: number;
+  acceptedVoteCount: number;
+  nullifierTree: PublicAuditMerkleTree;
+  voteCommitmentTree: PublicAuditMerkleTree;
+  finalResult: PollResultsSummaryDto;
+  resultHash: string;
+}>;
+
+const buildSolanaExplorerUrl = (signature: string | null): string | null => {
+  if (!signature) {
+    return null;
+  }
+
+  if (env.solanaAudit.cluster === "mainnet-beta") {
+    return `https://explorer.solana.com/tx/${signature}`;
+  }
+
+  const cluster =
+    env.solanaAudit.cluster === "localnet" ? "custom" : env.solanaAudit.cluster;
+  return `https://explorer.solana.com/tx/${signature}?cluster=${cluster}`;
+};
+
+const parseBatchIndex = (batchId: string): number => {
+  const parsed = Number.parseInt(batchId, 10);
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : 0;
+};
+
+const mapRootCommit = (root: PollRootRow): PublicAuditRootCommitDto | null => {
+  if (!root.solana_tx_signature) {
+    return null;
+  }
+
+  return {
+    status: "published_on_chain",
+    batchIndex: parseBatchIndex(root.batch_id),
+    acceptedCount: root.accepted_count,
+    nullifierRoot: root.nullifier_root,
+    voteCommitmentRoot: root.vote_commitment_root,
+    transactionSignature: root.solana_tx_signature,
+    explorerUrl: buildSolanaExplorerUrl(root.solana_tx_signature) || "",
+    submittedAt: root.created_at,
+  };
+};
+
+const isPollFinalResultPublishable = (poll: PollRow): boolean => {
+  if (poll.status === "closed" || poll.status === "archived") {
+    return true;
+  }
+
+  if (!poll.ends_at) {
+    return false;
+  }
+
+  return new Date(poll.ends_at).getTime() <= Date.now();
+};
+
+const loadPollAuditMaterial = async (poll: PollRow): Promise<PollAuditMaterial> => {
+  const [options, auditRecords, totalValidVoteCount, latestSubmittedAt] =
+    await Promise.all([
+      pollRepository.getOptionsByPollId(poll.id),
+      voteRepository.getAcceptedAuditRecordsByPollId(poll.id),
+      voteRepository.countValidByPollId(poll.id),
+      voteRepository.getLatestValidSubmittedAtByPollId(poll.id),
+    ]);
+
+  const optionCountEntries = await Promise.all(
+    options.map(async (option) => [
+      option.id,
+      await voteRepository.countValidByPollIdAndOptionId(poll.id, option.id),
+    ] as const),
+  );
+  const countsByOptionId = optionCountEntries.reduce<Record<string, number>>(
+    (acc, [optionId, count]) => {
+      acc[optionId] = count;
+      return acc;
+    },
+    {},
+  );
+
+  const acceptedVoteCount = auditRecords.length;
+  const { nullifierTree, voteCommitmentTree } = buildAuditTrees(auditRecords);
+  const finalResult = buildResultsSummary(poll.id, options, {
+    countsByOptionId,
+    totalVotes: totalValidVoteCount,
+    updatedAt: latestSubmittedAt || poll.updated_at,
+  });
+  const resultHash = buildResultHash({
+    poll,
+    acceptedVoteCount,
+    totalValidVoteCount,
+    nullifierRoot: nullifierTree.root,
+    voteCommitmentRoot: voteCommitmentTree.root,
+    finalResult,
+  });
+
+  return Object.freeze({
+    options,
+    auditRecords,
+    totalValidVoteCount,
+    acceptedVoteCount,
+    nullifierTree,
+    voteCommitmentTree,
+    finalResult,
+    resultHash,
+  });
+};
+
 export const pollPublicAuditService = {
   async getPublicPollAudit(pollId: string): Promise<PublicPollAuditDto | null> {
     const poll = await pollRepository.getById(pollId);
@@ -311,46 +431,18 @@ export const pollPublicAuditService = {
       return null;
     }
 
-    const [options, auditRecords, totalValidVoteCount, latestSubmittedAt] =
-      await Promise.all([
-        pollRepository.getOptionsByPollId(pollId),
-        voteRepository.getAcceptedAuditRecordsByPollId(pollId),
-        voteRepository.countValidByPollId(pollId),
-        voteRepository.getLatestValidSubmittedAtByPollId(pollId),
-      ]);
-
-    const optionCountEntries = await Promise.all(
-      options.map(async (option) => [
-        option.id,
-        await voteRepository.countValidByPollIdAndOptionId(pollId, option.id),
-      ] as const),
-    );
-    const countsByOptionId = optionCountEntries.reduce<Record<string, number>>(
-      (acc, [optionId, count]) => {
-        acc[optionId] = count;
-        return acc;
-      },
-      {},
-    );
-
-    const acceptedVoteCount = auditRecords.length;
-    const { nullifierTree, voteCommitmentTree } = buildAuditTrees(auditRecords);
-    const finalResult = buildResultsSummary(poll.id, options, {
-      countsByOptionId,
-      totalVotes: totalValidVoteCount,
-      updatedAt: latestSubmittedAt || poll.updated_at,
-    });
-    const resultHash = buildResultHash({
-      poll,
-      acceptedVoteCount,
-      totalValidVoteCount,
-      nullifierRoot: nullifierTree.root,
-      voteCommitmentRoot: voteCommitmentTree.root,
-      finalResult,
-    });
+    const [material, publishedRoots] = await Promise.all([
+      loadPollAuditMaterial(poll),
+      pollAuditRepository.listRootsByPollId(poll.id),
+    ]);
+    const rootCommits = publishedRoots
+      .map(mapRootCommit)
+      .filter((entry): entry is PublicAuditRootCommitDto => Boolean(entry));
     const generatedAt = new Date().toISOString();
     const publicationStatus =
-      acceptedVoteCount > 0
+      rootCommits.length > 0
+        ? "published_on_chain"
+        : material.acceptedVoteCount > 0
         ? "pending_on_chain_publication"
         : "not_applicable";
 
@@ -362,32 +454,32 @@ export const pollPublicAuditService = {
       credentialSchemaHash: poll.credential_schema_hash ?? null,
       generatedAt,
       publicationStatus,
-      acceptedVoteCount,
-      totalValidVoteCount,
+      acceptedVoteCount: material.acceptedVoteCount,
+      totalValidVoteCount: material.totalValidVoteCount,
       trees: {
-        nullifier: buildTreeSummary("nullifier", nullifierTree),
+        nullifier: buildTreeSummary("nullifier", material.nullifierTree),
         voteCommitment: buildTreeSummary(
           "vote_commitment",
-          voteCommitmentTree,
+          material.voteCommitmentTree,
         ),
       },
       computedCurrentRootBatch:
-        acceptedVoteCount > 0
+        material.acceptedVoteCount > 0 && rootCommits.length === 0
           ? {
               status: "pending_on_chain_publication",
               batchIndex: 0,
-              acceptedCount: acceptedVoteCount,
-              nullifierRoot: nullifierTree.root,
-              voteCommitmentRoot: voteCommitmentTree.root,
+              acceptedCount: material.acceptedVoteCount,
+              nullifierRoot: material.nullifierTree.root,
+              voteCommitmentRoot: material.voteCommitmentTree.root,
               transactionSignature: null,
               explorerUrl: null,
               submittedAt: null,
             }
           : null,
-      rootCommits: [],
-      resultHash,
+      rootCommits,
+      resultHash: material.resultHash,
       tallyProofHash: null,
-      finalResult,
+      finalResult: material.finalResult,
       solana: {
         cluster: env.solanaAudit.cluster,
         programId: env.solanaAudit.programId,
@@ -400,10 +492,153 @@ export const pollPublicAuditService = {
       },
       warnings: buildWarnings({
         poll,
-        acceptedVoteCount,
-        totalValidVoteCount,
+        acceptedVoteCount: material.acceptedVoteCount,
+        totalValidVoteCount: material.totalValidVoteCount,
+        publishedRootCount: rootCommits.length,
       }),
     };
+  },
+
+  async publishPollAudit(input: {
+    pollId: string;
+    viewerUserId: string;
+  }): Promise<
+    | {
+        success: true;
+        message: string;
+        publication: SolanaAuditPublicationResult;
+        audit: PublicPollAuditDto;
+      }
+    | {
+        success: false;
+        errorCode:
+          | "POLL_NOT_FOUND"
+          | "POLL_NOT_OWNED"
+          | "NO_ACCEPTED_AUDIT_VOTES"
+          | "TRANSACTIONS_DISABLED"
+          | "PUBLICATION_FAILED";
+        message: string;
+      }
+  > {
+    const poll = await pollRepository.getById(input.pollId);
+    if (!poll) {
+      return {
+        success: false,
+        errorCode: "POLL_NOT_FOUND",
+        message: "The requested poll does not exist.",
+      };
+    }
+
+    if (poll.created_by_user_id !== input.viewerUserId) {
+      return {
+        success: false,
+        errorCode: "POLL_NOT_OWNED",
+        message: "Only the poll creator can publish audit roots on-chain.",
+      };
+    }
+
+    if (!env.solanaAudit.transactionsEnabled) {
+      return {
+        success: false,
+        errorCode: "TRANSACTIONS_DISABLED",
+        message: "Solana audit transactions are disabled for this backend.",
+      };
+    }
+
+    const material = await loadPollAuditMaterial(poll);
+    if (material.acceptedVoteCount <= 0) {
+      return {
+        success: false,
+        errorCode: "NO_ACCEPTED_AUDIT_VOTES",
+        message: "This poll has no accepted proof-backed votes to publish.",
+      };
+    }
+
+    const existingRoot = await pollAuditRepository.getRootByPollIdAndBatchId(
+      poll.id,
+      "0",
+    );
+
+    try {
+      const publication = await solanaAuditPublisherService.publishPollAudit({
+        poll,
+        nullifierRoot: material.nullifierTree.root,
+        voteCommitmentRoot: material.voteCommitmentTree.root,
+        acceptedVoteCount: material.acceptedVoteCount,
+        resultHash: material.resultHash,
+        tallyProofHash: null,
+        publishFinalResult: isPollFinalResultPublishable(poll),
+      });
+
+      if (!existingRoot && publication.rootCommitSignature) {
+        await pollAuditRepository.insertRoot({
+          poll_id: poll.id,
+          batch_id: "0",
+          previous_nullifier_root: PUBLIC_AUDIT_ZERO_ROOT,
+          nullifier_root: material.nullifierTree.root,
+          previous_vote_commitment_root: PUBLIC_AUDIT_ZERO_ROOT,
+          vote_commitment_root: material.voteCommitmentTree.root,
+          accepted_count: material.acceptedVoteCount,
+          solana_tx_signature: publication.rootCommitSignature,
+        });
+        await voteRepository.markAcceptedAuditRecordsBatch({
+          pollId: poll.id,
+          batchId: "0",
+        });
+      }
+
+      if (publication.rootCommitSignature) {
+        await pollAuditRepository.insertAuditEvent({
+          poll_id: poll.id,
+          event_type: "poll_root_published_on_chain",
+          payload_hash: material.resultHash,
+          payload_json: {
+            batchIndex: 0,
+            acceptedVoteCount: material.acceptedVoteCount,
+            nullifierRoot: material.nullifierTree.root,
+            voteCommitmentRoot: material.voteCommitmentTree.root,
+            pollAddress: publication.pollAddress,
+            rootAddress: publication.rootAddress,
+          },
+          solana_tx_signature: publication.rootCommitSignature,
+        });
+      }
+
+      if (publication.finalResultSignature) {
+        await pollAuditRepository.insertAuditEvent({
+          poll_id: poll.id,
+          event_type: "poll_final_result_published_on_chain",
+          payload_hash: material.resultHash,
+          payload_json: {
+            resultHash: material.resultHash,
+            finalResultAddress: publication.finalResultAddress,
+            acceptedVoteCount: material.acceptedVoteCount,
+          },
+          solana_tx_signature: publication.finalResultSignature,
+        });
+      }
+
+      const audit = await this.getPublicPollAudit(poll.id);
+      if (!audit) {
+        throw new Error("Published audit could not be reloaded.");
+      }
+
+      return {
+        success: true,
+        message: "Poll audit roots were published on-chain.",
+        publication,
+        audit,
+      };
+    } catch (error) {
+      return {
+        success: false,
+        errorCode: "PUBLICATION_FAILED",
+        message:
+          error instanceof Error
+            ? error.message
+            : "Poll audit publication failed.",
+      };
+    }
   },
 
   async getPublicPollAuditInclusionProof(input: {
@@ -525,14 +760,20 @@ export const pollPublicAuditService = {
     }
 
     const auditRecord = auditRecords[leafIndex];
+    const batchId = auditRecord?.batch_id ?? "0";
+    const publishedRoot = await pollAuditRepository.getRootByPollIdAndBatchId(
+      poll.id,
+      batchId,
+    );
+    const solanaTx = publishedRoot?.solana_tx_signature ?? null;
     return {
       included: true,
       pollId: poll.id,
       voteCommitment: normalizedVoteCommitment,
       voteCommitmentLeafHash,
-      batchStatus: "pending_on_chain_publication",
-      batchIndex: 0,
-      batchId: auditRecord?.batch_id ?? null,
+      batchStatus: solanaTx ? "published_on_chain" : "pending_on_chain_publication",
+      batchIndex: parseBatchIndex(batchId),
+      batchId,
       acceptedAt: auditRecord?.accepted_at ?? null,
       proofHash: auditRecord?.proof_hash ?? null,
       root: voteCommitmentTree.root,
@@ -540,8 +781,8 @@ export const pollPublicAuditService = {
         (leafHash) => leafHash === voteCommitmentLeafHash,
       ).length,
       merklePath: buildPublicAuditMerkleProof(voteCommitmentTree, leafIndex),
-      solanaTx: null,
-      solanaExplorerUrl: null,
+      solanaTx,
+      solanaExplorerUrl: buildSolanaExplorerUrl(solanaTx),
       auditUrl,
     };
   },

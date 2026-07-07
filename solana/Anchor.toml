@@ -6,7 +6,7 @@ resolution = true
 skip-lint = false
 
 [programs.localnet]
-civicos_audit = "2hnBkFjtErxbLCtTevhiW2GGTjDp1EHctshX3ebPEfRt"
+civicos_audit = "FsXuodQtkWjE1EZEAUskvRuj4bGMrKZAHAEf4WEk4oRo"
 
 [registry]
 url = "https://api.apr.dev"
