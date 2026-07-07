@@ -20,7 +20,7 @@ export const DEFAULT_SOLANA_AUDIT_FEE_MODE: SolanaAuditFeeMode =
 export const SOLANA_BASE_FEE_LAMPORTS_PER_SIGNATURE = 5_000;
 
 export const CIVICOS_AUDIT_PROGRAM_ID =
-  "2hnBkFjtErxbLCtTevhiW2GGTjDp1EHctshX3ebPEfRt" as const;
+  "FsXuodQtkWjE1EZEAUskvRuj4bGMrKZAHAEf4WEk4oRo" as const;
 
 export const TOKEN_2022_PROGRAM_ID =
   "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb" as const;

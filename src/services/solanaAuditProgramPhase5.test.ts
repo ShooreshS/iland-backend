@@ -17,11 +17,19 @@ describe("Phase 5 Solana audit program scaffold", () => {
       "civicos-audit",
       "Cargo.toml",
     );
+    const source = readSolanaFile(
+      "programs",
+      "civicos-audit",
+      "src",
+      "lib.rs",
+    );
+    const idl = readSolanaFile("target", "idl", "civicos_audit.json");
+    const programId = anchorToml.match(/civicos_audit = "([^"]+)"/)?.[1];
 
     expect(anchorToml).toContain("[programs.localnet]");
-    expect(anchorToml).toContain(
-      'civicos_audit = "2hnBkFjtErxbLCtTevhiW2GGTjDp1EHctshX3ebPEfRt"',
-    );
+    expect(programId).toMatch(/^[1-9A-HJ-NP-Za-km-z]{32,44}$/);
+    expect(source).toContain(`declare_id!("${programId}")`);
+    expect(idl).toContain(`"address": "${programId}"`);
     expect(cargoToml).toContain('"programs/civicos-audit"');
     expect(programCargoToml).toContain('anchor-lang = "0.32.1"');
   });

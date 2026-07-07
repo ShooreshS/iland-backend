@@ -12,10 +12,10 @@ This program intentionally does not verify vote ZK proofs on-chain. The v1 trust
 ## Program
 
 - Program name: `civicos_audit`
-- Source-declared program id: `2hnBkFjtErxbLCtTevhiW2GGTjDp1EHctshX3ebPEfRt`
+- Source-declared program id: `FsXuodQtkWjE1EZEAUskvRuj4bGMrKZAHAEf4WEk4oRo`
 - Anchor version: `0.32.1`
 
-The source-declared program id is a scaffold value, not a deployed authority. Before any devnet or mainnet deployment, create the deployment key through the agreed key-custody process, update `declare_id!` / `Anchor.toml` with that public key, and run `anchor keys sync`. Generated `target/deploy/*-keypair.json` files are ignored and must not be committed.
+The source-declared program id is the current local deployment key public key. Before any mainnet deployment, create the deployment key through the agreed key-custody process, update `declare_id!` / `Anchor.toml` with that public key, and run `anchor keys sync`. Generated `target/deploy/*-keypair.json` files are ignored and must not be committed.
 
 ## Instructions
 
