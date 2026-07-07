@@ -1,0 +1,6 @@
+build/
+node_modules/
+*.log
+test-vectors/*.proof.json
+test-vectors/*.public.proof.json
+test-vectors/*.wtns
