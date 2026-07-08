@@ -296,6 +296,55 @@ export type NewVerifiedIdentityRow = {
   verified_at: string;
 };
 
+export type CredentialRegistryRow = {
+  id: string;
+  verified_identity_id: string;
+  identity_key_hash: string;
+  credential_commitment: string;
+  credential_schema_hash: string;
+  claims_hash: string;
+  credential_issuer_id: string;
+  commitment_scheme: string;
+  merkle_depth: number;
+  leaf_index: number;
+  revoked_at: string | null;
+  revocation_reason: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type NewCredentialRegistryRow = {
+  verified_identity_id: string;
+  identity_key_hash: string;
+  credential_commitment: string;
+  credential_schema_hash: string;
+  claims_hash: string;
+  credential_issuer_id: string;
+  commitment_scheme?: string;
+  merkle_depth?: number;
+  leaf_index: number;
+};
+
+export type CredentialRootRow = {
+  id: string;
+  root: string;
+  previous_root: string | null;
+  merkle_depth: number;
+  leaf_count: number;
+  latest_credential_registry_id: string | null;
+  solana_tx_signature: string | null;
+  created_at: string;
+};
+
+export type NewCredentialRootRow = {
+  root: string;
+  previous_root?: string | null;
+  merkle_depth?: number;
+  leaf_count: number;
+  latest_credential_registry_id?: string | null;
+  solana_tx_signature?: string | null;
+};
+
 export type WalletCredentialStatus = "not_issued" | "issued" | "revoked";
 
 export type WalletCredentialRow = {
