@@ -5,6 +5,40 @@ import {
   proofSystemPolicyService,
 } from "./proofSystemPolicyService";
 
+const withClearedGroth16VoteEnv = <T>(run: () => T): T => {
+  const keys = [
+    "ZKP_GROTH16_VOTE_VERIFIER_ENABLED",
+    "ZKP_GROTH16_VOTE_CIRCUIT_ID",
+    "ZKP_GROTH16_VOTE_VERIFIER_KEY_HASH",
+    "ZKP_GROTH16_VOTE_PUBLIC_INPUT_SCHEMA_VERSION",
+    "ZKP_GROTH16_VOTE_TRUSTED_SETUP_TRANSCRIPT_HASH",
+    "ZKP_GROTH16_PUBLIC_INPUT_SCHEMA_VERSION",
+    "ZKP_GROTH16_TRUSTED_SETUP_TRANSCRIPT_HASH",
+    "ZKP_GROTH16_VOTE_ARTIFACT_MANIFEST_PATH",
+    "ZKP_GROTH16_VOTE_ARTIFACT_MANIFEST_HASH",
+  ] as const;
+  const previous = new Map<string, string | undefined>(
+    keys.map((key) => [key, process.env[key]]),
+  );
+
+  for (const key of keys) {
+    delete process.env[key];
+  }
+
+  try {
+    return run();
+  } finally {
+    for (const key of keys) {
+      const value = previous.get(key);
+      if (value === undefined) {
+        delete process.env[key];
+      } else {
+        process.env[key] = value;
+      }
+    }
+  }
+};
+
 describe("proofSystemPolicyService", () => {
   it("selects the Phase 11 v1 off-chain verifier policy", () => {
     const policy = getProofSystemPolicy();
@@ -25,7 +59,9 @@ describe("proofSystemPolicyService", () => {
   });
 
   it("keeps Solana limited to audit artifacts for v1", () => {
-    const policy = proofSystemPolicyService.getPolicy();
+    const policy = withClearedGroth16VoteEnv(() =>
+      proofSystemPolicyService.getPolicy(),
+    );
 
     expect(proofSystemPolicyService.isOnChainZkVerifierEnabled()).toBe(false);
     expect(policy.solanaArtifacts).toEqual([

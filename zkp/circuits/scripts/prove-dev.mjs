@@ -11,6 +11,12 @@ const circuits = Object.freeze([
   "credential_commitment_vote",
   "encrypted_choice_tally",
 ]);
+const selectedCircuitNames = new Set(
+  (process.env.CIVICOS_GROTH16_PROVE_CIRCUITS || "")
+    .split(",")
+    .map((entry) => entry.trim())
+    .filter(Boolean),
+);
 
 const run = (command, args) => {
   console.log(`$ ${command} ${args.join(" ")}`);
@@ -23,6 +29,10 @@ const run = (command, args) => {
 mkdirSync(buildDir, { recursive: true });
 
 for (const circuit of circuits) {
+  if (selectedCircuitNames.size > 0 && !selectedCircuitNames.has(circuit)) {
+    continue;
+  }
+
   const witnessGenerator = resolve(
     buildDir,
     `${circuit}_js/generate_witness.js`,
@@ -57,42 +67,47 @@ for (const circuit of circuits) {
   ]);
 }
 
-const witnessGenerator = resolve(
-  buildDir,
-  "credential_commitment_vote_js/generate_witness.js",
-);
-const wasmPath = resolve(
-  buildDir,
-  "credential_commitment_vote_js/credential_commitment_vote.wasm",
-);
-
-const assertInvalidWitnessFails = ({ name, inputFile }) => {
-  const invalid = spawnSync(
-    "node",
-    [
-      witnessGenerator,
-      wasmPath,
-      resolve(vectorDir, inputFile),
-      resolve(buildDir, `credential_commitment_vote.${name}.wtns`),
-    ],
-    {
-      cwd: packageRoot,
-      encoding: "utf8",
-    },
+if (
+  selectedCircuitNames.size === 0 ||
+  selectedCircuitNames.has("credential_commitment_vote")
+) {
+  const witnessGenerator = resolve(
+    buildDir,
+    "credential_commitment_vote_js/generate_witness.js",
+  );
+  const wasmPath = resolve(
+    buildDir,
+    "credential_commitment_vote_js/credential_commitment_vote.wasm",
   );
 
-  if (invalid.status === 0) {
-    throw new Error(`${name} unexpectedly generated a witness`);
-  }
-};
+  const assertInvalidWitnessFails = ({ name, inputFile }) => {
+    const invalid = spawnSync(
+      "node",
+      [
+        witnessGenerator,
+        wasmPath,
+        resolve(vectorDir, inputFile),
+        resolve(buildDir, `credential_commitment_vote.${name}.wtns`),
+      ],
+      {
+        cwd: packageRoot,
+        encoding: "utf8",
+      },
+    );
 
-assertInvalidWitnessFails({
-  name: "invalid_wrong_nullifier",
-  inputFile: "credential_commitment_vote.invalid_wrong_nullifier.input.json",
-});
-assertInvalidWitnessFails({
-  name: "invalid_wrong_credential_root",
-  inputFile: "credential_commitment_vote.invalid_wrong_credential_root.input.json",
-});
+    if (invalid.status === 0) {
+      throw new Error(`${name} unexpectedly generated a witness`);
+    }
+  };
+
+  assertInvalidWitnessFails({
+    name: "invalid_wrong_nullifier",
+    inputFile: "credential_commitment_vote.invalid_wrong_nullifier.input.json",
+  });
+  assertInvalidWitnessFails({
+    name: "invalid_wrong_credential_root",
+    inputFile: "credential_commitment_vote.invalid_wrong_credential_root.input.json",
+  });
+}
 
 console.log("Local vote/tally proofs generated and invalid vectors rejected.");

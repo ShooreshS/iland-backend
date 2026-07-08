@@ -9,19 +9,21 @@ ZKP voting.
 
 - the voter knows the private `identitySecret` behind a credential commitment
 - the credential commitment is included in the public `credentialRoot`
-- the credential was issued for the public `credentialSchemaHash`
-- required eligibility flags in the committed credential are true
+- the credential commitment is bound to a private `identityKeyHash`, public `credentialSchemaHash`, private `claimsHash`, private `credentialIssuerId`, and issued `credentialSalt`
+- normalized eligibility flags in the committed credential are true
 - the public `nullifier` is derived from `(identitySecret, pollId, pollPolicyHash)`
-- the public `voteCommitment` binds `(nullifier, encryptedVoteHash, optionSetHash, voteRandomness)`
+- the public `encryptedVoteCommitment` binds `(optionIndex, encryptedVoteRandomness, optionSetHash)`
+- the public `voteCommitment` binds `(nullifier, encryptedVoteCommitment, optionSetHash, voteRandomness)`
 
 This is the credential-commitment v1 path. It does not prove native Iranian
 National ID document signatures in-circuit yet. The assumption is that CivicOS
 has already verified the document and issued a credential commitment into the
 credential tree.
 
-The current eligibility inputs are scaffold-level boolean claims. Before a
-production ceremony, CivicOS still needs to freeze the exact credential claim
-encoding and poll-policy constraint encoding those booleans represent.
+The circuit is document-agnostic: passports, Iranian National ID, and later
+document adapters must all emit the same normalized CivicOS credential witness.
+The verifier still needs a credential-root registry/pinning layer before this
+can be treated as production soundness.
 
 ## Public Signals
 
@@ -34,7 +36,7 @@ The public signal order is:
 5. `credentialRoot`
 6. `nullifier`
 7. `voteCommitment`
-8. `encryptedVoteHash`
+8. `encryptedVoteCommitment`
 
 All values are BN254 field elements encoded as decimal strings in local vectors.
 The app/backend hex-to-field adapter is a separate integration step.
@@ -69,3 +71,15 @@ npm run prove:dev
 
 The `setup:dev` script creates a local, non-production trusted setup. Do not use
 its `.zkey`, `.ptau`, verifier key, proof, or manifest output in production.
+
+For internal release-candidate artifact generation, after the relevant ptau
+files exist:
+
+```sh
+CIVICOS_GROTH16_SETUP_CIRCUITS=credential_commitment_vote npm run setup:rc
+CIVICOS_GROTH16_PROVE_CIRCUITS=credential_commitment_vote npm run prove:dev
+CIVICOS_GROTH16_MANIFEST_CIRCUITS=credential_commitment_vote npm run manifests
+```
+
+The RC manifest is for devnet/internal testing only until a documented
+multi-contributor ceremony replaces it.

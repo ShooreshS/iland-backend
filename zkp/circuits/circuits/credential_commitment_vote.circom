@@ -22,6 +22,9 @@ template CredentialCommitmentVote(depth) {
 
     // Private witness material.
     signal input identitySecret;
+    signal input identityKeyHash;
+    signal input claimsHash;
+    signal input credentialIssuerId;
     signal input credentialSalt;
     signal input optionIndex;
     signal input optionIndexBits[3];
@@ -69,17 +72,20 @@ template CredentialCommitmentVote(depth) {
     homeAreaEligible === 1;
     landEligible === 1;
 
-    component credentialCommitmentHasher = Poseidon(10);
+    component credentialCommitmentHasher = Poseidon(13);
     credentialCommitmentHasher.inputs[0] <== identitySecret;
-    credentialCommitmentHasher.inputs[1] <== credentialSchemaHash;
-    credentialCommitmentHasher.inputs[2] <== credentialSalt;
-    credentialCommitmentHasher.inputs[3] <== documentValid;
-    credentialCommitmentHasher.inputs[4] <== livenessPassed;
-    credentialCommitmentHasher.inputs[5] <== faceMatchedDocument;
-    credentialCommitmentHasher.inputs[6] <== ageEligible;
-    credentialCommitmentHasher.inputs[7] <== countryEligible;
-    credentialCommitmentHasher.inputs[8] <== homeAreaEligible;
-    credentialCommitmentHasher.inputs[9] <== landEligible;
+    credentialCommitmentHasher.inputs[1] <== identityKeyHash;
+    credentialCommitmentHasher.inputs[2] <== credentialSchemaHash;
+    credentialCommitmentHasher.inputs[3] <== claimsHash;
+    credentialCommitmentHasher.inputs[4] <== credentialIssuerId;
+    credentialCommitmentHasher.inputs[5] <== credentialSalt;
+    credentialCommitmentHasher.inputs[6] <== documentValid;
+    credentialCommitmentHasher.inputs[7] <== livenessPassed;
+    credentialCommitmentHasher.inputs[8] <== faceMatchedDocument;
+    credentialCommitmentHasher.inputs[9] <== ageEligible;
+    credentialCommitmentHasher.inputs[10] <== countryEligible;
+    credentialCommitmentHasher.inputs[11] <== homeAreaEligible;
+    credentialCommitmentHasher.inputs[12] <== landEligible;
 
     component nullifierHasher = Poseidon(3);
     nullifierHasher.inputs[0] <== identitySecret;

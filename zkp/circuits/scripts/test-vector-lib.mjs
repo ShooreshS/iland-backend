@@ -48,6 +48,9 @@ export const createBaseWitness = () => ({
   credentialSchemaHash: "303",
   optionSetHash: "404",
   identitySecret: "7001",
+  identityKeyHash: "7005",
+  claimsHash: "7006",
+  credentialIssuerId: "7007",
   credentialSalt: "7002",
   optionIndex: "1",
   optionIndexBits: ["1", "0", "0"],
@@ -79,7 +82,10 @@ export const createPoseidonContext = async () => {
 export const deriveCredentialCommitment = ({ poseidonHash, witness }) =>
   poseidonHash([
     witness.identitySecret,
+    witness.identityKeyHash,
     witness.credentialSchemaHash,
+    witness.claimsHash,
+    witness.credentialIssuerId,
     witness.credentialSalt,
     witness.documentValid,
     witness.livenessPassed,

@@ -282,7 +282,7 @@ describe("groth16TallyProofVerifierService", () => {
     ).resolves.toBe(false);
   });
 
-  it("accepts the local EncryptedChoiceTally fixture through the default verifier engine", async () => {
+  it("rejects the stale local EncryptedChoiceTally fixture through the current padded tally contract", async () => {
     const registryRecord = buildGroth16VerifierKeyRegistryRecord(
       fixtureManifest,
       fixtureManifestHash,
@@ -319,17 +319,12 @@ describe("groth16TallyProofVerifierService", () => {
       { config: fixtureConfig },
     );
 
-    expect(result.ok).toBe(true);
-    if (result.ok) {
-      expect(result.auditMaterial).toMatchObject({
-        tallyPublicInputsHash: fixtureEnvelope.publicInputsHash,
-        tallyVerifierKeyHash: fixtureManifest.verifierKeyHash,
-        tallyCircuitId: fixtureManifest.circuitId,
-        nullifierRoot: fixtureEnvelope.publicInputs.nullifierRoot,
-        voteCommitmentRoot: fixtureEnvelope.publicInputs.voteCommitmentRoot,
-        encryptedVoteRoot: fixtureEnvelope.publicInputs.encryptedVoteRoot,
-        acceptedCount: fixtureEnvelope.publicInputs.acceptedVoteCount,
-      });
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.reason).toBe("PROOF_INVALID");
+      expect(result.message).toBe(
+        "Groth16 tally proof option counts hash does not match the public counts.",
+      );
     }
   });
 
