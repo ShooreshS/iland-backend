@@ -140,6 +140,8 @@ const disabledVerifier: Groth16VerifierConfig = {
   voteVerifierEnabled: false,
 };
 
+const acceptCredentialRoot = (root: string): boolean => root === CREDENTIAL_ROOT;
+
 const createPoll = (overrides: Partial<PollRow> = {}): PollRow => ({
   id: "poll-1",
   slug: "poll-1",
@@ -313,6 +315,7 @@ describe("groth16ProofVerifierService", () => {
       },
       {
         config: configuredVerifier,
+        isAcceptedCredentialRoot: acceptCredentialRoot,
       },
     );
 
@@ -359,6 +362,7 @@ describe("groth16ProofVerifierService", () => {
       },
       {
         config: configuredVerifier,
+        isAcceptedCredentialRoot: acceptCredentialRoot,
         verifyProof: async (input) => {
           expect(input.circuitId).toBe(CIRCUIT_ID);
           expect(input.verifierKeyHash).toBe(VERIFIER_KEY_HASH);
@@ -451,7 +455,10 @@ describe("groth16ProofVerifierService", () => {
         encryptedVoteHash: fixtureEnvelope.publicInputs.encryptedVoteHash,
         expectedVoteCommitment: fixtureEnvelope.publicInputs.voteCommitment,
       },
-      { config: fixtureConfig },
+      {
+        config: fixtureConfig,
+        isAcceptedCredentialRoot: () => true,
+      },
     );
 
     expect(result.ok).toBe(true);
@@ -547,6 +554,7 @@ describe("groth16ProofVerifierService", () => {
       },
       {
         config: configuredVerifier,
+        isAcceptedCredentialRoot: acceptCredentialRoot,
         verifyProof: () => false,
       },
     );
@@ -554,6 +562,32 @@ describe("groth16ProofVerifierService", () => {
     expect(result.ok).toBe(false);
     if (!result.ok) {
       expect(result.reason).toBe("VERIFIER_REJECTED");
+    }
+  });
+
+  it("rejects proofs whose credential root is not in the registry", async () => {
+    let verifierCalled = false;
+    const result = await verifyGroth16VoteProofForPoll(
+      {
+        poll: createPoll(),
+        proof: createProof(),
+        encryptedVoteHash: ENCRYPTED_VOTE_HASH,
+        expectedVoteCommitment: VOTE_COMMITMENT,
+      },
+      {
+        config: configuredVerifier,
+        isAcceptedCredentialRoot: () => false,
+        verifyProof: () => {
+          verifierCalled = true;
+          return true;
+        },
+      },
+    );
+
+    expect(result.ok).toBe(false);
+    expect(verifierCalled).toBe(false);
+    if (!result.ok) {
+      expect(result.reason).toBe("CREDENTIAL_ROOT_UNKNOWN");
     }
   });
 

@@ -16,7 +16,9 @@ const ZERO_FIELD = "0".repeat(64);
 type CredentialRegistryRepositoryPort = Pick<
   typeof credentialRegistryRepository,
   | "getByIdentityKeyHash"
+  | "getByIdentityKeyHashAndSchema"
   | "getByVerifiedIdentityId"
+  | "getByVerifiedIdentityIdAndSchema"
   | "listActiveByLeafIndex"
   | "insertRegistryEntry"
   | "getAcceptedRoot"
@@ -324,7 +326,10 @@ export const createCredentialRegistryService = (
         input.verifiedIdentity.canonical_identity_key,
       );
       const existingByIdentity =
-        await repository.getByIdentityKeyHash(identityKeyHash);
+        await repository.getByIdentityKeyHashAndSchema(
+          identityKeyHash,
+          credentialSchemaHash,
+        );
       if (existingByIdentity) {
         assertExistingEntryMatchesInput(existingByIdentity, {
           credentialCommitment,
@@ -338,7 +343,10 @@ export const createCredentialRegistryService = (
       }
 
       const existingByVerifiedIdentity =
-        await repository.getByVerifiedIdentityId(input.verifiedIdentity.id);
+        await repository.getByVerifiedIdentityIdAndSchema(
+          input.verifiedIdentity.id,
+          credentialSchemaHash,
+        );
       if (existingByVerifiedIdentity) {
         assertExistingEntryMatchesInput(existingByVerifiedIdentity, {
           credentialCommitment,
@@ -372,7 +380,10 @@ export const createCredentialRegistryService = (
           throw error;
         }
 
-        const existing = await repository.getByIdentityKeyHash(identityKeyHash);
+        const existing = await repository.getByIdentityKeyHashAndSchema(
+          identityKeyHash,
+          credentialSchemaHash,
+        );
         if (!existing) {
           throw error;
         }

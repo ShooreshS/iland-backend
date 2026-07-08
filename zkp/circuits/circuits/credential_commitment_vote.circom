@@ -24,38 +24,15 @@ template CredentialCommitmentVote(depth) {
     signal input identitySecret;
     signal input identityKeyHash;
     signal input claimsHash;
-    signal input credentialIssuerId;
-    signal input credentialSalt;
     signal input optionIndex;
     signal input optionIndexBits[3];
     signal input encryptedVoteRandomness;
     signal input voteRandomness;
-    signal input documentValid;
-    signal input livenessPassed;
-    signal input faceMatchedDocument;
-    signal input ageEligible;
-    signal input countryEligible;
-    signal input homeAreaEligible;
-    signal input landEligible;
     signal input credentialRootSiblings[depth];
     signal input credentialRootPathIndices[depth];
 
-    component documentValidIsBoolean = AssertBoolean();
-    component livenessPassedIsBoolean = AssertBoolean();
-    component faceMatchedDocumentIsBoolean = AssertBoolean();
-    component ageEligibleIsBoolean = AssertBoolean();
-    component countryEligibleIsBoolean = AssertBoolean();
-    component homeAreaEligibleIsBoolean = AssertBoolean();
-    component landEligibleIsBoolean = AssertBoolean();
     component optionIndexBitIsBoolean[3];
 
-    documentValidIsBoolean.in <== documentValid;
-    livenessPassedIsBoolean.in <== livenessPassed;
-    faceMatchedDocumentIsBoolean.in <== faceMatchedDocument;
-    ageEligibleIsBoolean.in <== ageEligible;
-    countryEligibleIsBoolean.in <== countryEligible;
-    homeAreaEligibleIsBoolean.in <== homeAreaEligible;
-    landEligibleIsBoolean.in <== landEligible;
     optionIndexBitIsBoolean[0] = AssertBoolean();
     optionIndexBitIsBoolean[1] = AssertBoolean();
     optionIndexBitIsBoolean[2] = AssertBoolean();
@@ -64,28 +41,12 @@ template CredentialCommitmentVote(depth) {
     optionIndexBitIsBoolean[2].in <== optionIndexBits[2];
 
     optionIndex === optionIndexBits[0] + 2 * optionIndexBits[1] + 4 * optionIndexBits[2];
-    documentValid === 1;
-    livenessPassed === 1;
-    faceMatchedDocument === 1;
-    ageEligible === 1;
-    countryEligible === 1;
-    homeAreaEligible === 1;
-    landEligible === 1;
 
-    component credentialCommitmentHasher = Poseidon(13);
+    component credentialCommitmentHasher = Poseidon(4);
     credentialCommitmentHasher.inputs[0] <== identitySecret;
     credentialCommitmentHasher.inputs[1] <== identityKeyHash;
     credentialCommitmentHasher.inputs[2] <== credentialSchemaHash;
     credentialCommitmentHasher.inputs[3] <== claimsHash;
-    credentialCommitmentHasher.inputs[4] <== credentialIssuerId;
-    credentialCommitmentHasher.inputs[5] <== credentialSalt;
-    credentialCommitmentHasher.inputs[6] <== documentValid;
-    credentialCommitmentHasher.inputs[7] <== livenessPassed;
-    credentialCommitmentHasher.inputs[8] <== faceMatchedDocument;
-    credentialCommitmentHasher.inputs[9] <== ageEligible;
-    credentialCommitmentHasher.inputs[10] <== countryEligible;
-    credentialCommitmentHasher.inputs[11] <== homeAreaEligible;
-    credentialCommitmentHasher.inputs[12] <== landEligible;
 
     component nullifierHasher = Poseidon(3);
     nullifierHasher.inputs[0] <== identitySecret;

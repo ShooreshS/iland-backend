@@ -8,6 +8,7 @@ import {
   type Groth16ArtifactManifest,
   type Groth16VerifierKeyRegistryRecord,
 } from "./groth16ArtifactManifestService";
+import credentialRegistryService from "./credentialRegistryService";
 import { verifyGroth16VoteProofWithSnarkjs } from "./groth16SnarkjsVerifierEngine";
 import { canonicalizeJson } from "./pollPolicyService";
 
@@ -123,6 +124,7 @@ export type Groth16VoteProofVerificationResult =
         | "PROOF_INVALID"
         | "POLL_POLICY_HASH_MISMATCH"
         | "CREDENTIAL_SCHEMA_HASH_MISMATCH"
+        | "CREDENTIAL_ROOT_UNKNOWN"
         | "OPTION_SET_HASH_MISMATCH"
         | "CIRCUIT_ID_MISMATCH"
         | "VERIFIER_KEY_MISMATCH"
@@ -136,6 +138,7 @@ export type Groth16VoteProofVerificationResult =
 export type Groth16ProofVerifierDependencies = {
   config?: Groth16VerifierConfig;
   verifyProof?: Groth16VoteVerifierEngine | null;
+  isAcceptedCredentialRoot?: (root: string) => boolean | Promise<boolean>;
 };
 
 const sha256Hex = (value: string): string =>
@@ -536,6 +539,23 @@ export const verifyGroth16VoteProofForPoll = async (
     return reject(
       "PROOF_INVALID",
       "Groth16 vote proof vote commitment does not match the submitted commitment.",
+    );
+  }
+
+  const isAcceptedCredentialRoot =
+    dependencies.isAcceptedCredentialRoot ??
+    credentialRegistryService.isAcceptedCredentialRoot;
+  let credentialRootAccepted = false;
+  try {
+    credentialRootAccepted = await isAcceptedCredentialRoot(credentialRoot);
+  } catch {
+    credentialRootAccepted = false;
+  }
+
+  if (!credentialRootAccepted) {
+    return reject(
+      "CREDENTIAL_ROOT_UNKNOWN",
+      "Groth16 vote proof credential root is not an accepted CivicOS credential registry root.",
     );
   }
 

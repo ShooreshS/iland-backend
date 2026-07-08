@@ -364,6 +364,51 @@ export type VerificationProofRequestDto = {
   publicInputs: VerificationProofPublicInputsDto;
 };
 
+export type CredentialIssuanceRequestDto = {
+  credentialSchemaHash: string;
+  credentialCommitment?: string | null;
+};
+
+export type CredentialIssuanceMaterialDto = {
+  identityKeyHash: string;
+  credentialSchemaHash: string;
+  claimsHash: string;
+  credentialIssuerId: string;
+  commitmentScheme: "civicos-credential-commitment-v1";
+  merkleDepth: 24;
+};
+
+export type IssuedCredentialRegistryDto = CredentialIssuanceMaterialDto & {
+  credentialCommitment: string;
+  credentialRoot: string;
+  leafIndex: number;
+  leafCount: number;
+  credentialRootSiblings: string[];
+  credentialRootPathIndices: number[];
+  credentialRootCreatedAt: string;
+};
+
+export type CredentialIssuanceResultDto =
+  | {
+      success: true;
+      status: "material";
+      material: CredentialIssuanceMaterialDto;
+    }
+  | {
+      success: true;
+      status: "issued" | "existing";
+      credential: IssuedCredentialRegistryDto;
+    }
+  | {
+      success: false;
+      errorCode:
+        | "INVALID_INPUT"
+        | "VERIFIED_IDENTITY_REQUIRED"
+        | "IDENTITY_PROFILE_REQUIRED"
+        | "CREDENTIAL_CONFLICT";
+      message: string;
+    };
+
 export type ProofSystemPolicyDto = {
   version: "civicos-proof-system-policy-v1";
   phase: 11;

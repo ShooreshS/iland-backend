@@ -40,6 +40,26 @@ export const createCredentialRegistryRepository = (
       return data || null;
     },
 
+    async getByIdentityKeyHashAndSchema(
+      identityKeyHash: string,
+      credentialSchemaHash: string,
+    ): Promise<CredentialRegistryRow | null> {
+      const supabase = getSupabaseAdminClient();
+
+      const { data, error } = await supabase
+        .from("credential_registry")
+        .select(CREDENTIAL_REGISTRY_COLUMNS)
+        .eq("identity_key_hash", identityKeyHash)
+        .eq("credential_schema_hash", credentialSchemaHash)
+        .maybeSingle<CredentialRegistryRow>();
+
+      if (error) {
+        throw error;
+      }
+
+      return data || null;
+    },
+
     async getByVerifiedIdentityId(
       verifiedIdentityId: string,
     ): Promise<CredentialRegistryRow | null> {
@@ -49,6 +69,26 @@ export const createCredentialRegistryRepository = (
         .from("credential_registry")
         .select(CREDENTIAL_REGISTRY_COLUMNS)
         .eq("verified_identity_id", verifiedIdentityId)
+        .maybeSingle<CredentialRegistryRow>();
+
+      if (error) {
+        throw error;
+      }
+
+      return data || null;
+    },
+
+    async getByVerifiedIdentityIdAndSchema(
+      verifiedIdentityId: string,
+      credentialSchemaHash: string,
+    ): Promise<CredentialRegistryRow | null> {
+      const supabase = getSupabaseAdminClient();
+
+      const { data, error } = await supabase
+        .from("credential_registry")
+        .select(CREDENTIAL_REGISTRY_COLUMNS)
+        .eq("verified_identity_id", verifiedIdentityId)
+        .eq("credential_schema_hash", credentialSchemaHash)
         .maybeSingle<CredentialRegistryRow>();
 
       if (error) {

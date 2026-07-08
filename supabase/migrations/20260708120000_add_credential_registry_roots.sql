@@ -15,8 +15,8 @@ create table if not exists public.credential_registry (
   revocation_reason text,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now(),
-  unique (verified_identity_id),
-  unique (identity_key_hash),
+  unique (verified_identity_id, credential_schema_hash),
+  unique (identity_key_hash, credential_schema_hash),
   unique (merkle_depth, leaf_index),
   check (identity_key_hash ~ '^[0-9a-f]{64}$'),
   check (credential_commitment ~ '^[0-9a-f]{64}$'),
@@ -34,6 +34,9 @@ create index if not exists idx_credential_registry_active_leaf
   on public.credential_registry(merkle_depth, leaf_index)
   where revoked_at is null;
 
+create index if not exists idx_credential_registry_identity_key_hash
+  on public.credential_registry(identity_key_hash);
+
 create index if not exists idx_credential_registry_created_at
   on public.credential_registry(created_at);
 
@@ -42,7 +45,7 @@ comment on table public.credential_registry is
 comment on column public.credential_registry.verified_identity_id is
   'Internal FK to the canonical verified identity. This is not copied into poll_zk_votes or public audit material.';
 comment on column public.credential_registry.identity_key_hash is
-  'Poseidon BN254 hash of verified_identities.canonical_identity_key. Unique anti-Sybil anchor for anonymous ZKP voting.';
+  'Poseidon BN254 hash of verified_identities.canonical_identity_key. Anti-Sybil anchor for anonymous ZKP voting, unique with credential_schema_hash.';
 comment on column public.credential_registry.credential_commitment is
   'Poseidon BN254 credential leaf committed by the vote circuit.';
 comment on column public.credential_registry.claims_hash is

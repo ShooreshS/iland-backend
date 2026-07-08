@@ -44,12 +44,38 @@ const createMockCredentialRegistryRepository = () => {
       return registryRows.find((row) => row.identity_key_hash === identityKeyHash) || null;
     },
 
+    async getByIdentityKeyHashAndSchema(
+      identityKeyHash: string,
+      credentialSchemaHash: string,
+    ): Promise<CredentialRegistryRow | null> {
+      return (
+        registryRows.find(
+          (row) =>
+            row.identity_key_hash === identityKeyHash &&
+            row.credential_schema_hash === credentialSchemaHash,
+        ) || null
+      );
+    },
+
     async getByVerifiedIdentityId(
       verifiedIdentityId: string,
     ): Promise<CredentialRegistryRow | null> {
       return (
         registryRows.find(
           (row) => row.verified_identity_id === verifiedIdentityId,
+        ) || null
+      );
+    },
+
+    async getByVerifiedIdentityIdAndSchema(
+      verifiedIdentityId: string,
+      credentialSchemaHash: string,
+    ): Promise<CredentialRegistryRow | null> {
+      return (
+        registryRows.find(
+          (row) =>
+            row.verified_identity_id === verifiedIdentityId &&
+            row.credential_schema_hash === credentialSchemaHash,
         ) || null
       );
     },
@@ -70,8 +96,10 @@ const createMockCredentialRegistryRepository = () => {
       if (
         registryRows.some(
           (row) =>
-            row.identity_key_hash === input.identity_key_hash ||
-            row.verified_identity_id === input.verified_identity_id ||
+            (row.identity_key_hash === input.identity_key_hash &&
+              row.credential_schema_hash === input.credential_schema_hash) ||
+            (row.verified_identity_id === input.verified_identity_id &&
+              row.credential_schema_hash === input.credential_schema_hash) ||
             (row.merkle_depth === (input.merkle_depth ?? 24) &&
               row.leaf_index === input.leaf_index),
         )
@@ -184,7 +212,7 @@ describe("credentialRegistryService", () => {
     expect(cursor).toBe(material.root);
   });
 
-  it("issues one registry entry and root per unique verified identity", async () => {
+  it("issues one registry entry and root per verified identity schema", async () => {
     const repository = createMockCredentialRegistryRepository();
     const service = createCredentialRegistryService({ repository });
     const input = {
@@ -231,5 +259,32 @@ describe("credentialRegistryService", () => {
         credentialCommitment: hex("4"),
       }),
     ).rejects.toThrow("different credential registry entry");
+  });
+
+  it("allows a distinct credential schema for the same verified identity", async () => {
+    const repository = createMockCredentialRegistryRepository();
+    const service = createCredentialRegistryService({ repository });
+
+    const first = await service.issueCredentialRegistryEntry({
+      verifiedIdentity,
+      credentialCommitment: hex("1"),
+      credentialSchemaHash: hex("2"),
+      claimsHash: hex("3"),
+      credentialIssuerId: "did:civicos:issuer:v1",
+      merkleDepth: 3,
+    });
+    const second = await service.issueCredentialRegistryEntry({
+      verifiedIdentity,
+      credentialCommitment: hex("4"),
+      credentialSchemaHash: hex("5"),
+      claimsHash: hex("6"),
+      credentialIssuerId: "did:civicos:issuer:v1",
+      merkleDepth: 3,
+    });
+
+    expect(first.status).toBe("issued");
+    expect(second.status).toBe("issued");
+    expect(repository.registryRows).toHaveLength(2);
+    expect(repository.registryRows.map((row) => row.leaf_index)).toEqual([0, 1]);
   });
 });

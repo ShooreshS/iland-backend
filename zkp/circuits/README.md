@@ -9,8 +9,7 @@ ZKP voting.
 
 - the voter knows the private `identitySecret` behind a credential commitment
 - the credential commitment is included in the public `credentialRoot`
-- the credential commitment is bound to a private `identityKeyHash`, public `credentialSchemaHash`, private `claimsHash`, private `credentialIssuerId`, and issued `credentialSalt`
-- normalized eligibility flags in the committed credential are true
+- the credential commitment is bound to private `identitySecret`, private `identityKeyHash`, public `credentialSchemaHash`, and private server-issued `claimsHash`
 - the public `nullifier` is derived from `(identitySecret, pollId, pollPolicyHash)`
 - the public `encryptedVoteCommitment` binds `(optionIndex, encryptedVoteRandomness, optionSetHash)`
 - the public `voteCommitment` binds `(nullifier, encryptedVoteCommitment, optionSetHash, voteRandomness)`
@@ -22,8 +21,8 @@ credential tree.
 
 The circuit is document-agnostic: passports, Iranian National ID, and later
 document adapters must all emit the same normalized CivicOS credential witness.
-The verifier still needs a credential-root registry/pinning layer before this
-can be treated as production soundness.
+The verifier rejects proofs whose public `credentialRoot` is not in the
+backend accepted credential-root registry.
 
 ## Public Signals
 
