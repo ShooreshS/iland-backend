@@ -525,6 +525,38 @@ export type NewPollOptionRow = {
   created_at?: string;
 };
 
+export type PollEncryptionKeyRow = {
+  id: string;
+  key_id: string;
+  poll_id: string | null;
+  status: "active" | "revoked";
+  algorithm: string;
+  key_agreement: string;
+  kdf: string;
+  cipher: string;
+  public_key_jwk: JsonValue;
+  public_key_hash: string;
+  private_key_jwk: JsonValue;
+  custody_model: string;
+  created_at: string;
+  revoked_at: string | null;
+  revocation_reason: string | null;
+};
+
+export type NewPollEncryptionKeyRow = {
+  key_id: string;
+  poll_id?: string | null;
+  status?: "active" | "revoked";
+  algorithm: string;
+  key_agreement: string;
+  kdf: string;
+  cipher: string;
+  public_key_jwk: JsonValue;
+  public_key_hash: string;
+  private_key_jwk: JsonValue;
+  custody_model?: string;
+};
+
 export type LandRow = {
   id: string;
   name: string;

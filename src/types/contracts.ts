@@ -44,6 +44,48 @@ export type PollDto = {
   updatedAt: string;
 };
 
+export type PollEncryptionKeyDto = {
+  version: "civicos-poll-encryption-key-v1";
+  pollId: string;
+  pollEncryptionKeyId: string;
+  status: "active" | "revoked";
+  algorithm: "x25519-hkdf-sha256-aes-256-gcm-v1";
+  keyAgreement: "x25519";
+  kdf: "hkdf-sha256";
+  cipher: "aes-256-gcm";
+  publicKeyJwk: {
+    kty: "OKP";
+    crv: "X25519";
+    x: string;
+  };
+  publicKeyHash: string;
+  encryptedVoteVersion: "civicos-encrypted-vote-v1";
+  encryptedVoteOpeningVersion: "civicos-encrypted-vote-opening-v1";
+  encryptedVoteCommitmentScheme: "poseidon-encrypted-vote-opening-v1";
+  custody: {
+    model: string;
+    threshold: boolean;
+    privateKeyMaterialExposedByApi: false;
+  };
+  createdAt: string;
+};
+
+export type PollEncryptionKeyResultDto =
+  | {
+      success: true;
+      key: PollEncryptionKeyDto;
+    }
+  | {
+      success: false;
+      errorCode:
+        | "INVALID_INPUT"
+        | "POLL_NOT_FOUND"
+        | "ENCRYPTION_KEY_NOT_REQUIRED"
+        | "ENCRYPTION_KEY_NOT_CONFIGURED"
+        | "ENCRYPTION_KEY_CONFLICT";
+      message: string;
+    };
+
 export type PollOptionDto = {
   id: string;
   pollId: string;

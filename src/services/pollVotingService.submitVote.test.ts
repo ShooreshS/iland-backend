@@ -43,6 +43,7 @@ const PRODUCTION_CREDENTIAL_ROOT = "7".repeat(64);
 const PRODUCTION_VERIFIER_KEY_HASH = "8".repeat(64);
 const PRODUCTION_PROOF_HASH = "9".repeat(64);
 const PRODUCTION_ENCRYPTED_VOTE_COMMITMENT = "a".repeat(64);
+const POLL_ENCRYPTION_KEY_HASH = "b".repeat(64);
 const PRODUCTION_CIRCUIT_ID = "civicos-groth16-vote-circuit-v1";
 
 const sha256Hex = (value: string): string =>
@@ -241,11 +242,26 @@ const createVotePrivacyPayload = (
 const createEncryptedVotePayload = () => ({
   version: "civicos-encrypted-vote-v1" as const,
   pollEncryptionKeyId: "poll-key-1",
+  pollEncryptionKeyHash: POLL_ENCRYPTION_KEY_HASH,
+  encryptedVoteCommitment: PRODUCTION_ENCRYPTED_VOTE_COMMITMENT,
   ciphertext: "base64:ciphertext",
   nonce: "base64:nonce",
-  algorithm: "xchacha20-poly1305-v1",
+  authTag: "base64:tag",
+  algorithm: "x25519-hkdf-sha256-aes-256-gcm-v1",
+  keyAgreement: "x25519",
+  kdf: "hkdf-sha256",
+  cipher: "aes-256-gcm",
+  ephemeralPublicKey: "base64:ephemeral-public-key",
   optionSetHash: OPTION_SET_HASH,
 });
+
+const getPollEncryptionKeyForPoll = async () =>
+  ({
+    success: true,
+    key: {
+      publicKeyHash: POLL_ENCRYPTION_KEY_HASH,
+    },
+  }) as any;
 
 const createProductionVotePrivacyPayload = (
   encryptedVoteHash: string,
@@ -582,6 +598,7 @@ describe("pollVotingService.submitVote", () => {
     const encryptedVoteHash = hashEncryptedVotePayload(encryptedVote);
     const privacy = createProductionVotePrivacyPayload(encryptedVoteHash);
     const service = createPollVotingService({
+      getPollEncryptionKeyForPoll,
       verifyGroth16VoteProofForPoll: async (input) => {
         expect(input.poll.id).toBe(poll.id);
         expect(input.encryptedVoteHash).toBe(encryptedVoteHash);
@@ -726,6 +743,7 @@ describe("pollVotingService.submitVote", () => {
     const encryptedVote = createEncryptedVotePayload();
     const privacy = createProductionVotePrivacyPayload("a".repeat(64));
     const service = createPollVotingService({
+      getPollEncryptionKeyForPoll,
       verifyGroth16VoteProofForPoll: async () => {
         throw new Error("Verifier should not be called for encrypted vote mismatch.");
       },
@@ -787,6 +805,7 @@ describe("pollVotingService.submitVote", () => {
     const encryptedVoteHash = hashEncryptedVotePayload(encryptedVote);
     const privacy = createProductionVotePrivacyPayload(encryptedVoteHash);
     const service = createPollVotingService({
+      getPollEncryptionKeyForPoll,
       verifyGroth16VoteProofForPoll: async () => ({
         ok: true,
         auditMaterial: {

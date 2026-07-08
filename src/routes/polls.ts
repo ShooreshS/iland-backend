@@ -1,6 +1,7 @@
 import { z } from "zod";
 import requireViewer from "../auth/requireViewer";
 import { json } from "../middleware/json";
+import pollEncryptionKeyService from "../services/pollEncryptionKeyService";
 import pollDraftService from "../services/pollDraftService";
 import pollPublicAuditService from "../services/pollPublicAuditService";
 import pollVotingService from "../services/pollVotingService";
@@ -172,9 +173,16 @@ const encryptedVoteSchema = z
   .object({
     version: z.literal("civicos-encrypted-vote-v1"),
     pollEncryptionKeyId: z.string().trim().min(1),
+    pollEncryptionKeyHash: hex64Schema,
+    encryptedVoteCommitment: hex64Schema,
     ciphertext: z.string().trim().min(1),
     nonce: z.string().trim().min(1),
+    authTag: z.string().trim().min(1),
     algorithm: z.string().trim().min(1),
+    keyAgreement: z.string().trim().min(1),
+    kdf: z.string().trim().min(1),
+    cipher: z.string().trim().min(1),
+    ephemeralPublicKey: z.string().trim().min(1),
     optionSetHash: hex64Schema,
   })
   .strict();
@@ -296,6 +304,14 @@ const tallyProofErrorStatusMap: Record<string, number> = {
   POLL_NOT_PRODUCTION_ZKP: 409,
   NO_ACCEPTED_AUDIT_VOTES: 409,
   TALLY_PROOF_INVALID: 400,
+};
+
+const pollEncryptionKeyErrorStatusMap: Record<string, number> = {
+  INVALID_INPUT: 400,
+  POLL_NOT_FOUND: 404,
+  ENCRYPTION_KEY_NOT_REQUIRED: 409,
+  ENCRYPTION_KEY_NOT_CONFIGURED: 409,
+  ENCRYPTION_KEY_CONFLICT: 409,
 };
 
 const getPollsRoute: RouteDefinition = {
@@ -541,6 +557,40 @@ const getPollDetailsRoute: RouteDefinition = {
     }
 
     return json(details);
+  },
+};
+
+const getPollEncryptionKeyRoute: RouteDefinition = {
+  method: "GET",
+  path: "/polls/:id/encryption-key",
+  handler: async ({ request, params }) => {
+    const viewerResult = await requireViewer(request);
+    if (!viewerResult.ok) {
+      return viewerResult.response;
+    }
+
+    const pollId = params.id?.trim() || "";
+    if (!pollId) {
+      return json(
+        {
+          error: "invalid_poll_id",
+          message: "A poll id is required.",
+        },
+        400,
+      );
+    }
+
+    const result = await pollEncryptionKeyService.getOrCreatePublicKeyForPoll(
+      pollId,
+    );
+    if (result.success) {
+      return json(result);
+    }
+
+    return json(
+      result,
+      pollEncryptionKeyErrorStatusMap[result.errorCode] || 400,
+    );
   },
 };
 
@@ -1008,6 +1058,7 @@ export const pollRoutes: RouteDefinition[] = [
   publishPollAuditRoute,
   submitTallyProofRoute,
   getPollDetailsRoute,
+  getPollEncryptionKeyRoute,
   submitVoteRoute,
   submitVotePhase10Route,
 ];

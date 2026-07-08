@@ -17,6 +17,12 @@ import {
   resolveCivicPollPolicy,
   type CivicPollPolicy,
 } from "./pollPolicyService";
+import pollEncryptionKeyService, {
+  CIVIC_ENCRYPTED_VOTE_ALGORITHM,
+  CIVIC_ENCRYPTED_VOTE_CIPHER,
+  CIVIC_ENCRYPTED_VOTE_KEY_AGREEMENT,
+  CIVIC_ENCRYPTED_VOTE_KDF,
+} from "./pollEncryptionKeyService";
 import { hashPublicAuditLeaf } from "./pollPublicAuditService";
 import { verifyVoteProofForPoll } from "./voteProofVerifierService";
 import type {
@@ -131,15 +137,23 @@ const PRODUCTION_ZKP_ENCRYPTED_VOTE_REQUIRED_MESSAGE =
 type ProductionEncryptedVotePayload = {
   version: typeof CIVIC_PRODUCTION_ENCRYPTED_VOTE_VERSION;
   pollEncryptionKeyId: string;
+  pollEncryptionKeyHash: string;
+  encryptedVoteCommitment: string;
   ciphertext: string;
   nonce: string;
+  authTag: string;
   algorithm: string;
+  keyAgreement: string;
+  kdf: string;
+  cipher: string;
+  ephemeralPublicKey: string;
   optionSetHash: string;
 };
 
 type PollVotingServiceDependencies = {
   verifyGroth16VoteProofForPoll?: typeof verifyGroth16VoteProofForPoll;
   hashEncryptedVotePayload?: typeof hashEncryptedVotePayload;
+  getPollEncryptionKeyForPoll?: typeof pollEncryptionKeyService.getOrCreatePublicKeyForPoll;
 };
 
 const buildVoteReceipt = (input: {
@@ -202,9 +216,16 @@ const normalizeProductionEncryptedVotePayload = (
   const allowedKeys = new Set([
     "version",
     "pollEncryptionKeyId",
+    "pollEncryptionKeyHash",
+    "encryptedVoteCommitment",
     "ciphertext",
     "nonce",
+    "authTag",
     "algorithm",
+    "keyAgreement",
+    "kdf",
+    "cipher",
+    "ephemeralPublicKey",
     "optionSetHash",
   ]);
   if (Object.keys(encryptedVote).some((key) => !allowedKeys.has(key))) {
@@ -212,21 +233,41 @@ const normalizeProductionEncryptedVotePayload = (
   }
 
   const optionSetHash = normalizeHex64(encryptedVote.optionSetHash);
+  const pollEncryptionKeyHash = normalizeHex64(
+    encryptedVote.pollEncryptionKeyHash,
+  );
+  const encryptedVoteCommitment = normalizeHex64(
+    encryptedVote.encryptedVoteCommitment,
+  );
   const normalized = {
     version: toStringOrEmpty(encryptedVote.version),
     pollEncryptionKeyId: toStringOrEmpty(encryptedVote.pollEncryptionKeyId),
+    pollEncryptionKeyHash,
+    encryptedVoteCommitment,
     ciphertext: toStringOrEmpty(encryptedVote.ciphertext),
     nonce: toStringOrEmpty(encryptedVote.nonce),
+    authTag: toStringOrEmpty(encryptedVote.authTag),
     algorithm: toStringOrEmpty(encryptedVote.algorithm),
+    keyAgreement: toStringOrEmpty(encryptedVote.keyAgreement),
+    kdf: toStringOrEmpty(encryptedVote.kdf),
+    cipher: toStringOrEmpty(encryptedVote.cipher),
+    ephemeralPublicKey: toStringOrEmpty(encryptedVote.ephemeralPublicKey),
     optionSetHash,
   };
 
   if (
     normalized.version !== CIVIC_PRODUCTION_ENCRYPTED_VOTE_VERSION ||
     !normalized.pollEncryptionKeyId ||
+    !normalized.pollEncryptionKeyHash ||
+    !normalized.encryptedVoteCommitment ||
     !normalized.ciphertext ||
     !normalized.nonce ||
-    !normalized.algorithm ||
+    !normalized.authTag ||
+    normalized.algorithm !== CIVIC_ENCRYPTED_VOTE_ALGORITHM ||
+    normalized.keyAgreement !== CIVIC_ENCRYPTED_VOTE_KEY_AGREEMENT ||
+    normalized.kdf !== CIVIC_ENCRYPTED_VOTE_KDF ||
+    normalized.cipher !== CIVIC_ENCRYPTED_VOTE_CIPHER ||
+    !normalized.ephemeralPublicKey ||
     !normalized.optionSetHash
   ) {
     return null;
@@ -553,6 +594,9 @@ export const createPollVotingService = (
     dependencies.verifyGroth16VoteProofForPoll ?? verifyGroth16VoteProofForPoll;
   const hashProductionEncryptedVote =
     dependencies.hashEncryptedVotePayload ?? hashEncryptedVotePayload;
+  const getPollEncryptionKeyForPoll =
+    dependencies.getPollEncryptionKeyForPoll ??
+    pollEncryptionKeyService.getOrCreatePublicKeyForPoll;
 
   return {
   async getPollSummaries(viewerUserId: string): Promise<PollSummaryDto[]> {
@@ -810,6 +854,33 @@ export const createPollVotingService = (
         return buildFailure(
           "PROOF_REQUIRED",
           "This poll requires production Groth16 vote proof metadata.",
+        );
+      }
+
+      if (
+        normalizedEncryptedVote.encryptedVoteCommitment !==
+        productionPrivacy.encryptedVoteCommitment
+      ) {
+        return buildFailure(
+          "PROOF_INVALID",
+          "Encrypted vote commitment does not match the submitted proof envelope.",
+        );
+      }
+
+      const pollEncryptionKey = await getPollEncryptionKeyForPoll(pollId);
+      if (!pollEncryptionKey.success) {
+        return buildFailure(
+          "PROOF_REQUIRED",
+          pollEncryptionKey.message,
+        );
+      }
+      if (
+        pollEncryptionKey.key.publicKeyHash !==
+        normalizedEncryptedVote.pollEncryptionKeyHash
+      ) {
+        return buildFailure(
+          "PROOF_INVALID",
+          "Encrypted vote payload was not encrypted for the registered poll key.",
         );
       }
 
