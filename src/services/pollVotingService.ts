@@ -23,7 +23,10 @@ import pollEncryptionKeyService, {
   CIVIC_ENCRYPTED_VOTE_KEY_AGREEMENT,
   CIVIC_ENCRYPTED_VOTE_KDF,
 } from "./pollEncryptionKeyService";
-import { hashPublicAuditLeaf } from "./pollPublicAuditService";
+import {
+  hashPublicAuditLeaf,
+  hashPublicAuditLeafForPoll,
+} from "./pollPublicAuditService";
 import { verifyVoteProofForPoll } from "./voteProofVerifierService";
 import type {
   PollDetailsDto,
@@ -160,6 +163,7 @@ const buildVoteReceipt = (input: {
   pollId: string;
   optionId: string;
   voteCommitment: string;
+  voteCommitmentLeafHash?: string;
   proofHash: string;
   acceptedAt: string;
 }): VoteReceiptDto => ({
@@ -167,10 +171,9 @@ const buildVoteReceipt = (input: {
   pollId: input.pollId,
   optionId: input.optionId,
   voteCommitment: input.voteCommitment,
-  voteCommitmentLeafHash: hashPublicAuditLeaf(
-    "vote_commitment",
-    input.voteCommitment,
-  ),
+  voteCommitmentLeafHash:
+    input.voteCommitmentLeafHash ??
+    hashPublicAuditLeaf("vote_commitment", input.voteCommitment),
   proofHash: input.proofHash,
   batchStatus: "pending",
   batchId: null,
@@ -959,6 +962,11 @@ export const createPollVotingService = (
             pollId: insertedVote.poll_id,
             optionId,
             voteCommitment: insertedVote.vote_commitment,
+            voteCommitmentLeafHash: await hashPublicAuditLeafForPoll(
+              poll,
+              "vote_commitment",
+              insertedVote.vote_commitment,
+            ),
             proofHash: insertedVote.proof_hash,
             acceptedAt: insertedVote.accepted_at,
           }),

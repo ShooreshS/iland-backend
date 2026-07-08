@@ -49,6 +49,7 @@ pub mod civicos_audit {
         poll.status = PollStatus::Open;
         poll.latest_nullifier_root = ZERO_ROOT;
         poll.latest_vote_commitment_root = ZERO_ROOT;
+        poll.latest_encrypted_vote_root = ZERO_ROOT;
         poll.accepted_count = 0;
         poll.next_batch_index = 0;
         poll.final_result_hash = None;
@@ -63,6 +64,8 @@ pub mod civicos_audit {
         nullifier_root: [u8; 32],
         previous_vote_commitment_root: [u8; 32],
         vote_commitment_root: [u8; 32],
+        previous_encrypted_vote_root: [u8; 32],
+        encrypted_vote_root: [u8; 32],
         accepted_count_delta: u64,
     ) -> Result<()> {
         let now = Clock::get()?.unix_timestamp;
@@ -80,7 +83,8 @@ pub mod civicos_audit {
         );
         require!(
             previous_nullifier_root == poll.latest_nullifier_root
-                && previous_vote_commitment_root == poll.latest_vote_commitment_root,
+                && previous_vote_commitment_root == poll.latest_vote_commitment_root
+                && previous_encrypted_vote_root == poll.latest_encrypted_vote_root,
             AuditError::InvalidRootChain
         );
 
@@ -91,6 +95,7 @@ pub mod civicos_audit {
 
         poll.latest_nullifier_root = nullifier_root;
         poll.latest_vote_commitment_root = vote_commitment_root;
+        poll.latest_encrypted_vote_root = encrypted_vote_root;
         poll.accepted_count = accepted_count;
         poll.next_batch_index = poll
             .next_batch_index
@@ -104,6 +109,8 @@ pub mod civicos_audit {
         poll_root.nullifier_root = nullifier_root;
         poll_root.previous_vote_commitment_root = previous_vote_commitment_root;
         poll_root.vote_commitment_root = vote_commitment_root;
+        poll_root.previous_encrypted_vote_root = previous_encrypted_vote_root;
+        poll_root.encrypted_vote_root = encrypted_vote_root;
         poll_root.accepted_count = accepted_count;
         poll_root.submitted_by = ctx.accounts.authority.key();
         poll_root.submitted_at = now;
@@ -115,6 +122,7 @@ pub mod civicos_audit {
         ctx: Context<FinalizePoll>,
         final_vote_commitment_root: [u8; 32],
         final_nullifier_root: [u8; 32],
+        final_encrypted_vote_root: [u8; 32],
         result_hash: [u8; 32],
         tally_proof_hash: Option<[u8; 32]>,
     ) -> Result<()> {
@@ -128,7 +136,8 @@ pub mod civicos_audit {
         require!(now >= poll.closes_at, AuditError::PollNotClosed);
         require!(
             final_vote_commitment_root == poll.latest_vote_commitment_root
-                && final_nullifier_root == poll.latest_nullifier_root,
+                && final_nullifier_root == poll.latest_nullifier_root
+                && final_encrypted_vote_root == poll.latest_encrypted_vote_root,
             AuditError::InvalidFinalRoots
         );
 
@@ -139,6 +148,7 @@ pub mod civicos_audit {
         final_result.poll = poll.key();
         final_result.final_vote_commitment_root = final_vote_commitment_root;
         final_result.final_nullifier_root = final_nullifier_root;
+        final_result.final_encrypted_vote_root = final_encrypted_vote_root;
         final_result.result_hash = result_hash;
         final_result.tally_proof_hash = tally_proof_hash;
         final_result.submitted_at = now;
@@ -267,6 +277,7 @@ pub struct PollAccount {
     pub status: PollStatus,
     pub latest_nullifier_root: [u8; 32],
     pub latest_vote_commitment_root: [u8; 32],
+    pub latest_encrypted_vote_root: [u8; 32],
     pub accepted_count: u64,
     pub next_batch_index: u64,
     pub final_result_hash: Option<[u8; 32]>,
@@ -275,7 +286,7 @@ pub struct PollAccount {
 
 impl PollAccount {
     pub const LEN: usize =
-        32 + 32 + 32 + 32 + 32 + 8 + 8 + PollStatus::LEN + 32 + 32 + 8 + 8 + (1 + 32) + 1;
+        32 + 32 + 32 + 32 + 32 + 8 + 8 + PollStatus::LEN + 32 + 32 + 32 + 8 + 8 + (1 + 32) + 1;
 }
 
 #[account]
@@ -286,6 +297,8 @@ pub struct PollRootAccount {
     pub nullifier_root: [u8; 32],
     pub previous_vote_commitment_root: [u8; 32],
     pub vote_commitment_root: [u8; 32],
+    pub previous_encrypted_vote_root: [u8; 32],
+    pub encrypted_vote_root: [u8; 32],
     pub accepted_count: u64,
     pub submitted_by: Pubkey,
     pub submitted_at: i64,
@@ -293,7 +306,7 @@ pub struct PollRootAccount {
 }
 
 impl PollRootAccount {
-    pub const LEN: usize = 32 + 8 + 32 + 32 + 32 + 32 + 8 + 32 + 8 + 1;
+    pub const LEN: usize = 32 + 8 + 32 + 32 + 32 + 32 + 32 + 32 + 8 + 32 + 8 + 1;
 }
 
 #[account]
@@ -301,6 +314,7 @@ pub struct FinalResultAccount {
     pub poll: Pubkey,
     pub final_vote_commitment_root: [u8; 32],
     pub final_nullifier_root: [u8; 32],
+    pub final_encrypted_vote_root: [u8; 32],
     pub result_hash: [u8; 32],
     pub tally_proof_hash: Option<[u8; 32]>,
     pub submitted_at: i64,
@@ -308,7 +322,7 @@ pub struct FinalResultAccount {
 }
 
 impl FinalResultAccount {
-    pub const LEN: usize = 32 + 32 + 32 + 32 + (1 + 32) + 8 + 1;
+    pub const LEN: usize = 32 + 32 + 32 + 32 + 32 + (1 + 32) + 8 + 1;
 }
 
 #[derive(AnchorSerialize, AnchorDeserialize, Clone, Copy, PartialEq, Eq)]
@@ -358,8 +372,8 @@ mod tests {
     #[test]
     fn account_sizes_match_phase_5_layout() {
         assert_eq!(PollRegistry::LEN, 131);
-        assert_eq!(PollAccount::LEN, 291);
-        assert_eq!(PollRootAccount::LEN, 217);
-        assert_eq!(FinalResultAccount::LEN, 170);
+        assert_eq!(PollAccount::LEN, 323);
+        assert_eq!(PollRootAccount::LEN, 281);
+        assert_eq!(FinalResultAccount::LEN, 202);
     }
 }

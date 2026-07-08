@@ -646,6 +646,8 @@ export type PollRootRow = {
   nullifier_root: string;
   previous_vote_commitment_root: string | null;
   vote_commitment_root: string;
+  previous_encrypted_vote_root: string | null;
+  encrypted_vote_root: string;
   accepted_count: number;
   solana_tx_signature: string | null;
   created_at: string;
@@ -658,6 +660,8 @@ export type NewPollRootRow = {
   nullifier_root: string;
   previous_vote_commitment_root?: string | null;
   vote_commitment_root: string;
+  previous_encrypted_vote_root?: string | null;
+  encrypted_vote_root: string;
   accepted_count: number;
   solana_tx_signature?: string | null;
 };

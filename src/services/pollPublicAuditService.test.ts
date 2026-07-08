@@ -2,10 +2,22 @@ import { describe, expect, it } from "bun:test";
 
 import pollAuditRepository from "../repositories/pollAuditRepository";
 import pollRepository from "../repositories/pollRepository";
+import pollTallyProofRepository from "../repositories/pollTallyProofRepository";
+import pollZkVoteRepository, {
+  type PublicZkAuditVoteRecordRow,
+} from "../repositories/pollZkVoteRepository";
 import voteRepository, {
   type PublicAuditVoteRecordRow,
 } from "../repositories/voteRepository";
 import type { PollOptionRow, PollRow } from "../types/db";
+import {
+  buildPoseidonAuditMerkleTree,
+  hashPoseidonAuditLeaf,
+  POSEIDON_AUDIT_HASH_ALGORITHM,
+  POSEIDON_AUDIT_TREE_DEPTH,
+  POSEIDON_AUDIT_TREE_LEAF_CAPACITY,
+  verifyPoseidonAuditMerkleProof,
+} from "./poseidonAuditTreeService";
 import {
   buildPublicAuditMerkleTree,
   hashPublicAuditLeaf,
@@ -21,6 +33,8 @@ const NULLIFIER_A = "a".repeat(64);
 const NULLIFIER_B = "b".repeat(64);
 const VOTE_COMMITMENT_A = "c".repeat(64);
 const VOTE_COMMITMENT_B = "d".repeat(64);
+const ENCRYPTED_VOTE_COMMITMENT_A = "7".repeat(64);
+const ENCRYPTED_VOTE_COMMITMENT_B = "8".repeat(64);
 const PROOF_HASH_A = "e".repeat(64);
 const PROOF_HASH_B = "f".repeat(64);
 
@@ -104,7 +118,7 @@ describe("Phase 8 public poll audit service", () => {
       label: "Option B",
       display_order: 1,
     });
-    const auditRecords = [
+    const auditRecords: PublicAuditVoteRecordRow[] = [
       createAuditRecord({
         id: "vote-a",
         nullifier: NULLIFIER_A,
@@ -236,6 +250,108 @@ describe("Phase 8 public poll audit service", () => {
           proof: result.proof,
         }),
       ).toBe(true);
+    } finally {
+      restoreFns.reverse().forEach((restore) => restore());
+    }
+  });
+
+  it("uses the fixed Poseidon audit tree for production ZKP polls", async () => {
+    const poll = createPoll({
+      vote_privacy_mode: "zk_secret_ballot_v1",
+      option_set_hash: "3".repeat(64),
+      poll_encryption_key_id: "poll-key-1",
+    });
+    const auditRecords: PublicZkAuditVoteRecordRow[] = [
+      createAuditRecord({
+        id: "vote-a",
+        nullifier: NULLIFIER_A,
+        vote_commitment: VOTE_COMMITMENT_A,
+        encrypted_vote_commitment: ENCRYPTED_VOTE_COMMITMENT_A,
+        proof_hash: PROOF_HASH_A,
+      }) as PublicZkAuditVoteRecordRow,
+      createAuditRecord({
+        id: "vote-b",
+        nullifier: NULLIFIER_B,
+        vote_commitment: VOTE_COMMITMENT_B,
+        encrypted_vote_commitment: ENCRYPTED_VOTE_COMMITMENT_B,
+        proof_hash: PROOF_HASH_B,
+        accepted_at: "2026-07-05T10:01:00.000Z",
+        created_at: "2026-07-05T10:01:00.000Z",
+      }) as PublicZkAuditVoteRecordRow,
+    ];
+    const expectedNullifierTree = await buildPoseidonAuditMerkleTree([
+      await hashPoseidonAuditLeaf("nullifier", NULLIFIER_A),
+      await hashPoseidonAuditLeaf("nullifier", NULLIFIER_B),
+    ]);
+    const expectedVoteCommitmentTree = await buildPoseidonAuditMerkleTree([
+      await hashPoseidonAuditLeaf("vote_commitment", VOTE_COMMITMENT_A),
+      await hashPoseidonAuditLeaf("vote_commitment", VOTE_COMMITMENT_B),
+    ]);
+    const expectedEncryptedVoteTree = await buildPoseidonAuditMerkleTree([
+      await hashPoseidonAuditLeaf(
+        "encrypted_vote",
+        ENCRYPTED_VOTE_COMMITMENT_A,
+      ),
+      await hashPoseidonAuditLeaf(
+        "encrypted_vote",
+        ENCRYPTED_VOTE_COMMITMENT_B,
+      ),
+    ]);
+    const targetLeafHash = expectedVoteCommitmentTree.leafHashes[1];
+
+    const restoreFns = [
+      patchMethod(pollRepository, "getById", async () => poll),
+      patchMethod(pollRepository, "getOptionsByPollId", async () => [
+        createOption({ id: "option-a", label: "Option A", display_order: 0 }),
+        createOption({ id: "option-b", label: "Option B", display_order: 1 }),
+      ]),
+      patchMethod(
+        pollZkVoteRepository,
+        "getAcceptedAuditRecordsByPollId",
+        async () => auditRecords,
+      ),
+      patchMethod(pollZkVoteRepository, "countAcceptedByPollId", async () => 2),
+      patchMethod(pollTallyProofRepository, "getLatestByPollId", async () => null),
+      patchMethod(pollAuditRepository, "listRootsByPollId", async () => []),
+    ];
+
+    try {
+      const audit = await pollPublicAuditService.getPublicPollAudit(poll.id);
+      expect(audit?.trees.nullifier).toMatchObject({
+        root: expectedNullifierTree.root,
+        hashAlgorithm: POSEIDON_AUDIT_HASH_ALGORITHM,
+        treeDepth: POSEIDON_AUDIT_TREE_DEPTH,
+        leafCapacity: POSEIDON_AUDIT_TREE_LEAF_CAPACITY,
+      });
+      expect(audit?.trees.voteCommitment.root).toBe(
+        expectedVoteCommitmentTree.root,
+      );
+      expect(audit?.trees.encryptedVote.root).toBe(
+        expectedEncryptedVoteTree.root,
+      );
+      expect(audit?.computedCurrentRootBatch?.encryptedVoteRoot).toBe(
+        expectedEncryptedVoteTree.root,
+      );
+
+      const inclusion =
+        await pollPublicAuditService.getPublicPollAuditInclusionProof({
+          pollId: poll.id,
+          tree: "vote_commitment",
+          leafHash: targetLeafHash,
+        });
+
+      expect(inclusion.success).toBe(true);
+      if (!inclusion.success) {
+        throw new Error("Expected production inclusion proof.");
+      }
+      expect(inclusion.proof).toHaveLength(POSEIDON_AUDIT_TREE_DEPTH);
+      await expect(
+        verifyPoseidonAuditMerkleProof({
+          leafHash: targetLeafHash,
+          root: inclusion.root,
+          proof: inclusion.proof,
+        }),
+      ).resolves.toBe(true);
     } finally {
       restoreFns.reverse().forEach((restore) => restore());
     }

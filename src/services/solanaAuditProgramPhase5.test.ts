@@ -70,6 +70,9 @@ describe("Phase 5 Solana audit program scaffold", () => {
     expect(source).toContain(
       "previous_vote_commitment_root == poll.latest_vote_commitment_root",
     );
+    expect(source).toContain(
+      "previous_encrypted_vote_root == poll.latest_encrypted_vote_root",
+    );
     expect(source).toContain("batch_index == poll.next_batch_index");
     expect(source).toContain("accepted_count_delta > 0");
     expect(source).toContain("now >= poll.opens_at");
@@ -80,6 +83,9 @@ describe("Phase 5 Solana audit program scaffold", () => {
     );
     expect(source).toContain(
       "final_nullifier_root == poll.latest_nullifier_root",
+    );
+    expect(source).toContain(
+      "final_encrypted_vote_root == poll.latest_encrypted_vote_root",
     );
   });
 

@@ -30,6 +30,17 @@ import {
   verifyGroth16TallyProofForPoll,
   type Groth16TallyProofEnvelopeDto,
 } from "./groth16TallyProofVerifierService";
+import {
+  buildPoseidonAuditMerkleProof,
+  buildPoseidonAuditMerkleTree,
+  hashPoseidonAuditLeaf,
+  POSEIDON_AUDIT_HASH_ALGORITHM,
+  POSEIDON_AUDIT_LEAF_DOMAIN,
+  POSEIDON_AUDIT_NODE_DOMAIN,
+  POSEIDON_AUDIT_TREE_DEPTH,
+  POSEIDON_AUDIT_TREE_LEAF_CAPACITY,
+  type PoseidonAuditTree,
+} from "./poseidonAuditTreeService";
 import { hashCanonicalJson } from "./pollPolicyService";
 import solanaAuditPublisherService, {
   type SolanaAuditPublicationResult,
@@ -51,6 +62,8 @@ export type PublicAuditMerkleTree = Readonly<{
   leafHashes: readonly string[];
   levels: readonly (readonly string[])[];
 }>;
+
+type AuditMerkleTree = PublicAuditMerkleTree | PoseidonAuditTree;
 
 const normalizeHex64 = (value: string): string | null => {
   const normalized = value.trim().toLowerCase();
@@ -183,15 +196,29 @@ export const verifyPublicAuditMerkleProof = (input: {
 
 const buildTreeSummary = (
   kind: PublicAuditTreeKind,
-  tree: PublicAuditMerkleTree,
-): PublicAuditTreeSummaryDto => ({
-  kind,
-  root: tree.root,
-  leafCount: tree.leafHashes.length,
-  hashAlgorithm: "sha256",
-  leafHashDomain: PUBLIC_AUDIT_MERKLE_LEAF_DOMAIN,
-  nodeHashDomain: PUBLIC_AUDIT_MERKLE_NODE_DOMAIN,
-});
+  tree: AuditMerkleTree,
+): PublicAuditTreeSummaryDto => {
+  const poseidonTree = "leafCapacity" in tree;
+
+  return {
+    kind,
+    root: tree.root,
+    leafCount: tree.leafHashes.length,
+    hashAlgorithm: poseidonTree ? POSEIDON_AUDIT_HASH_ALGORITHM : "sha256",
+    leafHashDomain: poseidonTree
+      ? POSEIDON_AUDIT_LEAF_DOMAIN
+      : PUBLIC_AUDIT_MERKLE_LEAF_DOMAIN,
+    nodeHashDomain: poseidonTree
+      ? POSEIDON_AUDIT_NODE_DOMAIN
+      : PUBLIC_AUDIT_MERKLE_NODE_DOMAIN,
+    ...(poseidonTree
+      ? {
+          treeDepth: POSEIDON_AUDIT_TREE_DEPTH,
+          leafCapacity: POSEIDON_AUDIT_TREE_LEAF_CAPACITY,
+        }
+      : null),
+  };
+};
 
 const buildOptionResults = (
   options: readonly PollOptionRow[],
@@ -330,7 +357,7 @@ const buildWarnings = (input: {
   return warnings;
 };
 
-const buildAuditTrees = (
+const buildLegacyAuditTrees = (
   records: PublicAuditRecordRow[],
 ): {
   nullifierTree: PublicAuditMerkleTree;
@@ -360,6 +387,77 @@ const buildAuditTrees = (
   };
 };
 
+const requireAuditValue = (
+  kind: PublicAuditTreeKind,
+  value: string | null | undefined,
+): string => {
+  const normalized = normalizeHex64(value ?? "");
+  if (!normalized) {
+    throw new TypeError(
+      `Production ZKP audit record is missing ${kind} material.`,
+    );
+  }
+  return normalized;
+};
+
+const buildProductionPoseidonAuditTrees = async (
+  records: PublicAuditRecordRow[],
+): Promise<{
+  nullifierTree: PoseidonAuditTree;
+  voteCommitmentTree: PoseidonAuditTree;
+  encryptedVoteTree: PoseidonAuditTree;
+}> => {
+  const nullifierLeafHashes = await Promise.all(
+    records.map((record) =>
+      hashPoseidonAuditLeaf(
+        "nullifier",
+        requireAuditValue("nullifier", record.nullifier),
+      ),
+    ),
+  );
+  const voteCommitmentLeafHashes = await Promise.all(
+    records.map((record) =>
+      hashPoseidonAuditLeaf(
+        "vote_commitment",
+        requireAuditValue("vote_commitment", record.vote_commitment),
+      ),
+    ),
+  );
+  const encryptedVoteLeafHashes = await Promise.all(
+    records.map((record) =>
+      hashPoseidonAuditLeaf(
+        "encrypted_vote",
+        requireAuditValue(
+          "encrypted_vote",
+          record.encrypted_vote_commitment,
+        ),
+      ),
+    ),
+  );
+
+  return {
+    nullifierTree: await buildPoseidonAuditMerkleTree(nullifierLeafHashes),
+    voteCommitmentTree: await buildPoseidonAuditMerkleTree(
+      voteCommitmentLeafHashes,
+    ),
+    encryptedVoteTree: await buildPoseidonAuditMerkleTree(
+      encryptedVoteLeafHashes,
+    ),
+  };
+};
+
+const buildAuditTrees = async (
+  poll: PollRow,
+  records: PublicAuditRecordRow[],
+): Promise<{
+  nullifierTree: AuditMerkleTree;
+  voteCommitmentTree: AuditMerkleTree;
+  encryptedVoteTree: AuditMerkleTree;
+}> =>
+  isProductionZkpPoll(poll)
+    ? buildProductionPoseidonAuditTrees(records)
+    : buildLegacyAuditTrees(records);
+
 type PublicAuditRecordRow = {
   id: string;
   poll_id: string;
@@ -378,9 +476,9 @@ type PollAuditMaterial = Readonly<{
   auditRecords: PublicAuditRecordRow[];
   totalValidVoteCount: number;
   acceptedVoteCount: number;
-  nullifierTree: PublicAuditMerkleTree;
-  voteCommitmentTree: PublicAuditMerkleTree;
-  encryptedVoteTree: PublicAuditMerkleTree;
+  nullifierTree: AuditMerkleTree;
+  voteCommitmentTree: AuditMerkleTree;
+  encryptedVoteTree: AuditMerkleTree;
   tallyProof: PollTallyProofRow | null;
   finalResult: PollResultsSummaryDto;
   resultHash: string;
@@ -405,10 +503,7 @@ const parseBatchIndex = (batchId: string): number => {
   return Number.isFinite(parsed) && parsed >= 0 ? parsed : 0;
 };
 
-const mapRootCommit = (
-  root: PollRootRow,
-  encryptedVoteRoot: string,
-): PublicAuditRootCommitDto | null => {
+const mapRootCommit = (root: PollRootRow): PublicAuditRootCommitDto | null => {
   if (!root.solana_tx_signature) {
     return null;
   }
@@ -419,7 +514,7 @@ const mapRootCommit = (
     acceptedCount: root.accepted_count,
     nullifierRoot: root.nullifier_root,
     voteCommitmentRoot: root.vote_commitment_root,
-    encryptedVoteRoot,
+    encryptedVoteRoot: root.encrypted_vote_root,
     transactionSignature: root.solana_tx_signature,
     explorerUrl: buildSolanaExplorerUrl(root.solana_tx_signature) || "",
     submittedAt: root.created_at,
@@ -440,6 +535,23 @@ const isPollFinalResultPublishable = (poll: PollRow): boolean => {
 
 const isProductionZkpPoll = (poll: PollRow): boolean =>
   poll.vote_privacy_mode === CIVIC_PRODUCTION_VOTE_PRIVACY_MODE;
+
+export const hashPublicAuditLeafForPoll = async (
+  poll: PollRow,
+  kind: PublicAuditTreeKind,
+  value: string,
+): Promise<string> =>
+  isProductionZkpPoll(poll)
+    ? hashPoseidonAuditLeaf(kind, value)
+    : hashPublicAuditLeaf(kind, value);
+
+const buildAuditMerkleProof = (
+  tree: AuditMerkleTree,
+  leafIndex: number,
+): PublicAuditMerkleProofStepDto[] =>
+  "leafCapacity" in tree
+    ? buildPoseidonAuditMerkleProof(tree, leafIndex)
+    : buildPublicAuditMerkleProof(tree, leafIndex);
 
 const mapTallyProofSummary = (
   tallyProof: PollTallyProofRow | null,
@@ -554,7 +666,7 @@ const loadPollAuditMaterial = async (poll: PollRow): Promise<PollAuditMaterial> 
 
   const acceptedVoteCount = auditRecords.length;
   const { nullifierTree, voteCommitmentTree, encryptedVoteTree } =
-    buildAuditTrees(auditRecords);
+    await buildAuditTrees(poll, auditRecords);
   const finalResult = buildResultsSummary(poll.id, options, {
     countsByOptionId,
     totalVotes: totalValidVoteCount,
@@ -597,7 +709,7 @@ export const pollPublicAuditService = {
       pollAuditRepository.listRootsByPollId(poll.id),
     ]);
     const rootCommits = publishedRoots
-      .map((root) => mapRootCommit(root, material.encryptedVoteTree.root))
+      .map((root) => mapRootCommit(root))
       .filter((entry): entry is PublicAuditRootCommitDto => Boolean(entry));
     const generatedAt = new Date().toISOString();
     const publicationStatus =
@@ -734,6 +846,7 @@ export const pollPublicAuditService = {
         poll,
         nullifierRoot: material.nullifierTree.root,
         voteCommitmentRoot: material.voteCommitmentTree.root,
+        encryptedVoteRoot: material.encryptedVoteTree.root,
         acceptedVoteCount: material.acceptedVoteCount,
         resultHash: material.resultHash,
         tallyProofHash: material.tallyProof?.tally_proof_hash ?? null,
@@ -748,6 +861,8 @@ export const pollPublicAuditService = {
           nullifier_root: material.nullifierTree.root,
           previous_vote_commitment_root: PUBLIC_AUDIT_ZERO_ROOT,
           vote_commitment_root: material.voteCommitmentTree.root,
+          previous_encrypted_vote_root: PUBLIC_AUDIT_ZERO_ROOT,
+          encrypted_vote_root: material.encryptedVoteTree.root,
           accepted_count: material.acceptedVoteCount,
           solana_tx_signature: publication.rootCommitSignature,
         });
@@ -984,7 +1099,7 @@ export const pollPublicAuditService = {
 
     const auditRecords = await getAcceptedAuditRecordsByPoll(poll);
     const { nullifierTree, voteCommitmentTree, encryptedVoteTree } =
-      buildAuditTrees(auditRecords);
+      await buildAuditTrees(poll, auditRecords);
     const tree =
       input.tree === "nullifier"
         ? nullifierTree
@@ -1013,7 +1128,7 @@ export const pollPublicAuditService = {
         (leafHash) => leafHash === normalizedLeafHash,
       ).length,
       root: tree.root,
-      proof: buildPublicAuditMerkleProof(tree, leafIndex),
+      proof: buildAuditMerkleProof(tree, leafIndex),
     };
   },
 
@@ -1048,12 +1163,13 @@ export const pollPublicAuditService = {
       };
     }
 
-    const voteCommitmentLeafHash = hashPublicAuditLeaf(
+    const voteCommitmentLeafHash = await hashPublicAuditLeafForPoll(
+      poll,
       "vote_commitment",
       normalizedVoteCommitment,
     );
     const auditRecords = await getAcceptedAuditRecordsByPoll(poll);
-    const { voteCommitmentTree } = buildAuditTrees(auditRecords);
+    const { voteCommitmentTree } = await buildAuditTrees(poll, auditRecords);
     const leafIndex = voteCommitmentTree.leafHashes.findIndex(
       (leafHash) => leafHash === voteCommitmentLeafHash,
     );
@@ -1099,7 +1215,7 @@ export const pollPublicAuditService = {
       matchingLeafCount: voteCommitmentTree.leafHashes.filter(
         (leafHash) => leafHash === voteCommitmentLeafHash,
       ).length,
-      merklePath: buildPublicAuditMerkleProof(voteCommitmentTree, leafIndex),
+      merklePath: buildAuditMerkleProof(voteCommitmentTree, leafIndex),
       solanaTx,
       solanaExplorerUrl: buildSolanaExplorerUrl(solanaTx),
       auditUrl,

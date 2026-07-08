@@ -7,7 +7,7 @@ import type {
 } from "../types/db";
 
 const POLL_ROOT_COLUMNS =
-  "id,poll_id,batch_id,previous_nullifier_root,nullifier_root,previous_vote_commitment_root,vote_commitment_root,accepted_count,solana_tx_signature,created_at";
+  "id,poll_id,batch_id,previous_nullifier_root,nullifier_root,previous_vote_commitment_root,vote_commitment_root,previous_encrypted_vote_root,encrypted_vote_root,accepted_count,solana_tx_signature,created_at";
 const POLL_AUDIT_EVENT_COLUMNS =
   "id,poll_id,event_type,payload_hash,payload_json,solana_tx_signature,created_at";
 
@@ -60,6 +60,8 @@ export const pollAuditRepository = {
         nullifier_root: input.nullifier_root,
         previous_vote_commitment_root: input.previous_vote_commitment_root ?? null,
         vote_commitment_root: input.vote_commitment_root,
+        previous_encrypted_vote_root: input.previous_encrypted_vote_root ?? null,
+        encrypted_vote_root: input.encrypted_vote_root,
         accepted_count: input.accepted_count,
         solana_tx_signature: input.solana_tx_signature ?? null,
       })

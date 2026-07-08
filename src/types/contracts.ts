@@ -124,7 +124,7 @@ export type PublicAuditTreeKind =
   | "vote_commitment"
   | "encrypted_vote";
 
-export type PublicAuditHashAlgorithm = "sha256";
+export type PublicAuditHashAlgorithm = "sha256" | "poseidon-bn254";
 
 export type PublicAuditMerkleProofStepDto = {
   position: "left" | "right";
@@ -138,6 +138,8 @@ export type PublicAuditTreeSummaryDto = {
   hashAlgorithm: PublicAuditHashAlgorithm;
   leafHashDomain: string;
   nodeHashDomain: string;
+  treeDepth?: number;
+  leafCapacity?: number;
 };
 
 export type PublicAuditComputedRootBatchDto = {

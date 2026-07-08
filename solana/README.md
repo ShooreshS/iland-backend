@@ -1,11 +1,11 @@
 # CivicOS Solana Audit Program
 
-Phase 5 adds an Anchor program for public audit anchoring. It stores poll policy hashes, credential schema hashes, root batches, accepted vote counts, and final result hashes.
+Phase 5 adds an Anchor program for public audit anchoring. It stores poll policy hashes, credential schema hashes, nullifier/vote-commitment/encrypted-vote root batches, accepted vote counts, and final result hashes.
 
 This program intentionally does not verify vote ZK proofs on-chain. The v1 trust model remains:
 
 1. CivicOS backend verifies vote legitimacy off-chain.
-2. Backend stores accepted vote nullifiers and vote commitments.
+2. Backend stores accepted vote nullifiers, vote commitments, and encrypted-vote commitments.
 3. Backend commits Merkle roots to this Solana program when publishing result/audit material, or earlier if CivicOS later enables periodic anchoring.
 4. Public audit tooling compares backend/exported vote records against on-chain roots.
 
@@ -21,8 +21,8 @@ The source-declared program id is the current local deployment key public key. B
 
 - `initialize_registry`: creates the global registry PDA and sets signer authority/treasury/token mint/token-program metadata.
 - `create_poll`: creates a poll PDA keyed by `poll_id_hash` and stores frozen `poll_policy_hash` / `credential_schema_hash`.
-- `commit_roots`: appends a batch root account, verifies previous roots and next batch index, and advances the poll latest roots. Commits are allowed after the poll opens and before finalization, so CivicOS can delay publication until result release.
-- `finalize_poll`: stores final vote/nullifier roots and the final result hash after the poll closes.
+- `commit_roots`: appends a batch root account, verifies previous nullifier / vote-commitment / encrypted-vote roots and next batch index, and advances the poll latest roots. Commits are allowed after the poll opens and before finalization, so CivicOS can delay publication until result release.
+- `finalize_poll`: stores final vote/nullifier/encrypted-vote roots and the final result hash after the poll closes.
 
 ## Build
 

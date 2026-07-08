@@ -23,6 +23,7 @@ export type SolanaAuditPublicationInput = Readonly<{
   poll: PollRow;
   nullifierRoot: string;
   voteCommitmentRoot: string;
+  encryptedVoteRoot: string;
   acceptedVoteCount: number;
   resultHash: string;
   tallyProofHash?: string | null;
@@ -324,6 +325,8 @@ const buildCommitRootsInstruction = (input: {
   nullifierRoot: Buffer;
   previousVoteCommitmentRoot: Buffer;
   voteCommitmentRoot: Buffer;
+  previousEncryptedVoteRoot: Buffer;
+  encryptedVoteRoot: Buffer;
   acceptedCountDelta: number;
 }): TransactionInstruction =>
   new TransactionInstruction({
@@ -342,6 +345,8 @@ const buildCommitRootsInstruction = (input: {
       input.nullifierRoot,
       input.previousVoteCommitmentRoot,
       input.voteCommitmentRoot,
+      input.previousEncryptedVoteRoot,
+      input.encryptedVoteRoot,
       writeU64(input.acceptedCountDelta),
     ]),
   });
@@ -354,6 +359,7 @@ const buildFinalizePollInstruction = (input: {
   authority: PublicKey;
   voteCommitmentRoot: Buffer;
   nullifierRoot: Buffer;
+  encryptedVoteRoot: Buffer;
   resultHash: Buffer;
   tallyProofHash: Buffer | null;
 }): TransactionInstruction =>
@@ -370,6 +376,7 @@ const buildFinalizePollInstruction = (input: {
       anchorDiscriminator("finalize_poll"),
       input.voteCommitmentRoot,
       input.nullifierRoot,
+      input.encryptedVoteRoot,
       input.resultHash,
       writeOptionBytes32(input.tallyProofHash),
     ]),
@@ -506,6 +513,8 @@ export const solanaAuditPublisherService = {
               nullifierRoot: hex32(input.nullifierRoot),
               previousVoteCommitmentRoot: hex32(ZERO_ROOT),
               voteCommitmentRoot: hex32(input.voteCommitmentRoot),
+              previousEncryptedVoteRoot: hex32(ZERO_ROOT),
+              encryptedVoteRoot: hex32(input.encryptedVoteRoot),
               acceptedCountDelta: input.acceptedVoteCount,
             }),
           ],
@@ -530,6 +539,7 @@ export const solanaAuditPublisherService = {
               authority: signer.publicKey,
               voteCommitmentRoot: hex32(input.voteCommitmentRoot),
               nullifierRoot: hex32(input.nullifierRoot),
+              encryptedVoteRoot: hex32(input.encryptedVoteRoot),
               resultHash: hex32(input.resultHash),
               tallyProofHash: input.tallyProofHash ? hex32(input.tallyProofHash) : null,
             }),
