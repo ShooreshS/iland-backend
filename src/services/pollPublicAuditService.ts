@@ -401,6 +401,47 @@ const requireAuditValue = (
   return normalized;
 };
 
+/**
+ * Frozen batch segmentation rule for production ZKP audit trees:
+ * accepted records ordered by (accepted_at asc, id asc); the record at
+ * position p belongs to batch floor(p / 64) at leaf index p % 64. A batch is
+ * sealed (root immutable, eligible for on-chain anchoring) once it holds 64
+ * leaves or the poll has reached its finalizable state.
+ */
+export const PUBLIC_AUDIT_BATCH_LEAF_CAPACITY =
+  POSEIDON_AUDIT_TREE_LEAF_CAPACITY;
+
+type PollAuditBatchMaterial = Readonly<{
+  batchIndex: number;
+  batchId: string;
+  records: PublicAuditRecordRow[];
+  acceptedCount: number;
+  sealed: boolean;
+  nullifierTree: AuditMerkleTree;
+  voteCommitmentTree: AuditMerkleTree;
+  encryptedVoteTree: AuditMerkleTree;
+}>;
+
+const segmentProductionAuditRecords = (
+  records: PublicAuditRecordRow[],
+): PublicAuditRecordRow[][] => {
+  if (records.length === 0) {
+    return [[]];
+  }
+
+  const segments: PublicAuditRecordRow[][] = [];
+  for (
+    let offset = 0;
+    offset < records.length;
+    offset += PUBLIC_AUDIT_BATCH_LEAF_CAPACITY
+  ) {
+    segments.push(
+      records.slice(offset, offset + PUBLIC_AUDIT_BATCH_LEAF_CAPACITY),
+    );
+  }
+  return segments;
+};
+
 const buildProductionPoseidonAuditTrees = async (
   records: PublicAuditRecordRow[],
 ): Promise<{
@@ -447,17 +488,40 @@ const buildProductionPoseidonAuditTrees = async (
   };
 };
 
-const buildAuditTrees = async (
+const buildAuditBatches = async (
   poll: PollRow,
   records: PublicAuditRecordRow[],
-): Promise<{
-  nullifierTree: AuditMerkleTree;
-  voteCommitmentTree: AuditMerkleTree;
-  encryptedVoteTree: AuditMerkleTree;
-}> =>
-  isProductionZkpPoll(poll)
-    ? buildProductionPoseidonAuditTrees(records)
-    : buildLegacyAuditTrees(records);
+): Promise<PollAuditBatchMaterial[]> => {
+  if (!isProductionZkpPoll(poll)) {
+    return [
+      Object.freeze({
+        batchIndex: 0,
+        batchId: "0",
+        records,
+        acceptedCount: records.length,
+        sealed: records.length > 0,
+        ...buildLegacyAuditTrees(records),
+      }),
+    ];
+  }
+
+  const finalizable = isPollFinalResultPublishable(poll);
+  const segments = segmentProductionAuditRecords(records);
+  return Promise.all(
+    segments.map(async (segment, batchIndex) =>
+      Object.freeze({
+        batchIndex,
+        batchId: String(batchIndex),
+        records: segment,
+        acceptedCount: segment.length,
+        sealed:
+          segment.length > 0 &&
+          (segment.length === PUBLIC_AUDIT_BATCH_LEAF_CAPACITY || finalizable),
+        ...(await buildProductionPoseidonAuditTrees(segment)),
+      }),
+    ),
+  );
+};
 
 type PublicAuditRecordRow = {
   id: string;
@@ -477,6 +541,7 @@ type PollAuditMaterial = Readonly<{
   auditRecords: PublicAuditRecordRow[];
   totalValidVoteCount: number;
   acceptedVoteCount: number;
+  batches: readonly PollAuditBatchMaterial[];
   nullifierTree: AuditMerkleTree;
   voteCommitmentTree: AuditMerkleTree;
   encryptedVoteTree: AuditMerkleTree;
@@ -666,8 +731,9 @@ const loadPollAuditMaterial = async (poll: PollRow): Promise<PollAuditMaterial> 
   );
 
   const acceptedVoteCount = auditRecords.length;
-  const { nullifierTree, voteCommitmentTree, encryptedVoteTree } =
-    await buildAuditTrees(poll, auditRecords);
+  const batches = await buildAuditBatches(poll, auditRecords);
+  const latestBatch = batches[batches.length - 1];
+  const { nullifierTree, voteCommitmentTree, encryptedVoteTree } = latestBatch;
   const finalResult = buildResultsSummary(poll.id, options, {
     countsByOptionId,
     totalVotes: totalValidVoteCount,
@@ -689,6 +755,7 @@ const loadPollAuditMaterial = async (poll: PollRow): Promise<PollAuditMaterial> 
     auditRecords,
     totalValidVoteCount,
     acceptedVoteCount,
+    batches,
     nullifierTree,
     voteCommitmentTree,
     encryptedVoteTree,
@@ -723,6 +790,21 @@ export const pollPublicAuditService = {
     const rootCommits = publishedRoots
       .map((root) => mapRootCommit(root))
       .filter((entry): entry is PublicAuditRootCommitDto => Boolean(entry));
+    const rootCommitsByBatchIndex = new Map(
+      rootCommits.map((commit) => [commit.batchIndex, commit]),
+    );
+    const auditBatches = material.batches
+      .filter((batch) => batch.acceptedCount > 0)
+      .map((batch) => ({
+        batchIndex: batch.batchIndex,
+        acceptedCount: batch.acceptedCount,
+        sealed: batch.sealed,
+        nullifierRoot: batch.nullifierTree.root,
+        voteCommitmentRoot: batch.voteCommitmentTree.root,
+        encryptedVoteRoot: batch.encryptedVoteTree.root,
+        publication: rootCommitsByBatchIndex.get(batch.batchIndex) ?? null,
+      }));
+    const currentBatch = material.batches[material.batches.length - 1];
     const generatedAt = new Date().toISOString();
     const publicationStatus =
       rootCommits.length > 0
@@ -752,12 +834,14 @@ export const pollPublicAuditService = {
           material.encryptedVoteTree,
         ),
       },
+      auditBatches,
       computedCurrentRootBatch:
-        material.acceptedVoteCount > 0 && rootCommits.length === 0
+        currentBatch.acceptedCount > 0 &&
+        !rootCommitsByBatchIndex.has(currentBatch.batchIndex)
           ? {
               status: "pending_on_chain_publication",
-              batchIndex: 0,
-              acceptedCount: material.acceptedVoteCount,
+              batchIndex: currentBatch.batchIndex,
+              acceptedCount: currentBatch.acceptedCount,
               nullifierRoot: material.nullifierTree.root,
               voteCommitmentRoot: material.voteCommitmentTree.root,
               encryptedVoteRoot: material.encryptedVoteTree.root,
@@ -848,63 +932,130 @@ export const pollPublicAuditService = {
       };
     }
 
-    const existingRoot = await pollAuditRepository.getRootByPollIdAndBatchId(
-      poll.id,
-      "0",
+    const existingRoots = await pollAuditRepository.listRootsByPollId(poll.id);
+    const existingRootsByBatchId = new Map(
+      existingRoots.map((root) => [root.batch_id, root]),
     );
+
+    // Sealed batches are anchored in batch order; each commit chains from the
+    // previous batch's committed roots so the on-chain previous-root checks
+    // hold. An unsealed tail batch stays pending until it fills or the poll
+    // becomes finalizable.
+    type BatchCommitDescriptor = {
+      batch: PollAuditBatchMaterial;
+      previousNullifierRoot: string;
+      previousVoteCommitmentRoot: string;
+      previousEncryptedVoteRoot: string;
+      cumulativeAcceptedCount: number;
+    };
+    const batchCommitDescriptors: BatchCommitDescriptor[] = [];
+    let previousNullifierRoot = PUBLIC_AUDIT_ZERO_ROOT;
+    let previousVoteCommitmentRoot = PUBLIC_AUDIT_ZERO_ROOT;
+    let previousEncryptedVoteRoot = PUBLIC_AUDIT_ZERO_ROOT;
+    let cumulativeAcceptedCount = 0;
+    let uncommittedSealedRemainder = false;
+    for (const batch of material.batches) {
+      if (batch.acceptedCount <= 0) {
+        continue;
+      }
+      cumulativeAcceptedCount += batch.acceptedCount;
+      const existing = existingRootsByBatchId.get(batch.batchId);
+      if (existing) {
+        previousNullifierRoot = existing.nullifier_root;
+        previousVoteCommitmentRoot = existing.vote_commitment_root;
+        previousEncryptedVoteRoot = existing.encrypted_vote_root;
+        continue;
+      }
+      if (!batch.sealed) {
+        uncommittedSealedRemainder = true;
+        break;
+      }
+      batchCommitDescriptors.push({
+        batch,
+        previousNullifierRoot,
+        previousVoteCommitmentRoot,
+        previousEncryptedVoteRoot,
+        cumulativeAcceptedCount,
+      });
+      previousNullifierRoot = batch.nullifierTree.root;
+      previousVoteCommitmentRoot = batch.voteCommitmentTree.root;
+      previousEncryptedVoteRoot = batch.encryptedVoteTree.root;
+    }
+
+    const publishFinalResult =
+      isPollFinalResultPublishable(poll) && !uncommittedSealedRemainder;
 
     try {
       const publication = await solanaAuditPublisherService.publishPollAudit({
         poll,
-        nullifierRoot: material.nullifierTree.root,
-        voteCommitmentRoot: material.voteCommitmentTree.root,
-        encryptedVoteRoot: material.encryptedVoteTree.root,
+        batchCommits: batchCommitDescriptors.map((descriptor) => ({
+          batchIndex: descriptor.batch.batchIndex,
+          previousNullifierRoot: descriptor.previousNullifierRoot,
+          nullifierRoot: descriptor.batch.nullifierTree.root,
+          previousVoteCommitmentRoot: descriptor.previousVoteCommitmentRoot,
+          voteCommitmentRoot: descriptor.batch.voteCommitmentTree.root,
+          previousEncryptedVoteRoot: descriptor.previousEncryptedVoteRoot,
+          encryptedVoteRoot: descriptor.batch.encryptedVoteTree.root,
+          acceptedCountDelta: descriptor.batch.acceptedCount,
+        })),
+        finalNullifierRoot: material.nullifierTree.root,
+        finalVoteCommitmentRoot: material.voteCommitmentTree.root,
+        finalEncryptedVoteRoot: material.encryptedVoteTree.root,
         acceptedVoteCount: material.acceptedVoteCount,
         resultHash: material.resultHash,
         tallyProofHash: material.tallyProof?.tally_proof_hash ?? null,
-        publishFinalResult: isPollFinalResultPublishable(poll),
+        publishFinalResult,
       });
 
-      if (!existingRoot && publication.rootCommitSignature) {
+      const auditRecordRepository = isProductionZkpPoll(poll)
+        ? pollZkVoteRepository
+        : voteRepository;
+      const committedByBatchIndex = new Map(
+        publication.rootCommits.map((commit) => [commit.batchIndex, commit]),
+      );
+      for (const descriptor of batchCommitDescriptors) {
+        const committed = committedByBatchIndex.get(
+          descriptor.batch.batchIndex,
+        );
+        if (!committed?.signature) {
+          continue;
+        }
+
         await pollAuditRepository.insertRoot({
           poll_id: poll.id,
-          batch_id: "0",
-          previous_nullifier_root: PUBLIC_AUDIT_ZERO_ROOT,
-          nullifier_root: material.nullifierTree.root,
-          previous_vote_commitment_root: PUBLIC_AUDIT_ZERO_ROOT,
-          vote_commitment_root: material.voteCommitmentTree.root,
-          previous_encrypted_vote_root: PUBLIC_AUDIT_ZERO_ROOT,
-          encrypted_vote_root: material.encryptedVoteTree.root,
-          accepted_count: material.acceptedVoteCount,
-          solana_tx_signature: publication.rootCommitSignature,
+          batch_id: descriptor.batch.batchId,
+          previous_nullifier_root: descriptor.previousNullifierRoot,
+          nullifier_root: descriptor.batch.nullifierTree.root,
+          previous_vote_commitment_root: descriptor.previousVoteCommitmentRoot,
+          vote_commitment_root: descriptor.batch.voteCommitmentTree.root,
+          previous_encrypted_vote_root: descriptor.previousEncryptedVoteRoot,
+          encrypted_vote_root: descriptor.batch.encryptedVoteTree.root,
+          accepted_count: descriptor.cumulativeAcceptedCount,
+          solana_tx_signature: committed.signature,
         });
-        const auditRecordRepository = isProductionZkpPoll(poll)
-          ? pollZkVoteRepository
-          : voteRepository;
         await auditRecordRepository.markAcceptedAuditRecordsBatch({
           pollId: poll.id,
-          batchId: "0",
+          batchId: descriptor.batch.batchId,
+          recordIds: descriptor.batch.records.map((record) => record.id),
         });
-      }
-
-      if (publication.rootCommitSignature) {
         await pollAuditRepository.insertAuditEvent({
           poll_id: poll.id,
           event_type: "poll_root_published_on_chain",
           payload_hash: material.resultHash,
           payload_json: {
-            batchIndex: 0,
-            acceptedVoteCount: material.acceptedVoteCount,
-            nullifierRoot: material.nullifierTree.root,
-            voteCommitmentRoot: material.voteCommitmentTree.root,
-            encryptedVoteRoot: material.encryptedVoteTree.root,
+            batchIndex: descriptor.batch.batchIndex,
+            batchAcceptedCount: descriptor.batch.acceptedCount,
+            acceptedVoteCount: descriptor.cumulativeAcceptedCount,
+            nullifierRoot: descriptor.batch.nullifierTree.root,
+            voteCommitmentRoot: descriptor.batch.voteCommitmentTree.root,
+            encryptedVoteRoot: descriptor.batch.encryptedVoteTree.root,
             tallyProofHash: material.tallyProof?.tally_proof_hash ?? null,
             tallyPublicInputsHash:
               material.tallyProof?.tally_public_inputs_hash ?? null,
             pollAddress: publication.pollAddress,
-            rootAddress: publication.rootAddress,
+            rootAddress: committed.rootAddress,
           },
-          solana_tx_signature: publication.rootCommitSignature,
+          solana_tx_signature: committed.signature,
         });
       }
 
@@ -935,7 +1086,10 @@ export const pollPublicAuditService = {
 
       return {
         success: true,
-        message: "Poll audit roots were published on-chain.",
+        message:
+          batchCommitDescriptors.length > 0 || publication.finalResultSignature
+            ? "Poll audit roots were published on-chain."
+            : "No sealed audit batches were ready to publish; the current batch stays pending until it fills or the poll closes.",
         publication,
         audit,
       };
@@ -969,6 +1123,7 @@ export const pollPublicAuditService = {
           | "POLL_NOT_OWNED"
           | "POLL_NOT_PRODUCTION_ZKP"
           | "NO_ACCEPTED_AUDIT_VOTES"
+          | "TALLY_BATCH_LIMIT_EXCEEDED"
           | "TALLY_PROOF_INVALID";
         message: string;
       }
@@ -1004,6 +1159,14 @@ export const pollPublicAuditService = {
         success: false,
         errorCode: "NO_ACCEPTED_AUDIT_VOTES",
         message: "This poll has no accepted proof-backed votes to tally.",
+      };
+    }
+
+    if (material.acceptedVoteCount > PUBLIC_AUDIT_BATCH_LEAF_CAPACITY) {
+      return {
+        success: false,
+        errorCode: "TALLY_BATCH_LIMIT_EXCEEDED",
+        message: `This poll has ${material.acceptedVoteCount} accepted votes across ${material.batches.length} audit batches; the v1 tally circuit covers a single ${PUBLIC_AUDIT_BATCH_LEAF_CAPACITY}-vote batch, and chained batch tally proofs are not implemented yet.`,
       };
     }
 
@@ -1111,19 +1274,32 @@ export const pollPublicAuditService = {
     }
 
     const auditRecords = await getAcceptedAuditRecordsByPoll(poll);
-    const { nullifierTree, voteCommitmentTree, encryptedVoteTree } =
-      await buildAuditTrees(poll, auditRecords);
-    const tree =
+    const batches = await buildAuditBatches(poll, auditRecords);
+    const selectTree = (batch: PollAuditBatchMaterial): AuditMerkleTree =>
       input.tree === "nullifier"
-        ? nullifierTree
+        ? batch.nullifierTree
         : input.tree === "encrypted_vote"
-          ? encryptedVoteTree
-          : voteCommitmentTree;
-    const leafIndex = tree.leafHashes.findIndex(
-      (leafHash) => leafHash === normalizedLeafHash,
-    );
+          ? batch.encryptedVoteTree
+          : batch.voteCommitmentTree;
 
-    if (leafIndex < 0) {
+    let matchingLeafCount = 0;
+    let matchedBatch: PollAuditBatchMaterial | null = null;
+    let matchedLeafIndex = -1;
+    for (const batch of batches) {
+      const leafHashes = selectTree(batch).leafHashes;
+      for (let index = 0; index < leafHashes.length; index += 1) {
+        if (leafHashes[index] !== normalizedLeafHash) {
+          continue;
+        }
+        matchingLeafCount += 1;
+        if (!matchedBatch) {
+          matchedBatch = batch;
+          matchedLeafIndex = index;
+        }
+      }
+    }
+
+    if (!matchedBatch || matchedLeafIndex < 0) {
       return {
         success: false,
         errorCode: "LEAF_NOT_FOUND",
@@ -1131,17 +1307,17 @@ export const pollPublicAuditService = {
       };
     }
 
+    const tree = selectTree(matchedBatch);
     return {
       success: true,
       pollId: poll.id,
       tree: input.tree,
       leafHash: normalizedLeafHash,
-      leafIndex,
-      matchingLeafCount: tree.leafHashes.filter(
-        (leafHash) => leafHash === normalizedLeafHash,
-      ).length,
+      batchIndex: matchedBatch.batchIndex,
+      leafIndex: matchedLeafIndex,
+      matchingLeafCount,
       root: tree.root,
-      proof: buildAuditMerkleProof(tree, leafIndex),
+      proof: buildAuditMerkleProof(tree, matchedLeafIndex),
     };
   },
 
@@ -1182,12 +1358,27 @@ export const pollPublicAuditService = {
       normalizedVoteCommitment,
     );
     const auditRecords = await getAcceptedAuditRecordsByPoll(poll);
-    const { voteCommitmentTree } = await buildAuditTrees(poll, auditRecords);
-    const leafIndex = voteCommitmentTree.leafHashes.findIndex(
-      (leafHash) => leafHash === voteCommitmentLeafHash,
-    );
+    const batches = await buildAuditBatches(poll, auditRecords);
 
-    if (leafIndex < 0) {
+    let matchingLeafCount = 0;
+    let matchedBatch: PollAuditBatchMaterial | null = null;
+    let matchedLeafIndex = -1;
+    for (const batch of batches) {
+      const leafHashes = batch.voteCommitmentTree.leafHashes;
+      for (let index = 0; index < leafHashes.length; index += 1) {
+        if (leafHashes[index] !== voteCommitmentLeafHash) {
+          continue;
+        }
+        matchingLeafCount += 1;
+        if (!matchedBatch) {
+          matchedBatch = batch;
+          matchedLeafIndex = index;
+        }
+      }
+    }
+
+    if (!matchedBatch || matchedLeafIndex < 0) {
+      const latestBatch = batches[batches.length - 1];
       return {
         included: false,
         pollId: poll.id,
@@ -1198,7 +1389,7 @@ export const pollPublicAuditService = {
         batchId: null,
         acceptedAt: null,
         proofHash: null,
-        root: voteCommitmentTree.root,
+        root: latestBatch.voteCommitmentTree.root,
         matchingLeafCount: 0,
         merklePath: [],
         solanaTx: null,
@@ -1207,8 +1398,8 @@ export const pollPublicAuditService = {
       };
     }
 
-    const auditRecord = auditRecords[leafIndex];
-    const batchId = auditRecord?.batch_id ?? "0";
+    const auditRecord = matchedBatch.records[matchedLeafIndex];
+    const batchId = matchedBatch.batchId;
     const publishedRoot = await pollAuditRepository.getRootByPollIdAndBatchId(
       poll.id,
       batchId,
@@ -1220,15 +1411,16 @@ export const pollPublicAuditService = {
       voteCommitment: normalizedVoteCommitment,
       voteCommitmentLeafHash,
       batchStatus: solanaTx ? "published_on_chain" : "pending_on_chain_publication",
-      batchIndex: parseBatchIndex(batchId),
+      batchIndex: matchedBatch.batchIndex,
       batchId,
       acceptedAt: auditRecord?.accepted_at ?? null,
       proofHash: auditRecord?.proof_hash ?? null,
-      root: voteCommitmentTree.root,
-      matchingLeafCount: voteCommitmentTree.leafHashes.filter(
-        (leafHash) => leafHash === voteCommitmentLeafHash,
-      ).length,
-      merklePath: buildAuditMerkleProof(voteCommitmentTree, leafIndex),
+      root: matchedBatch.voteCommitmentTree.root,
+      matchingLeafCount,
+      merklePath: buildAuditMerkleProof(
+        matchedBatch.voteCommitmentTree,
+        matchedLeafIndex,
+      ),
       solanaTx,
       solanaExplorerUrl: buildSolanaExplorerUrl(solanaTx),
       auditUrl,

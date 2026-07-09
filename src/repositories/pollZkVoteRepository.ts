@@ -97,15 +97,21 @@ export const pollZkVoteRepository = {
   async markAcceptedAuditRecordsBatch(input: {
     pollId: string;
     batchId: string;
+    recordIds?: readonly string[];
   }): Promise<void> {
     const supabase = requireSupabaseAdminClient();
 
-    const { error } = await supabase
+    let query = supabase
       .from("poll_zk_votes")
       .update({ batch_id: input.batchId })
       .eq("poll_id", input.pollId)
       .eq("proof_verification_status", "verified")
       .is("batch_id", null);
+    if (input.recordIds) {
+      query = query.in("id", [...input.recordIds]);
+    }
+
+    const { error } = await query;
 
     if (error) {
       throw error;

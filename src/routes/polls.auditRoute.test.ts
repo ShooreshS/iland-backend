@@ -47,6 +47,17 @@ const sampleAudit: PublicPollAuditDto = {
       nodeHashDomain: "org.civicos.audit:merkle-node:v1",
     },
   },
+  auditBatches: [
+    {
+      batchIndex: 0,
+      acceptedCount: 1,
+      sealed: true,
+      nullifierRoot: "3".repeat(64),
+      voteCommitmentRoot: "4".repeat(64),
+      encryptedVoteRoot: "5".repeat(64),
+      publication: null,
+    },
+  ],
   computedCurrentRootBatch: {
     status: "pending_on_chain_publication",
     batchIndex: 0,
@@ -148,6 +159,7 @@ describe("GET /polls/:id/audit/inclusion route", () => {
           pollId: "poll-1",
           tree: "vote_commitment",
           leafHash: "6".repeat(64),
+          batchIndex: 0,
           leafIndex: 0,
           matchingLeafCount: 1,
           root: "4".repeat(64),
@@ -171,6 +183,7 @@ describe("GET /polls/:id/audit/inclusion route", () => {
       pollId: "poll-1",
       tree: "vote_commitment",
       leafHash: "6".repeat(64),
+      batchIndex: 0,
       leafIndex: 0,
       matchingLeafCount: 1,
       root: "4".repeat(64),

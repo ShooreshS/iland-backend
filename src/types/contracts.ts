@@ -166,6 +166,16 @@ export type PublicAuditRootCommitDto = {
   submittedAt: string;
 };
 
+export type PublicAuditBatchSummaryDto = {
+  batchIndex: number;
+  acceptedCount: number;
+  sealed: boolean;
+  nullifierRoot: string;
+  voteCommitmentRoot: string;
+  encryptedVoteRoot: string;
+  publication: PublicAuditRootCommitDto | null;
+};
+
 export type PublicAuditTallyProofSummaryDto = {
   resultHash: string;
   tallyProofHash: string;
@@ -197,6 +207,7 @@ export type PublicPollAuditDto = {
     voteCommitment: PublicAuditTreeSummaryDto;
     encryptedVote: PublicAuditTreeSummaryDto;
   };
+  auditBatches: PublicAuditBatchSummaryDto[];
   computedCurrentRootBatch: PublicAuditComputedRootBatchDto | null;
   rootCommits: PublicAuditRootCommitDto[];
   resultHash: string;
@@ -222,6 +233,7 @@ export type PublicAuditInclusionProofSuccessDto = {
   pollId: string;
   tree: PublicAuditTreeKind;
   leafHash: string;
+  batchIndex: number;
   leafIndex: number;
   matchingLeafCount: number;
   root: string;

@@ -11,8 +11,13 @@ Status: Phase 1 frozen contract, amended for depth 32 on 2026-07-09 before any p
 - Poll options: 1 to 8 active options, sorted by `display_order`.
 - Tally batch: fixed 64 votes x 8 option bins.
 - Larger poll rollup: chain 64-vote batch proofs off-chain by public roots/counts before adding recursion.
+- Audit batch assignment: accepted votes ordered by `(accepted_at asc, id asc)`; position `p` maps to batch `floor(p / 64)`, leaf index `p mod 64`. A batch seals (root immutable, anchorable) at 64 leaves or poll finalization.
 - `encryptedVoteHash`: backend envelope hash only; not a circuit public input.
 - `encryptedVoteCommitment`: in-circuit Poseidon commitment used by vote, storage, audit tree, and tally.
+
+- Publication anchors sealed batches in order, each commit_roots chaining from the previous batch's committed roots — the program's previous-root checks hold naturally, and an unsealed tail batch stays pending until it fills or the poll closes (fixing the stale-root bug).
+- Receipts and inclusion proofs now verify against the vote's own batch root, with batchIndex in the DTOs; the audit API gained an auditBatches summary with per-batch roots, sealed flags, and publication status.
+- Tally stays fail-closed: >64 accepted votes returns TALLY_BATCH_LIMIT_EXCEEDED (409) until the chained-batch rollup from the Phase 1 freeze is built. finalize_poll/resultHash bind the last batch's roots; earlier batches are bound transitively through the on-chain chain.
 
 ## Vote Circuit
 

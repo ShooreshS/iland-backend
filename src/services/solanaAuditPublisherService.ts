@@ -19,11 +19,29 @@ const DEFAULT_LOCALNET_RPC_URL = "http://127.0.0.1:8899";
 const DEFAULT_OPEN_POLL_SECONDS = 365 * 24 * 60 * 60;
 const ZERO_ROOT = "0".repeat(64);
 
+export type SolanaAuditBatchCommitInput = Readonly<{
+  batchIndex: number;
+  previousNullifierRoot: string;
+  nullifierRoot: string;
+  previousVoteCommitmentRoot: string;
+  voteCommitmentRoot: string;
+  previousEncryptedVoteRoot: string;
+  encryptedVoteRoot: string;
+  acceptedCountDelta: number;
+}>;
+
+export type SolanaAuditBatchCommitResult = Readonly<{
+  batchIndex: number;
+  rootAddress: string;
+  signature: string | null;
+}>;
+
 export type SolanaAuditPublicationInput = Readonly<{
   poll: PollRow;
-  nullifierRoot: string;
-  voteCommitmentRoot: string;
-  encryptedVoteRoot: string;
+  batchCommits: readonly SolanaAuditBatchCommitInput[];
+  finalNullifierRoot: string;
+  finalVoteCommitmentRoot: string;
+  finalEncryptedVoteRoot: string;
   acceptedVoteCount: number;
   resultHash: string;
   tallyProofHash?: string | null;
@@ -39,6 +57,7 @@ export type SolanaAuditPublicationResult = Readonly<{
   finalResultAddress: string | null;
   registrySignature: string | null;
   pollRegistrationSignature: string | null;
+  rootCommits: readonly SolanaAuditBatchCommitResult[];
   rootCommitSignature: string | null;
   finalResultSignature: string | null;
   feePayerPublicKey: string;
@@ -437,10 +456,9 @@ export const solanaAuditPublisherService = {
     const registryAddress = deriveRegistryAddress(programId);
     const pollIdHash = derivePollIdHash(input.poll.id);
     const pollAddress = derivePollAddress(programId, pollIdHash);
-    const rootAddress =
-      input.acceptedVoteCount > 0
-        ? derivePollRootAddress(programId, pollAddress, 0)
-        : null;
+    const orderedBatchCommits = [...input.batchCommits].sort(
+      (left, right) => left.batchIndex - right.batchIndex,
+    );
     const finalResultAddress =
       input.publishFinalResult && input.acceptedVoteCount > 0
         ? deriveFinalResultAddress(programId, pollAddress)
@@ -493,34 +511,60 @@ export const solanaAuditPublisherService = {
       });
     }
 
-    let rootCommitSignature: string | null = null;
-    if (rootAddress) {
-      const rootAccount = await connection.getAccountInfo(rootAddress);
-      if (!rootAccount) {
-        rootCommitSignature = await sendSimulatedTransaction({
-          connection,
-          signer,
-          label: "commit_roots",
-          instructions: [
-            buildCommitRootsInstruction({
-              programId,
-              registryAddress,
-              pollAddress,
-              pollRootAddress: rootAddress,
-              authority: signer.publicKey,
-              batchIndex: 0,
-              previousNullifierRoot: hex32(ZERO_ROOT),
-              nullifierRoot: hex32(input.nullifierRoot),
-              previousVoteCommitmentRoot: hex32(ZERO_ROOT),
-              voteCommitmentRoot: hex32(input.voteCommitmentRoot),
-              previousEncryptedVoteRoot: hex32(ZERO_ROOT),
-              encryptedVoteRoot: hex32(input.encryptedVoteRoot),
-              acceptedCountDelta: input.acceptedVoteCount,
-            }),
-          ],
+    const rootCommits: SolanaAuditBatchCommitResult[] = [];
+    for (const batchCommit of orderedBatchCommits) {
+      const batchRootAddress = derivePollRootAddress(
+        programId,
+        pollAddress,
+        batchCommit.batchIndex,
+      );
+      const rootAccount = await connection.getAccountInfo(batchRootAddress);
+      if (rootAccount) {
+        rootCommits.push({
+          batchIndex: batchCommit.batchIndex,
+          rootAddress: batchRootAddress.toBase58(),
+          signature: null,
         });
+        continue;
       }
+
+      const signature = await sendSimulatedTransaction({
+        connection,
+        signer,
+        label: `commit_roots[batch ${batchCommit.batchIndex}]`,
+        instructions: [
+          buildCommitRootsInstruction({
+            programId,
+            registryAddress,
+            pollAddress,
+            pollRootAddress: batchRootAddress,
+            authority: signer.publicKey,
+            batchIndex: batchCommit.batchIndex,
+            previousNullifierRoot: hex32(batchCommit.previousNullifierRoot),
+            nullifierRoot: hex32(batchCommit.nullifierRoot),
+            previousVoteCommitmentRoot: hex32(
+              batchCommit.previousVoteCommitmentRoot,
+            ),
+            voteCommitmentRoot: hex32(batchCommit.voteCommitmentRoot),
+            previousEncryptedVoteRoot: hex32(
+              batchCommit.previousEncryptedVoteRoot,
+            ),
+            encryptedVoteRoot: hex32(batchCommit.encryptedVoteRoot),
+            acceptedCountDelta: batchCommit.acceptedCountDelta,
+          }),
+        ],
+      });
+      rootCommits.push({
+        batchIndex: batchCommit.batchIndex,
+        rootAddress: batchRootAddress.toBase58(),
+        signature,
+      });
     }
+
+    const lastRootCommit = rootCommits[rootCommits.length - 1] ?? null;
+    const rootCommitSignature =
+      [...rootCommits].reverse().find((commit) => commit.signature)?.signature ??
+      null;
 
     let finalResultSignature: string | null = null;
     if (finalResultAddress) {
@@ -537,9 +581,9 @@ export const solanaAuditPublisherService = {
               pollAddress,
               finalResultAddress,
               authority: signer.publicKey,
-              voteCommitmentRoot: hex32(input.voteCommitmentRoot),
-              nullifierRoot: hex32(input.nullifierRoot),
-              encryptedVoteRoot: hex32(input.encryptedVoteRoot),
+              voteCommitmentRoot: hex32(input.finalVoteCommitmentRoot),
+              nullifierRoot: hex32(input.finalNullifierRoot),
+              encryptedVoteRoot: hex32(input.finalEncryptedVoteRoot),
               resultHash: hex32(input.resultHash),
               tallyProofHash: input.tallyProofHash ? hex32(input.tallyProofHash) : null,
             }),
@@ -553,10 +597,11 @@ export const solanaAuditPublisherService = {
       programId: programId.toBase58(),
       registryAddress: registryAddress.toBase58(),
       pollAddress: pollAddress.toBase58(),
-      rootAddress: rootAddress?.toBase58() ?? null,
+      rootAddress: lastRootCommit?.rootAddress ?? null,
       finalResultAddress: finalResultAddress?.toBase58() ?? null,
       registrySignature,
       pollRegistrationSignature,
+      rootCommits: Object.freeze(rootCommits),
       rootCommitSignature,
       finalResultSignature,
       feePayerPublicKey: signer.publicKey.toBase58(),

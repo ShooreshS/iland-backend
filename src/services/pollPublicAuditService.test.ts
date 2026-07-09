@@ -417,3 +417,184 @@ describe("Phase 8 public poll audit service", () => {
     expect(tree.leafHashes).toEqual([]);
   });
 });
+
+describe("Phase 5 audit batch segmentation", () => {
+  const fieldHex = (prefix: number, index: number): string =>
+    `${prefix}${index.toString(16).padStart(63 - String(prefix).length + 1, "0")}`.slice(
+      0,
+      64,
+    );
+
+  const createProductionPoll = (overrides: Partial<PollRow> = {}): PollRow =>
+    createPoll({
+      vote_privacy_mode: "zk_secret_ballot_v1",
+      option_set_hash: "3".repeat(64),
+      poll_encryption_key_id: "poll-key-1",
+      ...overrides,
+    });
+
+  const createProductionRecords = (
+    count: number,
+  ): PublicZkAuditVoteRecordRow[] =>
+    Array.from({ length: count }, (_, index) => {
+      const acceptedAt = new Date(
+        Date.parse("2026-07-05T10:00:00.000Z") + index * 1000,
+      ).toISOString();
+      return createAuditRecord({
+        id: `vote-${String(index).padStart(3, "0")}`,
+        nullifier: fieldHex(1, index + 1),
+        vote_commitment: fieldHex(2, index + 1),
+        encrypted_vote_commitment: fieldHex(3, index + 1),
+        proof_hash: fieldHex(4, index + 1),
+        accepted_at: acceptedAt,
+        created_at: acceptedAt,
+      }) as PublicZkAuditVoteRecordRow;
+    });
+
+  const patchProductionRepositories = (
+    poll: PollRow,
+    records: PublicZkAuditVoteRecordRow[],
+  ): (() => void)[] => [
+    patchMethod(pollRepository, "getById", async () => poll),
+    patchMethod(pollRepository, "getOptionsByPollId", async () => [
+      createOption({ id: "option-a" }),
+    ]),
+    patchMethod(
+      pollZkVoteRepository,
+      "getAcceptedAuditRecordsByPollId",
+      async () => records,
+    ),
+    patchMethod(
+      pollZkVoteRepository,
+      "countAcceptedByPollId",
+      async () => records.length,
+    ),
+    patchMethod(pollTallyProofRepository, "getLatestByPollId", async () => null),
+    patchMethod(pollAuditRepository, "listRootsByPollId", async () => []),
+    patchMethod(
+      pollAuditRepository,
+      "getRootByPollIdAndBatchId",
+      async () => null,
+    ),
+  ];
+
+  it("segments 65 production votes into two batches with verifiable batch proofs", async () => {
+    const poll = createProductionPoll();
+    const records = createProductionRecords(65);
+    const restoreFns = patchProductionRepositories(poll, records);
+
+    try {
+      const audit = await pollPublicAuditService.getPublicPollAudit(poll.id);
+
+      expect(audit).not.toBeNull();
+      expect(audit?.acceptedVoteCount).toBe(65);
+      expect(audit?.auditBatches).toHaveLength(2);
+      expect(audit?.auditBatches[0]).toMatchObject({
+        batchIndex: 0,
+        acceptedCount: POSEIDON_AUDIT_TREE_LEAF_CAPACITY,
+        sealed: true,
+        publication: null,
+      });
+      expect(audit?.auditBatches[1]).toMatchObject({
+        batchIndex: 1,
+        acceptedCount: 1,
+        sealed: true,
+      });
+      expect(audit?.auditBatches[0]?.nullifierRoot).not.toBe(
+        audit?.auditBatches[1]?.nullifierRoot,
+      );
+      expect(audit?.trees.voteCommitment.root).toBe(
+        audit?.auditBatches[1]?.voteCommitmentRoot,
+      );
+      expect(audit?.computedCurrentRootBatch).toMatchObject({
+        batchIndex: 1,
+        acceptedCount: 1,
+      });
+
+      const lastVoteCommitment = records[64].vote_commitment ?? "";
+      const receipt = await pollPublicAuditService.getPublicVoteReceipt({
+        pollId: poll.id,
+        voteCommitment: lastVoteCommitment,
+      });
+      expect(receipt?.included).toBe(true);
+      expect(receipt?.batchIndex).toBe(1);
+      expect(receipt?.batchId).toBe("1");
+      expect(receipt?.root).toBe(audit?.auditBatches[1]?.voteCommitmentRoot ?? "");
+      expect(receipt?.merklePath).toHaveLength(POSEIDON_AUDIT_TREE_DEPTH);
+      expect(
+        await verifyPoseidonAuditMerkleProof({
+          leafHash: receipt?.voteCommitmentLeafHash ?? "",
+          root: receipt?.root ?? "",
+          proof: receipt?.merklePath ?? [],
+        }),
+      ).toBe(true);
+
+      const batchZeroLeafHash = await hashPoseidonAuditLeaf(
+        "vote_commitment",
+        records[10].vote_commitment ?? "",
+      );
+      const inclusion =
+        await pollPublicAuditService.getPublicPollAuditInclusionProof({
+          pollId: poll.id,
+          tree: "vote_commitment",
+          leafHash: batchZeroLeafHash,
+        });
+      expect(inclusion.success).toBe(true);
+      if (!inclusion.success) {
+        throw new Error("Expected inclusion proof.");
+      }
+      expect(inclusion.batchIndex).toBe(0);
+      expect(inclusion.leafIndex).toBe(10);
+      expect(inclusion.root).toBe(audit?.auditBatches[0]?.voteCommitmentRoot ?? "");
+      expect(
+        await verifyPoseidonAuditMerkleProof({
+          leafHash: batchZeroLeafHash,
+          root: inclusion.root,
+          proof: inclusion.proof,
+        }),
+      ).toBe(true);
+    } finally {
+      restoreFns.reverse().forEach((restore) => restore());
+    }
+  });
+
+  it("keeps an open poll's partial tail batch unsealed", async () => {
+    const poll = createProductionPoll({
+      status: "active",
+      ends_at: "2027-01-01T00:00:00.000Z",
+    });
+    const records = createProductionRecords(65);
+    const restoreFns = patchProductionRepositories(poll, records);
+
+    try {
+      const audit = await pollPublicAuditService.getPublicPollAudit(poll.id);
+
+      expect(audit?.auditBatches[0]?.sealed).toBe(true);
+      expect(audit?.auditBatches[1]?.sealed).toBe(false);
+    } finally {
+      restoreFns.reverse().forEach((restore) => restore());
+    }
+  });
+
+  it("rejects tally proofs for polls that exceed one 64-vote batch", async () => {
+    const poll = createProductionPoll();
+    const records = createProductionRecords(65);
+    const restoreFns = patchProductionRepositories(poll, records);
+
+    try {
+      const result = await pollPublicAuditService.submitTallyProof({
+        pollId: poll.id,
+        viewerUserId: "owner-1",
+        proof: {} as never,
+      });
+
+      expect(result.success).toBe(false);
+      if (result.success) {
+        throw new Error("Expected tally rejection.");
+      }
+      expect(result.errorCode).toBe("TALLY_BATCH_LIMIT_EXCEEDED");
+    } finally {
+      restoreFns.reverse().forEach((restore) => restore());
+    }
+  });
+});

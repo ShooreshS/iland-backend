@@ -305,6 +305,7 @@ const tallyProofErrorStatusMap: Record<string, number> = {
   POLL_NOT_OWNED: 403,
   POLL_NOT_PRODUCTION_ZKP: 409,
   NO_ACCEPTED_AUDIT_VOTES: 409,
+  TALLY_BATCH_LIMIT_EXCEEDED: 409,
   TALLY_PROOF_INVALID: 400,
 };
 
