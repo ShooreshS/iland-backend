@@ -195,6 +195,7 @@ export type PublicPollAuditDto = {
   pollStatus: PollStatus;
   pollPolicyHash: string | null;
   credentialSchemaHash: string | null;
+  optionSetHash: string | null;
   generatedAt: string;
   publicationStatus:
     | "not_applicable"

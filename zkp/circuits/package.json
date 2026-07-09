@@ -14,6 +14,7 @@
     "setup:dev": "node scripts/setup-dev-groth16.mjs",
     "ptau:rc": "node scripts/prepare-rc-ptau.mjs",
     "setup:rc": "node scripts/setup-rc-groth16.mjs",
+    "transcripts": "node scripts/write-phase2-transcripts.mjs",
     "manifests": "node scripts/write-artifact-manifests.mjs",
     "fixtures": "node scripts/write-proof-fixtures.mjs",
     "prove:dev": "node scripts/prove-dev.mjs",

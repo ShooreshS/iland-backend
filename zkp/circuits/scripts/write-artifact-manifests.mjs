@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import {
   copyFileSync,
+  existsSync,
   mkdirSync,
   readFileSync,
   statSync,
@@ -17,6 +18,16 @@ const generatedAt =
   new Date().toISOString();
 const manifestDomain = "org.civicos.zkp.groth16.artifact-manifest";
 const transcriptDomain = "org.civicos.zkp.groth16.internal-rc-transcript";
+const artifactProfile = process.env.CIVICOS_GROTH16_ARTIFACT_PROFILE || "internal-rc";
+const ceremonyName =
+  process.env.CIVICOS_GROTH16_CEREMONY_NAME ||
+  (artifactProfile === "production"
+    ? "civicos-production-groth16-phase2-v1"
+    : "internal-release-candidate-single-contributor");
+const defaultNotes =
+  artifactProfile === "production"
+    ? "Production ceremony artifact. Publish the matching Phase 2 transcript and verifier command output with the public audit material."
+    : "Internal release-candidate artifact for devnet/internal testing only. Not a final audited multi-contributor production ceremony.";
 
 const outputRoot = resolve(backendRoot, "src/zkp-artifacts");
 const fixtureRoot = resolve(backendRoot, "src/services/__fixtures__");
@@ -33,8 +44,7 @@ const circuits = Object.freeze([
       credentialMerkleDepth: 32,
       maxOptions: 8,
     },
-    notes:
-      "Internal release-candidate artifact for credential-commitment-only v1 testing. Not a final audited multi-contributor production ceremony.",
+    notes: defaultNotes,
   },
   {
     kind: "tally",
@@ -47,8 +57,7 @@ const circuits = Object.freeze([
       tallyBatchSize: 64,
       maxOptions: 8,
     },
-    notes:
-      "Internal release-candidate artifact for 64-vote x 8-option tally testing. Not a final audited multi-contributor production ceremony.",
+    notes: defaultNotes,
   },
 ]);
 const selectedCircuitNames = new Set(
@@ -119,6 +128,14 @@ for (const circuit of circuits) {
   const wasmPath = resolve(buildDir, `${circuit.name}_js/${circuit.name}.wasm`);
   const r1csPath = resolve(buildDir, `${circuit.name}.r1cs`);
   const ptauPath = resolve(buildDir, `pot${circuit.ptauPower}_final.ptau`);
+  const phase2TranscriptPath = resolve(
+    buildDir,
+    `${circuit.name}.phase2-transcript.json`,
+  );
+  const phase2TranscriptHashPath = resolve(
+    buildDir,
+    `${circuit.name}.phase2-transcript-hash.txt`,
+  );
   const vkeyPath = resolve(artifactDir, `${circuit.name}.vkey.json`);
   copyFileSync(vkeySource, vkeyPath);
   copyFileSync(vkeySource, resolve(fixtureDir, `${circuit.name}.vkey.json`));
@@ -128,7 +145,7 @@ for (const circuit of circuits) {
   const wasmHash = sha256File(wasmPath);
   const r1csHash = sha256File(r1csPath);
   const phase1TranscriptHash = sha256File(ptauPath);
-  const trustedSetupTranscriptHash = sha256String(
+  const fallbackTrustedSetupTranscriptHash = sha256String(
     `${transcriptDomain}|${canonicalizeJson({
       circuitId: circuit.circuitId,
       phase1TranscriptHash,
@@ -138,6 +155,36 @@ for (const circuit of circuits) {
       wasmHash,
     })}`,
   );
+  const phase2Transcript = existsSync(phase2TranscriptPath)
+    ? JSON.parse(readFileSync(phase2TranscriptPath, "utf8"))
+    : null;
+  if (artifactProfile === "production" && !phase2Transcript) {
+    throw new Error(
+      `Production manifest requires ${phase2TranscriptPath}. Run npm run transcripts after the production ceremony.`,
+    );
+  }
+  if (artifactProfile === "production") {
+    const contributionCount = phase2Transcript?.phase2?.contributionCount;
+    if (typeof contributionCount !== "number" || contributionCount < 3) {
+      throw new Error(
+        `Production manifest requires at least three Phase 2 contributors for ${circuit.name}.`,
+      );
+    }
+  }
+  const trustedSetupTranscriptHash = existsSync(phase2TranscriptHashPath)
+    ? readFileSync(phase2TranscriptHashPath, "utf8").trim().toLowerCase()
+    : fallbackTrustedSetupTranscriptHash;
+  const phase2TranscriptArtifact = phase2Transcript
+    ? {
+        ...artifactEntry({
+          role: "metadata",
+          path: phase2TranscriptPath,
+          sha256: sha256File(phase2TranscriptPath),
+          format: "json",
+        }),
+        path: unixRelativePath(artifactDir, phase2TranscriptPath),
+      }
+    : null;
 
   const manifest = {
     version: "civicos-groth16-artifact-manifest-v1",
@@ -190,14 +237,19 @@ for (const circuit of circuits) {
         }),
         path: unixRelativePath(artifactDir, r1csPath),
       },
+      ...(phase2TranscriptArtifact ? [phase2TranscriptArtifact] : []),
     ],
     trustedSetup: {
-      ceremony: "internal-release-candidate-single-contributor",
+      ceremony: ceremonyName,
       phase1TranscriptHash,
       phase2TranscriptHash: trustedSetupTranscriptHash,
-      contributionCount: 1,
-      notes:
-        "For devnet/internal testing only. Replace with a documented multi-contributor production ceremony before mainnet production use.",
+      contributionCount:
+        typeof phase2Transcript?.phase2?.contributionCount === "number"
+          ? phase2Transcript.phase2.contributionCount
+          : artifactProfile === "production"
+            ? 0
+            : 1,
+      notes: defaultNotes,
     },
     generatedAt,
     notes: circuit.notes,

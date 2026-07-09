@@ -819,6 +819,7 @@ export const pollPublicAuditService = {
       pollStatus: poll.status,
       pollPolicyHash: poll.poll_policy_hash ?? null,
       credentialSchemaHash: poll.credential_schema_hash ?? null,
+      optionSetHash: poll.option_set_hash ?? null,
       generatedAt,
       publicationStatus,
       acceptedVoteCount: material.acceptedVoteCount,

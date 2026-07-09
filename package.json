@@ -7,6 +7,8 @@
     "dev": "bun --watch src/server.ts",
     "start": "bun src/server.ts",
     "typecheck": "bunx tsc --noEmit",
+    "audit:verify": "node scripts/verify-public-audit.mjs",
+    "zkp:env": "node scripts/print-zkp-artifact-env.mjs",
     "oidc:signing-keys": "bun scripts/oidc-signing-keys.ts",
     "oidc:clients": "bun scripts/oidc-clients.ts"
   },

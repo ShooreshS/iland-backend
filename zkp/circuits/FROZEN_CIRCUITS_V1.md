@@ -121,9 +121,14 @@ Pending for Phase 2:
 - Run production multi-contributor Phase-2 ceremonies for both frozen circuits.
 - Generate production proving keys, verification keys, proof fixtures, and artifact manifests from this frozen contract.
 - Record production verifier-key hashes, proving-key hashes, transcript hashes, mobile artifact size, and proving timing.
+- Package the production verifier env values into Railway only after the production ceremony manifests are generated.
 
 Completed for internal RC/devnet testing:
 
 - `pot16_final.ptau` and `pot20_final.ptau` verify with `snarkjs powersoftau verify`.
 - Depth-32 vote and 64x8 tally zkeys, verifier keys, manifests, and proof fixtures were regenerated from this frozen contract.
 - Backend verifier tests accept the regenerated vote and tally proof fixtures.
+- Phase 2 transcript evidence writer exists (`npm run transcripts`).
+- Artifact manifests pin transcript hashes when transcript evidence is present; production mode fails closed unless transcript evidence exists.
+- Backend env values can be printed from pinned manifests with `npm run zkp:env`.
+- Heavy internal RC rebuild order is captured in `back/scripts/overnight.sh` as `CIVICOS_OVERNIGHT_MODE=phase2-rc-rebuild`.

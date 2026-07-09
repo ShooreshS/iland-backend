@@ -106,27 +106,42 @@ files exist:
 ```sh
 CIVICOS_GROTH16_SETUP_CIRCUITS=credential_commitment_vote npm run setup:rc
 CIVICOS_GROTH16_PROVE_CIRCUITS=credential_commitment_vote npm run prove:dev
+CIVICOS_GROTH16_TRANSCRIPT_CIRCUITS=credential_commitment_vote npm run transcripts
 CIVICOS_GROTH16_MANIFEST_CIRCUITS=credential_commitment_vote npm run manifests
+CIVICOS_GROTH16_FIXTURE_CIRCUITS=credential_commitment_vote npm run fixtures
 ```
 
 The RC manifest is for devnet/internal testing only until a documented
 multi-contributor ceremony replaces it.
 
+After setup/proof generation, write Phase 2 transcript evidence before writing
+manifests so the manifest pins the transcript hash.
+
 To rebuild the full internal RC artifact set for both circuits, including the
-slow powers-of-tau files:
+slow powers-of-tau files, use the backend overnight script instead of running the
+heavy commands interactively:
 
 ```sh
-npm run clean
-CIVICOS_GROTH16_PTAU_POWERS=16,20 npm run ptau:rc
-npm run setup:rc
-npm run prove:dev
-npm run manifests
-npm run fixtures
+cd /Users/shooresh/Documents/hello1/iland24/back
+CIVICOS_OVERNIGHT_MODE=phase2-rc-rebuild ./scripts/overnight.sh
 ```
 
 This rewrites local build outputs, proof vectors, backend fixtures, and
 `src/zkp-artifacts` manifests. Do not run it while another process is editing
 or reviewing those generated files.
+
+To print the backend env values for the currently pinned manifests:
+
+```sh
+cd /Users/shooresh/Documents/hello1/iland24/back
+npm run zkp:env
+```
+
+For a real production ceremony, set `CIVICOS_GROTH16_ARTIFACT_PROFILE=production`
+and provide at least three contributors through `CIVICOS_GROTH16_CONTRIBUTORS`
+or `CIVICOS_GROTH16_CONTRIBUTORS_JSON` before running `npm run transcripts` and
+`npm run manifests`. The actual independent contributor ceremony is not
+automated by the RC overnight script.
 
 Any older depth-24 RC vote `.zkey`, verifier key, manifest, or mobile bundle is
 superseded by the depth-32 contract and must not be enabled for production

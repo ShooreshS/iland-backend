@@ -17,6 +17,7 @@ const sampleAudit: PublicPollAuditDto = {
   pollStatus: "closed",
   pollPolicyHash: "1".repeat(64),
   credentialSchemaHash: "2".repeat(64),
+  optionSetHash: "7".repeat(64),
   generatedAt: "2026-07-05T12:00:00.000Z",
   publicationStatus: "pending_on_chain_publication",
   acceptedVoteCount: 1,
