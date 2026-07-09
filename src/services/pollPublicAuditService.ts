@@ -27,6 +27,7 @@ import type {
 import type { JsonValue } from "../types/json";
 import { CIVIC_PRODUCTION_VOTE_PRIVACY_MODE } from "./groth16ProofVerifierService";
 import {
+  hashGroth16TallyProofEnvelope,
   verifyGroth16TallyProofForPoll,
   type Groth16TallyProofEnvelopeDto,
 } from "./groth16TallyProofVerifierService";
@@ -45,6 +46,10 @@ import { hashCanonicalJson } from "./pollPolicyService";
 import solanaAuditPublisherService, {
   type SolanaAuditPublicationResult,
 } from "./solanaAuditPublisherService";
+import zkpAuditEventService, {
+  ZKP_AUDIT_REJECTION_REASON_CODES,
+  type ZkpAuditRejectionReasonCode,
+} from "./zkpAuditEventService";
 
 export const PUBLIC_AUDIT_VERSION = "civicos-public-audit-v1" as const;
 export const PUBLIC_AUDIT_RESULT_HASH_VERSION =
@@ -602,6 +607,25 @@ const isPollFinalResultPublishable = (poll: PollRow): boolean => {
 const isProductionZkpPoll = (poll: PollRow): boolean =>
   poll.vote_privacy_mode === CIVIC_PRODUCTION_VOTE_PRIVACY_MODE;
 
+const mapTallyVerifierReasonToAuditReasonCode = (
+  reason: string,
+): ZkpAuditRejectionReasonCode => {
+  switch (reason) {
+    case "PROOF_REQUIRED":
+      return ZKP_AUDIT_REJECTION_REASON_CODES.proofRequired;
+    case "VERIFIER_KEY_MISMATCH":
+      return ZKP_AUDIT_REJECTION_REASON_CODES.unknownVerifierKey;
+    case "VERIFIER_DISABLED":
+      return ZKP_AUDIT_REJECTION_REASON_CODES.verifierDisabled;
+    case "VERIFIER_UNCONFIGURED":
+      return ZKP_AUDIT_REJECTION_REASON_CODES.verifierUnconfigured;
+    case "VERIFIER_REJECTED":
+      return ZKP_AUDIT_REJECTION_REASON_CODES.verifierRejected;
+    default:
+      return ZKP_AUDIT_REJECTION_REASON_CODES.tallyProofInvalid;
+  }
+};
+
 export const hashPublicAuditLeafForPoll = async (
   poll: PollRow,
   kind: PublicAuditTreeKind,
@@ -909,6 +933,13 @@ export const pollPublicAuditService = {
     }
 
     if (poll.created_by_user_id !== input.viewerUserId) {
+      if (isProductionZkpPoll(poll)) {
+        await zkpAuditEventService.appendPublicationRejected({
+          pollId: poll.id,
+          reasonCode: ZKP_AUDIT_REJECTION_REASON_CODES.pollNotOwned,
+          errorCode: "POLL_NOT_OWNED",
+        });
+      }
       return {
         success: false,
         errorCode: "POLL_NOT_OWNED",
@@ -917,6 +948,13 @@ export const pollPublicAuditService = {
     }
 
     if (!env.solanaAudit.transactionsEnabled) {
+      if (isProductionZkpPoll(poll)) {
+        await zkpAuditEventService.appendPublicationRejected({
+          pollId: poll.id,
+          reasonCode: ZKP_AUDIT_REJECTION_REASON_CODES.transactionsDisabled,
+          errorCode: "TRANSACTIONS_DISABLED",
+        });
+      }
       return {
         success: false,
         errorCode: "TRANSACTIONS_DISABLED",
@@ -926,6 +964,15 @@ export const pollPublicAuditService = {
 
     const material = await loadPollAuditMaterial(poll);
     if (material.acceptedVoteCount <= 0) {
+      if (isProductionZkpPoll(poll)) {
+        await zkpAuditEventService.appendPublicationRejected({
+          pollId: poll.id,
+          reasonCode: ZKP_AUDIT_REJECTION_REASON_CODES.noAcceptedAuditVotes,
+          errorCode: "NO_ACCEPTED_AUDIT_VOTES",
+          acceptedVoteCount: material.acceptedVoteCount,
+          resultHash: material.resultHash,
+        });
+      }
       return {
         success: false,
         errorCode: "NO_ACCEPTED_AUDIT_VOTES",
@@ -1058,6 +1105,25 @@ export const pollPublicAuditService = {
           },
           solana_tx_signature: committed.signature,
         });
+        if (isProductionZkpPoll(poll)) {
+          await zkpAuditEventService.appendRootPublished({
+            pollId: poll.id,
+            batchIndex: descriptor.batch.batchIndex,
+            batchId: descriptor.batch.batchId,
+            acceptedCount: descriptor.batch.acceptedCount,
+            cumulativeAcceptedCount: descriptor.cumulativeAcceptedCount,
+            resultHash: material.resultHash,
+            nullifierRoot: descriptor.batch.nullifierTree.root,
+            voteCommitmentRoot: descriptor.batch.voteCommitmentTree.root,
+            encryptedVoteRoot: descriptor.batch.encryptedVoteTree.root,
+            tallyProofHash: material.tallyProof?.tally_proof_hash ?? null,
+            tallyPublicInputsHash:
+              material.tallyProof?.tally_public_inputs_hash ?? null,
+            solanaTxSignature: committed.signature,
+            pollAddress: publication.pollAddress,
+            rootAddress: committed.rootAddress,
+          });
+        }
       }
 
       if (publication.finalResultSignature) {
@@ -1078,6 +1144,21 @@ export const pollPublicAuditService = {
           },
           solana_tx_signature: publication.finalResultSignature,
         });
+        if (isProductionZkpPoll(poll)) {
+          await zkpAuditEventService.appendFinalized({
+            pollId: poll.id,
+            resultHash: material.resultHash,
+            acceptedVoteCount: material.acceptedVoteCount,
+            nullifierRoot: material.nullifierTree.root,
+            voteCommitmentRoot: material.voteCommitmentTree.root,
+            encryptedVoteRoot: material.encryptedVoteTree.root,
+            tallyProofHash: material.tallyProof?.tally_proof_hash ?? null,
+            tallyPublicInputsHash:
+              material.tallyProof?.tally_public_inputs_hash ?? null,
+            solanaTxSignature: publication.finalResultSignature,
+            finalResultAddress: publication.finalResultAddress,
+          });
+        }
       }
 
       const audit = await this.getPublicPollAudit(poll.id);
@@ -1095,6 +1176,15 @@ export const pollPublicAuditService = {
         audit,
       };
     } catch (error) {
+      if (isProductionZkpPoll(poll)) {
+        await zkpAuditEventService.appendPublicationRejected({
+          pollId: poll.id,
+          reasonCode: ZKP_AUDIT_REJECTION_REASON_CODES.publicationFailed,
+          errorCode: "PUBLICATION_FAILED",
+          acceptedVoteCount: material.acceptedVoteCount,
+          resultHash: material.resultHash,
+        });
+      }
       return {
         success: false,
         errorCode: "PUBLICATION_FAILED",
@@ -1126,6 +1216,7 @@ export const pollPublicAuditService = {
           | "NO_ACCEPTED_AUDIT_VOTES"
           | "TALLY_BATCH_LIMIT_EXCEEDED"
           | "TALLY_PROOF_INVALID";
+        reasonCode?: ZkpAuditRejectionReasonCode;
         message: string;
       }
   > {
@@ -1138,37 +1229,80 @@ export const pollPublicAuditService = {
       };
     }
 
-    if (poll.created_by_user_id !== input.viewerUserId) {
+    const rejectTallyProof = async (
+      reasonCode: ZkpAuditRejectionReasonCode,
+      errorCode:
+        | "POLL_NOT_OWNED"
+        | "POLL_NOT_PRODUCTION_ZKP"
+        | "NO_ACCEPTED_AUDIT_VOTES"
+        | "TALLY_BATCH_LIMIT_EXCEEDED"
+        | "TALLY_PROOF_INVALID",
+      message: string,
+      auditPayload: Partial<
+        Omit<
+          Parameters<typeof zkpAuditEventService.appendTallyRejected>[0],
+          "pollId" | "reasonCode" | "errorCode" | "occurredAt"
+        >
+      > = {},
+    ) => {
+      await zkpAuditEventService.appendTallyRejected({
+        pollId: poll.id,
+        reasonCode,
+        errorCode,
+        ...auditPayload,
+      });
       return {
-        success: false,
-        errorCode: "POLL_NOT_OWNED",
-        message: "Only the poll creator can submit tally proofs.",
+        success: false as const,
+        errorCode,
+        reasonCode,
+        message,
       };
+    };
+
+    if (poll.created_by_user_id !== input.viewerUserId) {
+      return rejectTallyProof(
+        ZKP_AUDIT_REJECTION_REASON_CODES.pollNotOwned,
+        "POLL_NOT_OWNED",
+        "Only the poll creator can submit tally proofs.",
+      );
     }
 
     if (!isProductionZkpPoll(poll)) {
-      return {
-        success: false,
-        errorCode: "POLL_NOT_PRODUCTION_ZKP",
-        message: "Only production ZKP polls accept Groth16 tally proofs.",
-      };
+      return rejectTallyProof(
+        ZKP_AUDIT_REJECTION_REASON_CODES.pollNotProductionZkp,
+        "POLL_NOT_PRODUCTION_ZKP",
+        "Only production ZKP polls accept Groth16 tally proofs.",
+      );
     }
 
     const material = await loadPollAuditMaterial(poll);
+    const tallyProofHash = hashGroth16TallyProofEnvelope(input.proof);
+    const tallyProofHints = {
+      nullifierRoot: material.nullifierTree.root,
+      voteCommitmentRoot: material.voteCommitmentTree.root,
+      encryptedVoteRoot: material.encryptedVoteTree.root,
+      acceptedCount: material.acceptedVoteCount,
+      tallyProofHash,
+      tallyPublicInputsHash: input.proof.publicInputsHash,
+      tallyVerifierKeyHash: input.proof.verifierKeyHash,
+      tallyCircuitId: input.proof.circuitId,
+    };
     if (material.acceptedVoteCount <= 0) {
-      return {
-        success: false,
-        errorCode: "NO_ACCEPTED_AUDIT_VOTES",
-        message: "This poll has no accepted proof-backed votes to tally.",
-      };
+      return rejectTallyProof(
+        ZKP_AUDIT_REJECTION_REASON_CODES.noAcceptedAuditVotes,
+        "NO_ACCEPTED_AUDIT_VOTES",
+        "This poll has no accepted proof-backed votes to tally.",
+        tallyProofHints,
+      );
     }
 
     if (material.acceptedVoteCount > PUBLIC_AUDIT_BATCH_LEAF_CAPACITY) {
-      return {
-        success: false,
-        errorCode: "TALLY_BATCH_LIMIT_EXCEEDED",
-        message: `This poll has ${material.acceptedVoteCount} accepted votes across ${material.batches.length} audit batches; the v1 tally circuit covers a single ${PUBLIC_AUDIT_BATCH_LEAF_CAPACITY}-vote batch, and chained batch tally proofs are not implemented yet.`,
-      };
+      return rejectTallyProof(
+        ZKP_AUDIT_REJECTION_REASON_CODES.tallyBatchLimitExceeded,
+        "TALLY_BATCH_LIMIT_EXCEEDED",
+        `This poll has ${material.acceptedVoteCount} accepted votes across ${material.batches.length} audit batches; the v1 tally circuit covers a single ${PUBLIC_AUDIT_BATCH_LEAF_CAPACITY}-vote batch, and chained batch tally proofs are not implemented yet.`,
+        tallyProofHints,
+      );
     }
 
     const verification = await verifyGroth16TallyProofForPoll({
@@ -1181,11 +1315,15 @@ export const pollPublicAuditService = {
       expectedOptionIds: getOrderedActivePollOptionIds(material.options),
     });
     if (!verification.ok) {
-      return {
-        success: false,
-        errorCode: "TALLY_PROOF_INVALID",
-        message: verification.message,
-      };
+      return rejectTallyProof(
+        mapTallyVerifierReasonToAuditReasonCode(verification.reason),
+        "TALLY_PROOF_INVALID",
+        verification.message,
+        {
+          ...tallyProofHints,
+          verifierReason: verification.reason,
+        },
+      );
     }
 
     const tallyMaterial = verification.auditMaterial;
@@ -1225,6 +1363,20 @@ export const pollPublicAuditService = {
       encrypted_vote_root: tallyMaterial.encryptedVoteRoot,
       accepted_count: tallyMaterial.acceptedCount,
       proof_envelope_json: tallyMaterial.proofEnvelopeJson as unknown as JsonValue,
+    });
+
+    await zkpAuditEventService.appendTallyAccepted({
+      pollId: poll.id,
+      resultHash,
+      tallyProofHash: tallyMaterial.tallyProofHash,
+      tallyPublicInputsHash: tallyMaterial.tallyPublicInputsHash,
+      tallyVerifierKeyHash: tallyMaterial.tallyVerifierKeyHash,
+      tallyCircuitId: tallyMaterial.tallyCircuitId,
+      nullifierRoot: tallyMaterial.nullifierRoot,
+      voteCommitmentRoot: tallyMaterial.voteCommitmentRoot,
+      encryptedVoteRoot: tallyMaterial.encryptedVoteRoot,
+      acceptedCount: tallyMaterial.acceptedCount,
+      occurredAt: inserted.verified_at,
     });
 
     const audit = await this.getPublicPollAudit(poll.id);

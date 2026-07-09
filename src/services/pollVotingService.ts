@@ -28,6 +28,10 @@ import {
   hashPublicAuditLeafForPoll,
 } from "./pollPublicAuditService";
 import { verifyVoteProofForPoll } from "./voteProofVerifierService";
+import zkpAuditEventService, {
+  ZKP_AUDIT_REJECTION_REASON_CODES,
+  type ZkpAuditRejectionReasonCode,
+} from "./zkpAuditEventService";
 import type {
   PollDetailsDto,
   PollDto,
@@ -120,9 +124,11 @@ const mapOption = (row: PollOptionRow): PollOptionDto => ({
 const buildFailure = (
   errorCode: VoteSubmissionErrorCode,
   message: string,
+  reasonCode?: string | null,
 ): VoteSubmissionFailureDto => ({
   success: false,
   errorCode,
+  ...(reasonCode ? { reasonCode } : null),
   message,
 });
 
@@ -157,7 +163,18 @@ type PollVotingServiceDependencies = {
   verifyGroth16VoteProofForPoll?: typeof verifyGroth16VoteProofForPoll;
   hashEncryptedVotePayload?: typeof hashEncryptedVotePayload;
   getPollEncryptionKeyForPoll?: typeof pollEncryptionKeyService.getOrCreatePublicKeyForPoll;
+  zkpAuditEventService?: Pick<
+    typeof zkpAuditEventService,
+    "appendVoteAccepted" | "appendVoteRejected"
+  >;
 };
+
+type VoteRejectedAuditFields = Partial<
+  Omit<
+    Parameters<typeof zkpAuditEventService.appendVoteRejected>[0],
+    "pollId" | "reasonCode" | "errorCode" | "occurredAt"
+  >
+>;
 
 const buildVoteReceipt = (input: {
   pollId: string;
@@ -358,6 +375,83 @@ const normalizeProductionPrivacyPayload = (
     voteCommitment,
     encryptedVoteHash,
     encryptedVoteCommitment,
+  };
+};
+
+const isPreproverVotePrivacyPayload = (
+  privacy: VotePrivacyPayloadDto | null | undefined,
+): boolean => {
+  if (!privacy || !isPlainObject(privacy)) {
+    return false;
+  }
+
+  const proof = privacy.proof;
+  if (!isPlainObject(proof)) {
+    return false;
+  }
+
+  return (
+    toStringOrEmpty(proof.version) === "civicos-proof-envelope-v1" ||
+    toStringOrEmpty(proof.proofSystemVersion) ===
+      "civicos-zk-proof-v1-preprover" ||
+    toStringOrEmpty(proof.status) === "not_generated"
+  );
+};
+
+const mapVoteVerifierReasonToAuditReasonCode = (
+  reason: string,
+): ZkpAuditRejectionReasonCode => {
+  switch (reason) {
+    case "PROOF_REQUIRED":
+      return ZKP_AUDIT_REJECTION_REASON_CODES.proofRequired;
+    case "CREDENTIAL_ROOT_UNKNOWN":
+      return ZKP_AUDIT_REJECTION_REASON_CODES.nonRegistryCredentialRoot;
+    case "VERIFIER_KEY_MISMATCH":
+      return ZKP_AUDIT_REJECTION_REASON_CODES.unknownVerifierKey;
+    case "VERIFIER_DISABLED":
+      return ZKP_AUDIT_REJECTION_REASON_CODES.verifierDisabled;
+    case "VERIFIER_UNCONFIGURED":
+      return ZKP_AUDIT_REJECTION_REASON_CODES.verifierUnconfigured;
+    case "VERIFIER_UNAVAILABLE":
+      return ZKP_AUDIT_REJECTION_REASON_CODES.verifierUnavailable;
+    case "VERIFIER_REJECTED":
+      return ZKP_AUDIT_REJECTION_REASON_CODES.verifierRejected;
+    default:
+      return ZKP_AUDIT_REJECTION_REASON_CODES.proofInvalid;
+  }
+};
+
+const buildProductionVoteAuditHints = (
+  productionPrivacy:
+    | ReturnType<typeof normalizeProductionPrivacyPayload>
+    | null
+    | undefined,
+): {
+  nullifier?: string | null;
+  proofPublicInputsHash?: string | null;
+  credentialRoot?: string | null;
+  encryptedVoteHash?: string | null;
+  encryptedVoteCommitment?: string | null;
+  verifierKeyHash?: string | null;
+  circuitId?: string | null;
+} => {
+  const proof = productionPrivacy?.proof;
+  const publicInputs = proof?.publicInputs;
+
+  return {
+    nullifier: publicInputs?.nullifier ?? null,
+    proofPublicInputsHash: proof?.publicInputsHash ?? null,
+    credentialRoot: publicInputs?.credentialRoot ?? null,
+    encryptedVoteHash:
+      productionPrivacy?.encryptedVoteHash ??
+      publicInputs?.encryptedVoteHash ??
+      null,
+    encryptedVoteCommitment:
+      productionPrivacy?.encryptedVoteCommitment ??
+      publicInputs?.encryptedVoteCommitment ??
+      null,
+    verifierKeyHash: proof?.verifierKeyHash ?? publicInputs?.verifierKeyHash ?? null,
+    circuitId: proof?.circuitId ?? publicInputs?.circuitId ?? null,
   };
 };
 
@@ -607,6 +701,8 @@ export const createPollVotingService = (
   const getPollEncryptionKeyForPoll =
     dependencies.getPollEncryptionKeyForPoll ??
     pollEncryptionKeyService.getOrCreatePublicKeyForPoll;
+  const zkpAuditEvents =
+    dependencies.zkpAuditEventService ?? zkpAuditEventService;
 
   return {
   async getPollSummaries(viewerUserId: string): Promise<PollSummaryDto[]> {
@@ -741,15 +837,41 @@ export const createPollVotingService = (
     }
 
     const submittedAt = new Date().toISOString();
-    if (poll.status !== "active") {
+    const productionZkpPoll = isProductionZkpPoll(poll);
+    const rejectProductionVote = async (
+      reasonCode: ZkpAuditRejectionReasonCode,
+      errorCode: VoteSubmissionErrorCode,
+      message: string,
+      auditPayload: VoteRejectedAuditFields = {},
+    ): Promise<VoteSubmissionFailureDto> => {
+      if (productionZkpPoll) {
+        await zkpAuditEvents.appendVoteRejected({
+          pollId: poll.id,
+          reasonCode,
+          errorCode,
+          occurredAt: submittedAt,
+          ...auditPayload,
+        });
+      }
+
       return buildFailure(
+        errorCode,
+        message,
+        productionZkpPoll ? reasonCode : null,
+      );
+    };
+
+    if (poll.status !== "active") {
+      return rejectProductionVote(
+        ZKP_AUDIT_REJECTION_REASON_CODES.pollNotActive,
         "POLL_NOT_ACTIVE",
         "Only active polls can accept new votes in this phase.",
       );
     }
 
     if (!isPollVotingWindowOpen(poll, submittedAt)) {
-      return buildFailure(
+      return rejectProductionVote(
+        ZKP_AUDIT_REJECTION_REASON_CODES.pollNotActive,
         "POLL_NOT_ACTIVE",
         "The poll voting window is not open.",
       );
@@ -758,26 +880,28 @@ export const createPollVotingService = (
     const pollPolicy = resolvePolicyForPoll(poll);
     const requiresVerifiedIdentity =
       pollPolicy.eligibilityRules.requiresVerifiedIdentity;
-    const productionZkpPoll = isProductionZkpPoll(poll);
 
     const optionInPoll = await pollRepository.getOptionByIdForPoll(pollId, optionId);
     if (!optionInPoll) {
       const option = await pollRepository.getOptionById(optionId);
       if (!option) {
-        return buildFailure(
+        return rejectProductionVote(
+          ZKP_AUDIT_REJECTION_REASON_CODES.optionNotFound,
           "OPTION_NOT_FOUND",
           "The requested poll option does not exist.",
         );
       }
 
-      return buildFailure(
+      return rejectProductionVote(
+        ZKP_AUDIT_REJECTION_REASON_CODES.optionNotInPoll,
         "OPTION_NOT_IN_POLL",
         "The requested option does not belong to the poll.",
       );
     }
 
     if (!optionInPoll.is_active) {
-      return buildFailure(
+      return rejectProductionVote(
+        ZKP_AUDIT_REJECTION_REASON_CODES.optionInactive,
         "OPTION_NOT_FOUND",
         "The requested poll option is not active.",
       );
@@ -789,7 +913,8 @@ export const createPollVotingService = (
         ).length
       : 0;
     if (productionZkpPoll && productionOptionCount > 8) {
-      return buildFailure(
+      return rejectProductionVote(
+        ZKP_AUDIT_REJECTION_REASON_CODES.tooManyOptions,
         "PROOF_INVALID",
         "Production ZKP v1 polls support at most 8 active options.",
       );
@@ -799,7 +924,8 @@ export const createPollVotingService = (
     if (requiresVerifiedIdentity) {
       const verifiedIdentity = await verifiedIdentityRepository.getByUserId(viewer.id);
       if (!verifiedIdentity) {
-        return buildFailure(
+        return rejectProductionVote(
+          ZKP_AUDIT_REJECTION_REASON_CODES.verifiedIdentityRequired,
           "ELIGIBILITY_FAILED",
           VERIFIED_IDENTITY_REQUIRED_MESSAGE,
         );
@@ -817,7 +943,8 @@ export const createPollVotingService = (
       }
     } else {
       if (productionZkpPoll) {
-        return buildFailure(
+        return rejectProductionVote(
+          ZKP_AUDIT_REJECTION_REASON_CODES.productionIdentityRequired,
           "ELIGIBILITY_FAILED",
           "Production ZKP polls require verified identity eligibility.",
         );
@@ -833,14 +960,16 @@ export const createPollVotingService = (
     const requiresIdentityProfile = pollRequiresIdentityProfile(pollPolicy);
 
     if (!identityProfile && requiresIdentityProfile) {
-      return buildFailure(
+      return rejectProductionVote(
+        ZKP_AUDIT_REJECTION_REASON_CODES.identityProfileRequired,
         "IDENTITY_PROFILE_NOT_FOUND",
         "This poll requires identity profile data before voting.",
       );
     }
 
     if (pollRequiresHomeArea(pollPolicy) && !identityProfile?.home_area_id) {
-      return buildFailure(
+      return rejectProductionVote(
+        ZKP_AUDIT_REJECTION_REASON_CODES.homeLocationRequired,
         "HOME_LOCATION_MISSING",
         "A home location area is required for this poll.",
       );
@@ -856,6 +985,13 @@ export const createPollVotingService = (
       },
     );
     if (eligibilityFailure) {
+      if (productionZkpPoll) {
+        return rejectProductionVote(
+          ZKP_AUDIT_REJECTION_REASON_CODES.eligibilityFailed,
+          eligibilityFailure.errorCode,
+          eligibilityFailure.message,
+        );
+      }
       return eligibilityFailure;
     }
 
@@ -865,7 +1001,8 @@ export const createPollVotingService = (
         poll,
       );
       if (!normalizedEncryptedVote) {
-        return buildFailure(
+        return rejectProductionVote(
+          ZKP_AUDIT_REJECTION_REASON_CODES.encryptedVoteRequired,
           "PROOF_REQUIRED",
           PRODUCTION_ZKP_ENCRYPTED_VOTE_REQUIRED_MESSAGE,
         );
@@ -873,45 +1010,62 @@ export const createPollVotingService = (
 
       const productionPrivacy = normalizeProductionPrivacyPayload(privacy);
       if (!productionPrivacy) {
-        return buildFailure(
+        return rejectProductionVote(
+          isPreproverVotePrivacyPayload(privacy)
+            ? ZKP_AUDIT_REJECTION_REASON_CODES.preproverEnvelopeOnProductionPoll
+            : ZKP_AUDIT_REJECTION_REASON_CODES.proofMetadataRequired,
           "PROOF_REQUIRED",
           "This poll requires production Groth16 vote proof metadata.",
         );
       }
+      const proofAuditHints = buildProductionVoteAuditHints(productionPrivacy);
 
       if (
         normalizedEncryptedVote.encryptedVoteCommitment !==
         productionPrivacy.encryptedVoteCommitment
       ) {
-        return buildFailure(
+        return rejectProductionVote(
+          ZKP_AUDIT_REJECTION_REASON_CODES.ciphertextCommitmentMismatch,
           "PROOF_INVALID",
           "Encrypted vote commitment does not match the submitted proof envelope.",
+          proofAuditHints,
         );
       }
 
       const pollEncryptionKey = await getPollEncryptionKeyForPoll(pollId);
       if (!pollEncryptionKey.success) {
-        return buildFailure(
+        return rejectProductionVote(
+          ZKP_AUDIT_REJECTION_REASON_CODES.pollEncryptionKeyUnavailable,
           "PROOF_REQUIRED",
           pollEncryptionKey.message,
+          proofAuditHints,
         );
       }
       if (
         pollEncryptionKey.key.publicKeyHash !==
         normalizedEncryptedVote.pollEncryptionKeyHash
       ) {
-        return buildFailure(
+        return rejectProductionVote(
+          ZKP_AUDIT_REJECTION_REASON_CODES.pollEncryptionKeyMismatch,
           "PROOF_INVALID",
           "Encrypted vote payload was not encrypted for the registered poll key.",
+          proofAuditHints,
         );
       }
 
       const encryptedVoteJson = normalizedEncryptedVote as JsonValue;
       const encryptedVoteHash = hashProductionEncryptedVote(encryptedVoteJson);
       if (productionPrivacy.encryptedVoteHash !== encryptedVoteHash) {
-        return buildFailure(
+        return rejectProductionVote(
+          ZKP_AUDIT_REJECTION_REASON_CODES.encryptedVoteHashMismatch,
           "PROOF_INVALID",
           "Encrypted vote hash does not match the submitted encrypted vote payload.",
+          {
+            ...proofAuditHints,
+            encryptedVoteHash,
+            encryptedVoteCommitment:
+              normalizedEncryptedVote.encryptedVoteCommitment,
+          },
         );
       }
 
@@ -924,19 +1078,34 @@ export const createPollVotingService = (
         expectedOptionCount: productionOptionCount,
       });
       if (!proofVerification.ok) {
-        return buildFailure(
+        return rejectProductionVote(
+          mapVoteVerifierReasonToAuditReasonCode(proofVerification.reason),
           proofVerification.reason === "PROOF_REQUIRED"
             ? "PROOF_REQUIRED"
             : "PROOF_INVALID",
           proofVerification.message,
+          {
+            ...proofAuditHints,
+            verifierReason: proofVerification.reason,
+            encryptedVoteHash,
+            encryptedVoteCommitment:
+              normalizedEncryptedVote.encryptedVoteCommitment,
+          },
         );
       }
 
       const proofAuditMaterial = proofVerification.auditMaterial;
       if (!proofAuditMaterial) {
-        return buildFailure(
+        return rejectProductionVote(
+          ZKP_AUDIT_REJECTION_REASON_CODES.auditMaterialMissing,
           "PROOF_INVALID",
           "Production ZKP vote proof did not produce audit material.",
+          {
+            ...proofAuditHints,
+            encryptedVoteHash,
+            encryptedVoteCommitment:
+              normalizedEncryptedVote.encryptedVoteCommitment,
+          },
         );
       }
 
@@ -946,7 +1115,21 @@ export const createPollVotingService = (
           proofAuditMaterial.nullifier,
         );
       if (existingNullifierVote) {
-        return buildFailure("ALREADY_VOTED", DUPLICATE_NULLIFIER_VOTE_MESSAGE);
+        return rejectProductionVote(
+          ZKP_AUDIT_REJECTION_REASON_CODES.duplicateNullifier,
+          "ALREADY_VOTED",
+          DUPLICATE_NULLIFIER_VOTE_MESSAGE,
+          {
+            ...proofAuditHints,
+            nullifier: proofAuditMaterial.nullifier,
+            proofHash: proofAuditMaterial.proofHash,
+            proofEnvelopeHash: proofAuditMaterial.proofEnvelopeHash,
+            encryptedVoteHash: proofAuditMaterial.encryptedVoteHash,
+            encryptedVoteCommitment: proofAuditMaterial.encryptedVoteCommitment,
+            verifierKeyHash: proofAuditMaterial.verifierKeyHash,
+            circuitId: proofAuditMaterial.circuitId,
+          },
+        );
       }
 
       try {
@@ -971,6 +1154,21 @@ export const createPollVotingService = (
           batch_id: null,
         });
 
+        await zkpAuditEvents.appendVoteAccepted({
+          pollId: insertedVote.poll_id,
+          voteId: insertedVote.id,
+          nullifier: insertedVote.nullifier,
+          voteCommitment: insertedVote.vote_commitment,
+          encryptedVoteHash: insertedVote.encrypted_vote_hash,
+          encryptedVoteCommitment: insertedVote.encrypted_vote_commitment,
+          proofHash: insertedVote.proof_hash,
+          proofEnvelopeHash: insertedVote.proof_envelope_hash,
+          proofVerificationStatus: insertedVote.proof_verification_status,
+          verifierKeyHash: insertedVote.verifier_key_hash,
+          circuitId: insertedVote.circuit_id,
+          occurredAt: insertedVote.accepted_at,
+        });
+
         return {
           success: true,
           viewerVote: {
@@ -993,7 +1191,22 @@ export const createPollVotingService = (
         };
       } catch (error) {
         if (isUniqueViolation(error)) {
-          return buildFailure("ALREADY_VOTED", DUPLICATE_NULLIFIER_VOTE_MESSAGE);
+          return rejectProductionVote(
+            ZKP_AUDIT_REJECTION_REASON_CODES.duplicateNullifier,
+            "ALREADY_VOTED",
+            DUPLICATE_NULLIFIER_VOTE_MESSAGE,
+            {
+              ...proofAuditHints,
+              nullifier: proofAuditMaterial.nullifier,
+              proofHash: proofAuditMaterial.proofHash,
+              proofEnvelopeHash: proofAuditMaterial.proofEnvelopeHash,
+              encryptedVoteHash: proofAuditMaterial.encryptedVoteHash,
+              encryptedVoteCommitment:
+                proofAuditMaterial.encryptedVoteCommitment,
+              verifierKeyHash: proofAuditMaterial.verifierKeyHash,
+              circuitId: proofAuditMaterial.circuitId,
+            },
+          );
         }
 
         throw error;

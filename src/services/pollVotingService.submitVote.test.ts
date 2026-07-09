@@ -347,6 +347,27 @@ const patchMethod = <T extends object, K extends keyof T>(
   };
 };
 
+const createMockZkpAuditEventService = () => {
+  const events: Array<{
+    type: "voteAccepted" | "voteRejected";
+    input: Record<string, unknown>;
+  }> = [];
+
+  return {
+    events,
+    service: {
+      async appendVoteAccepted(input: Record<string, unknown>) {
+        events.push({ type: "voteAccepted", input });
+        return null;
+      },
+      async appendVoteRejected(input: Record<string, unknown>) {
+        events.push({ type: "voteRejected", input });
+        return null;
+      },
+    },
+  };
+};
+
 describe("pollVotingService.submitVote", () => {
   it("rejects verified poll vote when viewer has no linked verified identity", async () => {
     const viewer = createViewer();
@@ -599,8 +620,10 @@ describe("pollVotingService.submitVote", () => {
     const encryptedVote = createEncryptedVotePayload();
     const encryptedVoteHash = hashEncryptedVotePayload(encryptedVote);
     const privacy = createProductionVotePrivacyPayload(encryptedVoteHash);
+    const audit = createMockZkpAuditEventService();
     const service = createPollVotingService({
       getPollEncryptionKeyForPoll,
+      zkpAuditEventService: audit.service,
       verifyGroth16VoteProofForPoll: async (input) => {
         expect(input.poll.id).toBe(poll.id);
         expect(input.encryptedVoteHash).toBe(encryptedVoteHash);
@@ -726,6 +749,25 @@ describe("pollVotingService.submitVote", () => {
         voteCommitment: PRODUCTION_VOTE_COMMITMENT,
         proofHash: PRODUCTION_PROOF_HASH,
       });
+      expect(audit.events).toHaveLength(1);
+      expect(audit.events[0]).toMatchObject({
+        type: "voteAccepted",
+        input: {
+          pollId: poll.id,
+          voteId: "zk-vote-1",
+          nullifier: PRODUCTION_NULLIFIER,
+          voteCommitment: PRODUCTION_VOTE_COMMITMENT,
+          encryptedVoteHash,
+          encryptedVoteCommitment: PRODUCTION_ENCRYPTED_VOTE_COMMITMENT,
+          proofHash: PRODUCTION_PROOF_HASH,
+          proofEnvelopeHash: PRODUCTION_PROOF_HASH,
+          proofVerificationStatus: "verified",
+          verifierKeyHash: PRODUCTION_VERIFIER_KEY_HASH,
+          circuitId: PRODUCTION_CIRCUIT_ID,
+        },
+      });
+      expect(JSON.stringify(audit.events)).not.toContain("viewer-user-1");
+      expect(JSON.stringify(audit.events)).not.toContain("verified-identity-1");
     } finally {
       restoreFns.reverse().forEach((restore) => restore());
     }
@@ -746,8 +788,10 @@ describe("pollVotingService.submitVote", () => {
     const identityProfile = createIdentityProfile();
     const encryptedVote = createEncryptedVotePayload();
     const privacy = createProductionVotePrivacyPayload("a".repeat(64));
+    const audit = createMockZkpAuditEventService();
     const service = createPollVotingService({
       getPollEncryptionKeyForPoll,
+      zkpAuditEventService: audit.service,
       verifyGroth16VoteProofForPoll: async () => {
         throw new Error("Verifier should not be called for encrypted vote mismatch.");
       },
@@ -785,9 +829,97 @@ describe("pollVotingService.submitVote", () => {
       expect(result.success).toBe(false);
       if (!result.success) {
         expect(result.errorCode).toBe("PROOF_INVALID");
+        expect(result.reasonCode).toBe("encrypted_vote_hash_mismatch");
         expect(result.message).toContain("Encrypted vote hash");
       }
       expect(insertCalls).toBe(0);
+      expect(audit.events).toHaveLength(1);
+      expect(audit.events[0]).toMatchObject({
+        type: "voteRejected",
+        input: {
+          pollId: poll.id,
+          reasonCode: "encrypted_vote_hash_mismatch",
+          errorCode: "PROOF_INVALID",
+          encryptedVoteHash: hashEncryptedVotePayload(encryptedVote),
+          encryptedVoteCommitment: PRODUCTION_ENCRYPTED_VOTE_COMMITMENT,
+          verifierKeyHash: PRODUCTION_VERIFIER_KEY_HASH,
+          circuitId: PRODUCTION_CIRCUIT_ID,
+        },
+      });
+      expect(JSON.stringify(audit.events)).not.toContain("viewer-user-1");
+      expect(JSON.stringify(audit.events)).not.toContain("verified-identity-1");
+    } finally {
+      restoreFns.reverse().forEach((restore) => restore());
+    }
+  });
+
+  it("rejects pre-prover envelopes on production ZKP polls with a stable reason", async () => {
+    const viewer = createViewer();
+    const poll = createPoll({
+      requires_verified_identity: true,
+      poll_policy_hash: POLL_POLICY_HASH,
+      credential_schema_hash: CREDENTIAL_SCHEMA_HASH,
+      vote_privacy_mode: "zk_secret_ballot_v1",
+      option_set_hash: OPTION_SET_HASH,
+      poll_encryption_key_id: "poll-key-1",
+    });
+    const option = createOption();
+    const verifiedIdentity = createVerifiedIdentity();
+    const identityProfile = createIdentityProfile();
+    const encryptedVote = createEncryptedVotePayload();
+    const audit = createMockZkpAuditEventService();
+    const service = createPollVotingService({
+      getPollEncryptionKeyForPoll,
+      zkpAuditEventService: audit.service,
+      verifyGroth16VoteProofForPoll: async () => {
+        throw new Error("Verifier should not be called for pre-prover envelopes.");
+      },
+    });
+    let insertCalls = 0;
+
+    const restoreFns = [
+      patchMethod(pollRepository, "getById", async () => poll),
+      patchMethod(pollRepository, "getOptionByIdForPoll", async () => option),
+      patchMethod(pollRepository, "getOptionsByPollId", async () => [option]),
+      patchMethod(
+        verifiedIdentityRepository,
+        "getByUserId",
+        async () => verifiedIdentity,
+      ),
+      patchMethod(identityProfileRepository, "getByUserId", async () => identityProfile),
+      patchMethod(pollZkVoteRepository, "insertVerified", async (input) => {
+        insertCalls += 1;
+        return createPollZkVote({
+          poll_id: input.poll_id,
+          nullifier: input.nullifier,
+        });
+      }),
+    ];
+
+    try {
+      const result = await service.submitVote({
+        pollId: poll.id,
+        optionId: option.id,
+        viewer,
+        privacy: createVotePrivacyPayload(),
+        encryptedVote,
+      });
+
+      expect(result.success).toBe(false);
+      if (!result.success) {
+        expect(result.errorCode).toBe("PROOF_REQUIRED");
+        expect(result.reasonCode).toBe("preprover_envelope_on_production_poll");
+      }
+      expect(insertCalls).toBe(0);
+      expect(audit.events).toHaveLength(1);
+      expect(audit.events[0]).toMatchObject({
+        type: "voteRejected",
+        input: {
+          pollId: poll.id,
+          reasonCode: "preprover_envelope_on_production_poll",
+          errorCode: "PROOF_REQUIRED",
+        },
+      });
     } finally {
       restoreFns.reverse().forEach((restore) => restore());
     }
@@ -809,8 +941,10 @@ describe("pollVotingService.submitVote", () => {
     const encryptedVote = createEncryptedVotePayload();
     const encryptedVoteHash = hashEncryptedVotePayload(encryptedVote);
     const privacy = createProductionVotePrivacyPayload(encryptedVoteHash);
+    const audit = createMockZkpAuditEventService();
     const service = createPollVotingService({
       getPollEncryptionKeyForPoll,
+      zkpAuditEventService: audit.service,
       verifyGroth16VoteProofForPoll: async () => ({
         ok: true,
         auditMaterial: {
@@ -867,9 +1001,28 @@ describe("pollVotingService.submitVote", () => {
       expect(result.success).toBe(false);
       if (!result.success) {
         expect(result.errorCode).toBe("ALREADY_VOTED");
+        expect(result.reasonCode).toBe("duplicate_nullifier");
         expect(result.message).toContain("proof nullifier");
       }
       expect(insertCalls).toBe(0);
+      expect(audit.events).toHaveLength(1);
+      expect(audit.events[0]).toMatchObject({
+        type: "voteRejected",
+        input: {
+          pollId: poll.id,
+          reasonCode: "duplicate_nullifier",
+          errorCode: "ALREADY_VOTED",
+          nullifier: PRODUCTION_NULLIFIER,
+          proofHash: PRODUCTION_PROOF_HASH,
+          proofEnvelopeHash: PRODUCTION_PROOF_HASH,
+          encryptedVoteHash,
+          encryptedVoteCommitment: PRODUCTION_ENCRYPTED_VOTE_COMMITMENT,
+          verifierKeyHash: PRODUCTION_VERIFIER_KEY_HASH,
+          circuitId: PRODUCTION_CIRCUIT_ID,
+        },
+      });
+      expect(JSON.stringify(audit.events)).not.toContain("viewer-user-1");
+      expect(JSON.stringify(audit.events)).not.toContain("verified-identity-1");
     } finally {
       restoreFns.reverse().forEach((restore) => restore());
     }

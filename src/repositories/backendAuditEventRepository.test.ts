@@ -11,10 +11,48 @@ const FIXED_TIME = "2026-07-05T12:00:00.000Z";
 const createMockSupabaseClient = () => {
   let capturedRpcName: string | null = null;
   let capturedRpcParams: Record<string, unknown> | null = null;
+  const rows: BackendAuditEventRow[] = [];
 
   return {
     getCapturedRpcName: () => capturedRpcName,
     getCapturedRpcParams: () => capturedRpcParams,
+    from(tableName: string) {
+      expect(tableName).toBe("backend_audit_events");
+      return {
+        select(columns: string) {
+          expect(columns).toBe("event_hash");
+          return {
+            eq(column: string, value: string) {
+              expect(column).toBe("stream_id");
+              return {
+                order(columnName: string, options: { ascending: boolean }) {
+                  expect(columnName).toBe("sequence");
+                  expect(options.ascending).toBe(false);
+                  return {
+                    limit(limitCount: number) {
+                      expect(limitCount).toBe(1);
+                      return {
+                        async maybeSingle<T>() {
+                          const row = rows
+                            .filter((entry) => entry.stream_id === value)
+                            .sort((left, right) => right.sequence - left.sequence)[0];
+                          return {
+                            data: row
+                              ? ({ event_hash: row.event_hash } as T)
+                              : null,
+                            error: null,
+                          };
+                        },
+                      };
+                    },
+                  };
+                },
+              };
+            },
+          };
+        },
+      };
+    },
     rpc(rpcName: string, params: Record<string, unknown>) {
       capturedRpcName = rpcName;
       capturedRpcParams = params;
@@ -24,10 +62,13 @@ const createMockSupabaseClient = () => {
           expect(columns).toContain("event_hash");
           return {
             async single<T>() {
+              const streamRows = rows.filter(
+                (entry) => entry.stream_id === String(params.p_stream_id),
+              );
               const row: BackendAuditEventRow = {
-                id: "event-1",
+                id: `event-${rows.length + 1}`,
                 stream_id: String(params.p_stream_id),
-                sequence: 0,
+                sequence: streamRows.length,
                 previous_event_hash: String(params.p_previous_event_hash),
                 event_hash: String(params.p_event_hash),
                 event_type: String(params.p_event_type),
@@ -46,6 +87,7 @@ const createMockSupabaseClient = () => {
                 anchor_tx_signature: null,
                 created_at: FIXED_TIME,
               };
+              rows.push(row);
 
               return {
                 data: row as T,
@@ -96,6 +138,34 @@ describe("backendAuditEventRepository", () => {
       p_subject_id: "poll-1",
       p_occurred_at: FIXED_TIME,
     });
+  });
+
+  it("uses the current stream tail when appending later events", async () => {
+    const mockClient = createMockSupabaseClient();
+    const repository = createBackendAuditEventRepository({
+      getSupabaseAdminClient: () =>
+        mockClient as unknown as ReturnType<
+          typeof import("../db/supabaseClient").getSupabaseAdminClient
+        >,
+    });
+
+    const first = await repository.append({
+      streamId: "poll:poll-1",
+      eventType: "vote.accepted",
+      decision: "accepted",
+      occurredAt: FIXED_TIME,
+      payload: { voteCommitment: "1".repeat(64) },
+    });
+    const second = await repository.append({
+      streamId: "poll:poll-1",
+      eventType: "tally.accepted",
+      decision: "accepted",
+      occurredAt: "2026-07-05T12:01:00.000Z",
+      payload: { tallyProofHash: "2".repeat(64) },
+    });
+
+    expect(second?.row.sequence).toBe(1);
+    expect(second?.row.previous_event_hash).toBe(first?.row.event_hash);
   });
 
   it("returns null when Supabase is not configured", async () => {

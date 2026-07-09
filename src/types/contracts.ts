@@ -406,6 +406,7 @@ export type VoteSubmissionSuccessDto = {
 export type VoteSubmissionFailureDto = {
   success: false;
   errorCode: VoteSubmissionErrorCode;
+  reasonCode?: string | null;
   message: string;
 };
 

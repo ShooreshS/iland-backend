@@ -25,6 +25,7 @@ import {
   PUBLIC_AUDIT_ZERO_ROOT,
   verifyPublicAuditMerkleProof,
 } from "./pollPublicAuditService";
+import zkpAuditEventService from "./zkpAuditEventService";
 
 const FIXED_TIME = "2026-07-05T12:00:00.000Z";
 const POLL_POLICY_HASH = "1".repeat(64);
@@ -579,7 +580,18 @@ describe("Phase 5 audit batch segmentation", () => {
   it("rejects tally proofs for polls that exceed one 64-vote batch", async () => {
     const poll = createProductionPoll();
     const records = createProductionRecords(65);
-    const restoreFns = patchProductionRepositories(poll, records);
+    const auditEvents: Record<string, unknown>[] = [];
+    const restoreFns = [
+      ...patchProductionRepositories(poll, records),
+      patchMethod(
+        zkpAuditEventService,
+        "appendTallyRejected",
+        async (input) => {
+          auditEvents.push(input as Record<string, unknown>);
+          return null;
+        },
+      ),
+    ];
 
     try {
       const result = await pollPublicAuditService.submitTallyProof({
@@ -593,6 +605,15 @@ describe("Phase 5 audit batch segmentation", () => {
         throw new Error("Expected tally rejection.");
       }
       expect(result.errorCode).toBe("TALLY_BATCH_LIMIT_EXCEEDED");
+      expect(result.reasonCode).toBe("tally_batch_limit_exceeded");
+      expect(auditEvents).toHaveLength(1);
+      expect(auditEvents[0]).toMatchObject({
+        pollId: poll.id,
+        reasonCode: "tally_batch_limit_exceeded",
+        errorCode: "TALLY_BATCH_LIMIT_EXCEEDED",
+        acceptedCount: 65,
+      });
+      expect(JSON.stringify(auditEvents)).not.toContain("owner-1");
     } finally {
       restoreFns.reverse().forEach((restore) => restore());
     }
