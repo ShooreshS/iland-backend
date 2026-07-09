@@ -256,13 +256,22 @@ describe("groth16TallyProofVerifierService", () => {
     }
   });
 
-  it("rejects the stale pre-freeze EncryptedChoiceTally proof fixture", () => {
-    expect(() =>
-      encodeGroth16TallyPublicSignals(fixtureEnvelope.publicInputs),
-    ).toThrow("Groth16 public input optionCount is required.");
+  it("encodes the regenerated frozen tally fixture public signals", () => {
+    const publicSignals = encodeGroth16TallyPublicSignals(
+      fixtureEnvelope.publicInputs,
+    );
+
+    expect(publicSignals).toEqual(
+      JSON.parse(
+        readFileSync(
+          new URL("encrypted_choice_tally.public.json", fixtureUrl),
+          "utf8",
+        ),
+      ),
+    );
   });
 
-  it("rejects the stale local EncryptedChoiceTally fixture through the current padded tally contract", async () => {
+  it("accepts the regenerated EncryptedChoiceTally fixture through the current padded tally contract", async () => {
     const registryRecord = buildGroth16VerifierKeyRegistryRecord(
       fixtureManifest,
       fixtureManifestHash,
@@ -302,12 +311,16 @@ describe("groth16TallyProofVerifierService", () => {
       { config: fixtureConfig },
     );
 
-    expect(result.ok).toBe(false);
-    if (!result.ok) {
-      expect(result.reason).toBe("PROOF_INVALID");
-      expect(result.message).toBe(
-        "Groth16 tally proof option count does not match the registered poll options.",
-      );
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.auditMaterial).toMatchObject({
+        tallyCircuitId: fixtureManifest.circuitId,
+        tallyVerifierKeyHash: fixtureManifest.verifierKeyHash,
+        nullifierRoot: fixtureEnvelope.publicInputs.nullifierRoot,
+        voteCommitmentRoot: fixtureEnvelope.publicInputs.voteCommitmentRoot,
+        encryptedVoteRoot: fixtureEnvelope.publicInputs.encryptedVoteRoot,
+        acceptedCount: fixtureEnvelope.publicInputs.acceptedVoteCount,
+      });
     }
   });
 
