@@ -8,6 +8,7 @@ import {
   type Groth16ArtifactManifest,
   type Groth16VerifierKeyRegistryRecord,
 } from "./groth16ArtifactManifestService";
+import { CIVIC_CREDENTIAL_REGISTRY_MERKLE_DEPTH } from "./credentialRegistryConstants";
 import credentialRegistryService from "./credentialRegistryService";
 import { verifyGroth16VoteProofWithSnarkjs } from "./groth16SnarkjsVerifierEngine";
 import { canonicalizeJson } from "./pollPolicyService";
@@ -30,6 +31,7 @@ export const CIVIC_PRODUCTION_ENCRYPTED_VOTE_VERSION =
   "civicos-encrypted-vote-v1" as const;
 
 const CIVIC_ZKP_DOMAIN = "org.civicos.zkp" as const;
+const CIVIC_PRODUCTION_MAX_OPTIONS = 8;
 const HEX_64_PATTERN = /^[0-9a-f]{64}$/;
 
 export type Groth16VotePublicInputsDto = {
@@ -38,6 +40,7 @@ export type Groth16VotePublicInputsDto = {
   pollPolicyHash: string;
   credentialSchemaHash: string;
   optionSetHash: string;
+  optionCount: number;
   credentialRoot: string;
   nullifier: string;
   voteCommitment: string;
@@ -256,6 +259,10 @@ const loadVoteArtifactManifestFromEnv = (values: {
       trustedSetupTranscriptHash,
       hashSuite: CIVIC_PRODUCTION_HASH_SUITE,
       protocol: CIVIC_PRODUCTION_PROOF_PROTOCOL,
+      circuitParameters: {
+        credentialMerkleDepth: CIVIC_CREDENTIAL_REGISTRY_MERKLE_DEPTH,
+        maxOptions: CIVIC_PRODUCTION_MAX_OPTIONS,
+      },
     },
   );
 
@@ -342,6 +349,19 @@ const hasProductionZkpPrivacyMode = (
   poll: Pick<PollRow, "vote_privacy_mode">,
 ): boolean => poll.vote_privacy_mode === CIVIC_PRODUCTION_VOTE_PRIVACY_MODE;
 
+const normalizeOptionCount = (value: unknown): number | null => {
+  const numeric =
+    typeof value === "number"
+      ? value
+      : typeof value === "string" && /^(0|[1-9][0-9]*)$/.test(value.trim())
+        ? Number(value.trim())
+        : NaN;
+  if (!Number.isInteger(numeric) || numeric < 1 || numeric > 8) {
+    return null;
+  }
+  return numeric;
+};
+
 const reject = (
   reason: Extract<Groth16VoteProofVerificationResult, { ok: false }>["reason"],
   message: string,
@@ -357,6 +377,7 @@ export const verifyGroth16VoteProofForPoll = async (
     proof?: Groth16VoteProofEnvelopeDto | null;
     encryptedVoteHash?: string | null;
     expectedVoteCommitment?: string | null;
+    expectedOptionCount?: number | null;
   },
   dependencies: Groth16ProofVerifierDependencies = {},
 ): Promise<Groth16VoteProofVerificationResult> => {
@@ -499,6 +520,21 @@ export const verifyGroth16VoteProofForPoll = async (
     return reject(
       "OPTION_SET_HASH_MISMATCH",
       "Groth16 vote proof option set hash does not match the registered poll option set.",
+    );
+  }
+
+  const optionCount = normalizeOptionCount(publicInputs.optionCount);
+  const expectedOptionCount = normalizeOptionCount(params.expectedOptionCount);
+  if (!optionCount || !expectedOptionCount) {
+    return reject(
+      "PROOF_INVALID",
+      "Groth16 vote proof option count is missing or outside the v1 range.",
+    );
+  }
+  if (optionCount !== expectedOptionCount) {
+    return reject(
+      "PROOF_INVALID",
+      "Groth16 vote proof option count does not match the registered poll options.",
     );
   }
 

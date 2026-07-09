@@ -31,6 +31,7 @@ export const GROTH16_VOTE_PUBLIC_SIGNAL_ORDER = Object.freeze([
   "pollPolicyHash",
   "credentialSchemaHash",
   "optionSetHash",
+  "optionCount",
   "credentialRoot",
   "nullifier",
   "voteCommitment",
@@ -47,6 +48,10 @@ export const encodeGroth16PublicField = (
   name: string,
   value: string | number | bigint,
 ): string => {
+  if (value === null || value === undefined) {
+    throw new TypeError(`Groth16 public input ${name} is required.`);
+  }
+
   const normalized =
     typeof value === "bigint" || typeof value === "number"
       ? value.toString()

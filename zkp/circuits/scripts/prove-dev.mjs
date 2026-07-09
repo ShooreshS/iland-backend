@@ -108,6 +108,54 @@ if (
     name: "invalid_wrong_credential_root",
     inputFile: "credential_commitment_vote.invalid_wrong_credential_root.input.json",
   });
+  assertInvalidWitnessFails({
+    name: "invalid_out_of_range_option",
+    inputFile: "credential_commitment_vote.invalid_out_of_range_option.input.json",
+  });
+}
+
+if (
+  selectedCircuitNames.size === 0 ||
+  selectedCircuitNames.has("encrypted_choice_tally")
+) {
+  const witnessGenerator = resolve(
+    buildDir,
+    "encrypted_choice_tally_js/generate_witness.js",
+  );
+  const wasmPath = resolve(
+    buildDir,
+    "encrypted_choice_tally_js/encrypted_choice_tally.wasm",
+  );
+
+  const assertInvalidWitnessFails = ({ name, inputFile }) => {
+    const invalid = spawnSync(
+      "node",
+      [
+        witnessGenerator,
+        wasmPath,
+        resolve(vectorDir, inputFile),
+        resolve(buildDir, `encrypted_choice_tally.${name}.wtns`),
+      ],
+      {
+        cwd: packageRoot,
+        encoding: "utf8",
+      },
+    );
+
+    if (invalid.status === 0) {
+      throw new Error(`${name} unexpectedly generated a witness`);
+    }
+  };
+
+  assertInvalidWitnessFails({
+    name: "invalid_out_of_range_option",
+    inputFile: "encrypted_choice_tally.invalid_out_of_range_option.input.json",
+  });
+  assertInvalidWitnessFails({
+    name: "invalid_encrypted_vote_commitment_mismatch",
+    inputFile:
+      "encrypted_choice_tally.invalid_encrypted_vote_commitment_mismatch.input.json",
+  });
 }
 
 console.log("Local vote/tally proofs generated and invalid vectors rejected.");

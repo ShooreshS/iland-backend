@@ -36,6 +36,7 @@ export const GROTH16_TALLY_PUBLIC_SIGNAL_ORDER = Object.freeze([
   "pollPolicyHash",
   "credentialSchemaHash",
   "optionSetHash",
+  "optionCount",
   "nullifierRoot",
   "voteCommitmentRoot",
   "encryptedVoteRoot",
@@ -54,6 +55,7 @@ export type Groth16TallyPublicInputsDto = {
   pollPolicyHash: string;
   credentialSchemaHash: string;
   optionSetHash: string;
+  optionCount: number;
   nullifierRoot: string;
   voteCommitmentRoot: string;
   encryptedVoteRoot: string;
@@ -261,6 +263,10 @@ const loadTallyArtifactManifestFromEnv = (values: {
       trustedSetupTranscriptHash: tallyTrustedSetupTranscriptHash,
       hashSuite: CIVIC_PRODUCTION_HASH_SUITE,
       protocol: CIVIC_PRODUCTION_PROOF_PROTOCOL,
+      circuitParameters: {
+        tallyBatchSize: CIVIC_TALLY_MAX_VOTES,
+        maxOptions: CIVIC_TALLY_MAX_OPTIONS,
+      },
     },
   );
 
@@ -369,6 +375,23 @@ const reject = (
   message,
 });
 
+const normalizeOptionCount = (value: unknown): number | null => {
+  const numeric =
+    typeof value === "number"
+      ? value
+      : typeof value === "string" && /^(0|[1-9][0-9]*)$/.test(value.trim())
+        ? Number(value.trim())
+        : NaN;
+  if (
+    !Number.isInteger(numeric) ||
+    numeric < 1 ||
+    numeric > CIVIC_TALLY_MAX_OPTIONS
+  ) {
+    return null;
+  }
+  return numeric;
+};
+
 const defaultVerifyProof: NonNullable<
   Groth16TallyProofVerifierDependencies["verifyProof"]
 > = (input) =>
@@ -389,6 +412,7 @@ export const verifyGroth16TallyProofForPoll = async (
     voteCommitmentRoot: string;
     encryptedVoteRoot: string;
     acceptedVoteCount: number;
+    expectedOptionIds: readonly string[];
   },
   dependencies: Groth16TallyProofVerifierDependencies = {},
 ): Promise<Groth16TallyProofVerificationResult> => {
@@ -487,6 +511,30 @@ export const verifyGroth16TallyProofForPoll = async (
     return reject(
       "PROOF_INVALID",
       "Groth16 tally proof public input hash does not match the public inputs.",
+    );
+  }
+
+  const optionCount = normalizeOptionCount(publicInputs.optionCount);
+  const expectedOptionIds = (params.expectedOptionIds ?? [])
+    .map((optionId) => optionId.trim())
+    .filter(Boolean);
+  if (
+    !optionCount ||
+    expectedOptionIds.length !== optionCount ||
+    publicInputs.optionResults.length !== optionCount
+  ) {
+    return reject(
+      "PROOF_INVALID",
+      "Groth16 tally proof option count does not match the registered poll options.",
+    );
+  }
+  const optionIdsMatch = publicInputs.optionResults.every(
+    (entry, index) => entry.optionId === expectedOptionIds[index],
+  );
+  if (!optionIdsMatch) {
+    return reject(
+      "PROOF_INVALID",
+      "Groth16 tally proof option results are not ordered by the registered poll options.",
     );
   }
 
@@ -596,6 +644,7 @@ export const verifyGroth16TallyProofForPoll = async (
       voteCommitmentRoot: params.voteCommitmentRoot,
       encryptedVoteRoot: params.encryptedVoteRoot,
       acceptedVoteCount: params.acceptedVoteCount,
+      optionCount,
       optionResults: publicInputs.optionResults,
       tallyProofHash,
       tallyPublicInputsHash: proof.publicInputsHash,

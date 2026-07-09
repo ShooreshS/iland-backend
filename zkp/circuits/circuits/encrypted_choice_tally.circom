@@ -1,6 +1,7 @@
 pragma circom 2.1.6;
 
 include "poseidon.circom";
+include "comparators.circom";
 
 template AssertBoolean() {
     signal input in;
@@ -75,6 +76,7 @@ template EncryptedChoiceTally(maxVotes, maxOptions) {
     signal input pollPolicyHash;
     signal input credentialSchemaHash;
     signal input optionSetHash;
+    signal input optionCount;
     signal input nullifierRoot;
     signal input voteCommitmentRoot;
     signal input encryptedVoteRoot;
@@ -97,19 +99,34 @@ template EncryptedChoiceTally(maxVotes, maxOptions) {
     component nullifierLeafHasher[maxVotes];
     component voteCommitmentLeafHasher[maxVotes];
     component encryptedVoteLeafHasher[maxVotes];
+    component optionCountAtLeastOne = GreaterEqThan(4);
+    component optionCountAtMostMax = LessEqThan(4);
+    component optionWithinCount[maxOptions];
 
     signal selectedOptionSums[maxVotes][maxOptions + 1];
     signal rowSelectionSums[maxVotes][maxOptions + 1];
     signal activeSum[maxVotes + 1];
     signal optionCountSums[maxOptions][maxVotes + 1];
+    signal optionOutOfRange[maxOptions];
     signal nullifierLeaves[maxVotes];
     signal voteCommitmentLeaves[maxVotes];
     signal encryptedVoteLeaves[maxVotes];
     signal computedEncryptedVoteCommitment[maxVotes];
     signal computedVoteCommitment[maxVotes];
 
+    optionCountAtLeastOne.in[0] <== optionCount;
+    optionCountAtLeastOne.in[1] <== 1;
+    optionCountAtLeastOne.out === 1;
+    optionCountAtMostMax.in[0] <== optionCount;
+    optionCountAtMostMax.in[1] <== maxOptions;
+    optionCountAtMostMax.out === 1;
+
     activeSum[0] <== 0;
     for (var j = 0; j < maxOptions; j++) {
+        optionWithinCount[j] = LessThan(4);
+        optionWithinCount[j].in[0] <== j;
+        optionWithinCount[j].in[1] <== optionCount;
+        optionOutOfRange[j] <== 1 - optionWithinCount[j].out;
         optionCountSums[j][0] <== 0;
     }
 
@@ -123,6 +140,7 @@ template EncryptedChoiceTally(maxVotes, maxOptions) {
         for (var j = 0; j < maxOptions; j++) {
             selectionBoolean[i][j] = AssertBoolean();
             selectionBoolean[i][j].in <== optionSelections[i][j];
+            optionSelections[i][j] * optionOutOfRange[j] === 0;
             selectedOptionSums[i][j + 1] <==
                 selectedOptionSums[i][j] + optionSelections[i][j] * j;
             rowSelectionSums[i][j + 1] <==
@@ -166,6 +184,7 @@ template EncryptedChoiceTally(maxVotes, maxOptions) {
     activeSum[maxVotes] === acceptedVoteCount;
     for (var j = 0; j < maxOptions; j++) {
         optionCountSums[j][maxVotes] === optionCounts[j];
+        optionCounts[j] * optionOutOfRange[j] === 0;
     }
 
     component optionCountsHasher = Poseidon(maxOptions + 1);
@@ -196,6 +215,7 @@ component main {
         pollPolicyHash,
         credentialSchemaHash,
         optionSetHash,
+        optionCount,
         nullifierRoot,
         voteCommitmentRoot,
         encryptedVoteRoot,

@@ -4,6 +4,9 @@ import { fileURLToPath } from "node:url";
 import assert from "node:assert/strict";
 
 import {
+  createInvalidOutOfRangeOptionInput,
+  createInvalidTallyCommitmentMismatchInput,
+  createInvalidTallyOutOfRangeOptionInput,
   createInvalidWrongCredentialRootInput,
   createInvalidWrongNullifierInput,
   deriveCircuitValues,
@@ -52,6 +55,16 @@ assert.deepEqual(
   createInvalidWrongCredentialRootInput(expected.input),
   "invalid credential-root vector drifted",
 );
+assert.deepEqual(
+  readJson(
+    resolve(
+      vectorDir,
+      "credential_commitment_vote.invalid_out_of_range_option.input.json",
+    ),
+  ),
+  createInvalidOutOfRangeOptionInput(expected.input),
+  "invalid out-of-range option vector drifted",
+);
 
 console.log("CredentialCommitmentVote test vectors verified.");
 
@@ -71,6 +84,26 @@ assert.deepEqual(
   readJson(resolve(vectorDir, "encrypted_choice_tally.valid.public.named.json")),
   expectedTally.publicSignalsByName,
   "named tally public signal vector drifted",
+);
+assert.deepEqual(
+  readJson(
+    resolve(
+      vectorDir,
+      "encrypted_choice_tally.invalid_out_of_range_option.input.json",
+    ),
+  ),
+  createInvalidTallyOutOfRangeOptionInput(expectedTally.input),
+  "invalid tally out-of-range option vector drifted",
+);
+assert.deepEqual(
+  readJson(
+    resolve(
+      vectorDir,
+      "encrypted_choice_tally.invalid_encrypted_vote_commitment_mismatch.input.json",
+    ),
+  ),
+  createInvalidTallyCommitmentMismatchInput(expectedTally.input),
+  "invalid tally encrypted vote commitment vector drifted",
 );
 
 console.log("EncryptedChoiceTally test vectors verified.");

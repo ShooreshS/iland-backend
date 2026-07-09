@@ -107,15 +107,15 @@ const invokeCredentialRoute = async (
                   claimsHash: "2".repeat(64),
                   credentialIssuerId: "did:civicos:credential-registry:v1",
                   commitmentScheme: "civicos-credential-commitment-v1",
-                  merkleDepth: 24,
+                  merkleDepth: 32,
                   credentialCommitment: input.credentialCommitment,
                   credentialRoot: "3".repeat(64),
                   leafIndex: 0,
                   leafCount: 1,
-                  credentialRootSiblings: Array.from({ length: 24 }, () =>
+                  credentialRootSiblings: Array.from({ length: 32 }, () =>
                     "0".repeat(64),
                   ),
-                  credentialRootPathIndices: Array.from({ length: 24 }, () => 0),
+                  credentialRootPathIndices: Array.from({ length: 32 }, () => 0),
                   credentialRootCreatedAt: "2026-07-08T12:00:00.000Z",
                 },
               }
@@ -126,7 +126,7 @@ const invokeCredentialRoute = async (
                   claimsHash: "2".repeat(64),
                   credentialIssuerId: "did:civicos:credential-registry:v1",
                   commitmentScheme: "civicos-credential-commitment-v1",
-                  merkleDepth: 24,
+                  merkleDepth: 32,
                 },
               }),
         } as CredentialIssuanceResultDto,

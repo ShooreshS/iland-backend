@@ -302,6 +302,7 @@ const buildResultHash = (input: {
     optionSetHash: input.poll.option_set_hash ?? null,
     acceptedVoteCount: input.acceptedVoteCount,
     totalValidVoteCount: input.totalValidVoteCount,
+    optionCount: input.finalResult.optionResults.length,
     finalNullifierRoot: input.nullifierRoot,
     finalVoteCommitmentRoot: input.voteCommitmentRoot,
     finalEncryptedVoteRoot: input.encryptedVoteRoot,
@@ -697,6 +698,17 @@ const loadPollAuditMaterial = async (poll: PollRow): Promise<PollAuditMaterial> 
   });
 };
 
+const getOrderedActivePollOptions = (
+  options: readonly PollOptionRow[],
+): PollOptionRow[] =>
+  [...options]
+    .filter((option) => option.is_active)
+    .sort((left, right) => left.display_order - right.display_order);
+
+const getOrderedActivePollOptionIds = (
+  options: readonly PollOptionRow[],
+): string[] => getOrderedActivePollOptions(options).map((option) => option.id);
+
 export const pollPublicAuditService = {
   async getPublicPollAudit(pollId: string): Promise<PublicPollAuditDto | null> {
     const poll = await pollRepository.getById(pollId);
@@ -1002,6 +1014,7 @@ export const pollPublicAuditService = {
       voteCommitmentRoot: material.voteCommitmentTree.root,
       encryptedVoteRoot: material.encryptedVoteTree.root,
       acceptedVoteCount: material.acceptedVoteCount,
+      expectedOptionIds: getOrderedActivePollOptionIds(material.options),
     });
     if (!verification.ok) {
       return {

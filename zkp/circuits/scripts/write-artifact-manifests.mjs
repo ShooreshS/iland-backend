@@ -29,6 +29,10 @@ const circuits = Object.freeze([
     ptauPower: 14,
     circuitId: "civicos-groth16-vote-circuit-v1",
     publicInputSchemaVersion: "civicos-groth16-vote-public-inputs-v1",
+    circuitParameters: {
+      credentialMerkleDepth: 32,
+      maxOptions: 8,
+    },
     notes:
       "Internal release-candidate artifact for credential-commitment-only v1 testing. Not a final audited multi-contributor production ceremony.",
   },
@@ -39,6 +43,10 @@ const circuits = Object.freeze([
     ptauPower: 19,
     circuitId: "civicos-groth16-tally-circuit-v1",
     publicInputSchemaVersion: "civicos-groth16-tally-public-inputs-v1",
+    circuitParameters: {
+      tallyBatchSize: 64,
+      maxOptions: 8,
+    },
     notes:
       "Internal release-candidate artifact for 64-vote x 8-option tally testing. Not a final audited multi-contributor production ceremony.",
   },
@@ -144,6 +152,7 @@ for (const circuit of circuits) {
     verifierKeyHash,
     provingKeyHash,
     wasmOrNativeArtifactHash: wasmHash,
+    circuitParameters: circuit.circuitParameters,
     artifacts: [
       {
         ...artifactEntry({

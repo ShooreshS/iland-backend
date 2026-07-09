@@ -3,6 +3,9 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import {
+  createInvalidOutOfRangeOptionInput,
+  createInvalidTallyCommitmentMismatchInput,
+  createInvalidTallyOutOfRangeOptionInput,
   createInvalidWrongCredentialRootInput,
   createInvalidWrongNullifierInput,
   deriveCircuitValues,
@@ -42,6 +45,13 @@ writeJson(
   ),
   createInvalidWrongCredentialRootInput(valid.input),
 );
+writeJson(
+  resolve(
+    vectorDir,
+    "credential_commitment_vote.invalid_out_of_range_option.input.json",
+  ),
+  createInvalidOutOfRangeOptionInput(valid.input),
+);
 writeJson(resolve(vectorDir, "credential_commitment_vote.summary.json"), {
   ...valid.metadata,
   credentialCommitment: valid.credentialCommitment,
@@ -57,6 +67,11 @@ writeJson(resolve(vectorDir, "credential_commitment_vote.summary.json"), {
     {
       name: "wrong_credential_root",
       input: "credential_commitment_vote.invalid_wrong_credential_root.input.json",
+      expected: "witness_generation_fails",
+    },
+    {
+      name: "out_of_range_option",
+      input: "credential_commitment_vote.invalid_out_of_range_option.input.json",
       expected: "witness_generation_fails",
     },
   ],
@@ -77,6 +92,17 @@ writeJson(
   resolve(vectorDir, "encrypted_choice_tally.valid.public.named.json"),
   tally.publicSignalsByName,
 );
+writeJson(
+  resolve(vectorDir, "encrypted_choice_tally.invalid_out_of_range_option.input.json"),
+  createInvalidTallyOutOfRangeOptionInput(tally.input),
+);
+writeJson(
+  resolve(
+    vectorDir,
+    "encrypted_choice_tally.invalid_encrypted_vote_commitment_mismatch.input.json",
+  ),
+  createInvalidTallyCommitmentMismatchInput(tally.input),
+);
 writeJson(resolve(vectorDir, "encrypted_choice_tally.summary.json"), {
   ...tally.metadata,
   validInput: "encrypted_choice_tally.valid.input.json",
@@ -87,6 +113,18 @@ writeJson(resolve(vectorDir, "encrypted_choice_tally.summary.json"), {
   nullifierLeaves: tally.nullifierLeaves,
   voteCommitmentLeaves: tally.voteCommitmentLeaves,
   encryptedVoteLeaves: tally.encryptedVoteLeaves,
+  invalidVectors: [
+    {
+      name: "out_of_range_option",
+      input: "encrypted_choice_tally.invalid_out_of_range_option.input.json",
+      expected: "witness_generation_fails",
+    },
+    {
+      name: "encrypted_vote_commitment_mismatch",
+      input: "encrypted_choice_tally.invalid_encrypted_vote_commitment_mismatch.input.json",
+      expected: "witness_generation_fails",
+    },
+  ],
 });
 
 console.log(`Wrote EncryptedChoiceTally vectors to ${vectorDir}`);

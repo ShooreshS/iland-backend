@@ -326,6 +326,7 @@ export type Groth16VoteProofPublicInputsDto = {
   pollPolicyHash: string;
   credentialSchemaHash: string;
   optionSetHash: string;
+  optionCount: number;
   credentialRoot: string;
   nullifier: string;
   voteCommitment: string;
@@ -419,7 +420,7 @@ export type CredentialIssuanceMaterialDto = {
   claimsHash: string;
   credentialIssuerId: string;
   commitmentScheme: "civicos-credential-commitment-v1";
-  merkleDepth: 24;
+  merkleDepth: 32;
 };
 
 export type IssuedCredentialRegistryDto = CredentialIssuanceMaterialDto & {

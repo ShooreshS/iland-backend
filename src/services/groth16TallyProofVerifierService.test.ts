@@ -27,12 +27,12 @@ import {
   type Groth16TallyVerifierConfig,
   verifyGroth16TallyProofForPoll,
 } from "./groth16TallyProofVerifierService";
-import { verifyGroth16ProofWithSnarkjs } from "./groth16SnarkjsVerifierEngine";
 
 const FIXED_TIME = "2026-07-07T12:00:00.000Z";
 const POLL_POLICY_HASH = "1".repeat(64);
 const CREDENTIAL_SCHEMA_HASH = "2".repeat(64);
 const OPTION_SET_HASH = "3".repeat(64);
+const OPTION_COUNT = 2;
 const NULLIFIER_ROOT = "4".repeat(64);
 const VOTE_COMMITMENT_ROOT = "5".repeat(64);
 const ENCRYPTED_VOTE_ROOT = "6".repeat(64);
@@ -53,13 +53,6 @@ const fixtureManifestHash = readFileSync(
 const fixtureEnvelope = JSON.parse(
   readFileSync(new URL("encrypted_choice_tally.envelope.json", fixtureUrl), "utf8"),
 ) as Groth16TallyProofEnvelopeDto;
-const fixturePublicSignals = JSON.parse(
-  readFileSync(new URL("encrypted_choice_tally.public.json", fixtureUrl), "utf8"),
-) as string[];
-const fixtureVerificationKey = JSON.parse(
-  readFileSync(new URL("encrypted_choice_tally.vkey.json", fixtureUrl), "utf8"),
-);
-
 const createPoll = (overrides: Partial<PollRow> = {}): PollRow => ({
   id: "poll-1",
   slug: "poll-1",
@@ -105,6 +98,10 @@ const createArtifactManifest = (
   verifierKeyHash: VERIFIER_KEY_HASH,
   provingKeyHash: PROVING_KEY_HASH,
   wasmOrNativeArtifactHash: PROVER_ARTIFACT_HASH,
+  circuitParameters: {
+    tallyBatchSize: 64,
+    maxOptions: 8,
+  },
   artifacts: [
     {
       role: "verification_key",
@@ -167,6 +164,7 @@ const createProof = async (
     credentialSchemaHash:
       overrides.credentialSchemaHash ?? CREDENTIAL_SCHEMA_HASH,
     optionSetHash: overrides.optionSetHash ?? OPTION_SET_HASH,
+    optionCount: overrides.optionCount ?? OPTION_COUNT,
     nullifierRoot: overrides.nullifierRoot ?? NULLIFIER_ROOT,
     voteCommitmentRoot:
       overrides.voteCommitmentRoot ?? VOTE_COMMITMENT_ROOT,
@@ -230,6 +228,7 @@ describe("groth16TallyProofVerifierService", () => {
         voteCommitmentRoot: VOTE_COMMITMENT_ROOT,
         encryptedVoteRoot: ENCRYPTED_VOTE_ROOT,
         acceptedVoteCount: 2,
+        expectedOptionIds: ["option-a", "option-b"],
       },
       {
         config: configuredVerifier,
@@ -257,29 +256,10 @@ describe("groth16TallyProofVerifierService", () => {
     }
   });
 
-  it("verifies the local EncryptedChoiceTally proof fixture with snarkjs", async () => {
-    expect(encodeGroth16TallyPublicSignals(fixtureEnvelope.publicInputs)).toEqual(
-      fixturePublicSignals,
-    );
-
-    await expect(
-      verifyGroth16ProofWithSnarkjs({
-        verificationKey: fixtureVerificationKey,
-        proof: fixtureEnvelope.proof,
-        publicSignals: fixturePublicSignals,
-      }),
-    ).resolves.toBe(true);
-
-    await expect(
-      verifyGroth16ProofWithSnarkjs({
-        verificationKey: fixtureVerificationKey,
-        proof: fixtureEnvelope.proof,
-        publicSignals: [
-          (BigInt(fixturePublicSignals[0]) + 1n).toString(10),
-          ...fixturePublicSignals.slice(1),
-        ],
-      }),
-    ).resolves.toBe(false);
+  it("rejects the stale pre-freeze EncryptedChoiceTally proof fixture", () => {
+    expect(() =>
+      encodeGroth16TallyPublicSignals(fixtureEnvelope.publicInputs),
+    ).toThrow("Groth16 public input optionCount is required.");
   });
 
   it("rejects the stale local EncryptedChoiceTally fixture through the current padded tally contract", async () => {
@@ -315,6 +295,9 @@ describe("groth16TallyProofVerifierService", () => {
         voteCommitmentRoot: fixtureEnvelope.publicInputs.voteCommitmentRoot,
         encryptedVoteRoot: fixtureEnvelope.publicInputs.encryptedVoteRoot,
         acceptedVoteCount: fixtureEnvelope.publicInputs.acceptedVoteCount,
+        expectedOptionIds: fixtureEnvelope.publicInputs.optionResults.map(
+          (entry) => entry.optionId,
+        ),
       },
       { config: fixtureConfig },
     );
@@ -323,7 +306,7 @@ describe("groth16TallyProofVerifierService", () => {
     if (!result.ok) {
       expect(result.reason).toBe("PROOF_INVALID");
       expect(result.message).toBe(
-        "Groth16 tally proof option counts hash does not match the public counts.",
+        "Groth16 tally proof option count does not match the registered poll options.",
       );
     }
   });
@@ -338,6 +321,7 @@ describe("groth16TallyProofVerifierService", () => {
         voteCommitmentRoot: VOTE_COMMITMENT_ROOT,
         encryptedVoteRoot: ENCRYPTED_VOTE_ROOT,
         acceptedVoteCount: 2,
+        expectedOptionIds: ["option-a", "option-b"],
       },
       {
         config: configuredVerifier,
@@ -369,6 +353,7 @@ describe("groth16TallyProofVerifierService", () => {
         voteCommitmentRoot: VOTE_COMMITMENT_ROOT,
         encryptedVoteRoot: ENCRYPTED_VOTE_ROOT,
         acceptedVoteCount: 2,
+        expectedOptionIds: ["option-a", "option-b"],
       },
       {
         config: configuredVerifier,

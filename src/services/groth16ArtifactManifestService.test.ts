@@ -34,6 +34,10 @@ const createManifest = (
   verifierKeyHash: VERIFIER_KEY_HASH,
   provingKeyHash: PROVING_KEY_HASH,
   wasmOrNativeArtifactHash: PROVER_ARTIFACT_HASH,
+  circuitParameters: {
+    credentialMerkleDepth: 32,
+    maxOptions: 8,
+  },
   artifacts: [
     {
       role: "verification_key",
@@ -159,6 +163,10 @@ describe("groth16ArtifactManifestService", () => {
       verifierKeyHash: manifest.verifierKeyHash,
       publicInputSchemaVersion: manifest.publicInputSchemaVersion,
       trustedSetupTranscriptHash: manifest.trustedSetupTranscriptHash,
+      circuitParameters: {
+        credentialMerkleDepth: 32,
+        maxOptions: 8,
+      },
     });
     expect(accepted.ok).toBe(true);
 
@@ -168,6 +176,22 @@ describe("groth16ArtifactManifestService", () => {
     expect(rejected.ok).toBe(false);
     if (!rejected.ok) {
       expect(rejected.reason).toBe("CONSTRAINT_MISMATCH");
+    }
+
+    const rejectedParameters = validateGroth16ArtifactManifestConstraints(
+      manifest,
+      {
+        circuitParameters: {
+          credentialMerkleDepth: 24,
+        },
+      },
+    );
+    expect(rejectedParameters.ok).toBe(false);
+    if (!rejectedParameters.ok) {
+      expect(rejectedParameters.reason).toBe("CONSTRAINT_MISMATCH");
+      expect(rejectedParameters.message).toContain(
+        "circuitParameters.credentialMerkleDepth=24",
+      );
     }
   });
 });

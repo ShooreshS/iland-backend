@@ -4,11 +4,16 @@ import type {
   CredentialRootRow,
   VerifiedIdentityRow,
 } from "../types/db";
+import {
+  CIVIC_CREDENTIAL_REGISTRY_COMMITMENT_SCHEME,
+  CIVIC_CREDENTIAL_REGISTRY_MERKLE_DEPTH,
+} from "./credentialRegistryConstants";
 import { poseidonHashHex64 } from "./poseidonBn254Service";
 
-export const CIVIC_CREDENTIAL_REGISTRY_MERKLE_DEPTH = 24;
-export const CIVIC_CREDENTIAL_REGISTRY_COMMITMENT_SCHEME =
-  "civicos-credential-commitment-v1";
+export {
+  CIVIC_CREDENTIAL_REGISTRY_COMMITMENT_SCHEME,
+  CIVIC_CREDENTIAL_REGISTRY_MERKLE_DEPTH,
+};
 
 const HEX_64_PATTERN = /^[0-9a-f]{64}$/;
 const ZERO_FIELD = "0".repeat(64);
@@ -293,7 +298,12 @@ export const createCredentialRegistryService = (
 
     async isAcceptedCredentialRoot(root: string): Promise<boolean> {
       const normalizedRoot = normalizeCredentialRegistryHex64("root", root);
-      return Boolean(await repository.getAcceptedRoot(normalizedRoot));
+      return Boolean(
+        await repository.getAcceptedRoot(
+          normalizedRoot,
+          CIVIC_CREDENTIAL_REGISTRY_MERKLE_DEPTH,
+        ),
+      );
     },
 
     async issueCredentialRegistryEntry(

@@ -208,6 +208,13 @@ const isProductionZkpPoll = (poll: PollRow): boolean =>
   normalizeVotePrivacyMode(poll.vote_privacy_mode) ===
   CIVIC_PRODUCTION_VOTE_PRIVACY_MODE;
 
+const getOrderedActivePollOptions = (
+  options: readonly PollOptionRow[],
+): PollOptionRow[] =>
+  [...options]
+    .filter((option) => option.is_active)
+    .sort((left, right) => left.display_order - right.display_order);
+
 const normalizeProductionEncryptedVotePayload = (
   encryptedVote: unknown,
   poll: PollRow,
@@ -776,6 +783,18 @@ export const createPollVotingService = (
       );
     }
 
+    const productionOptionCount = productionZkpPoll
+      ? getOrderedActivePollOptions(
+          await pollRepository.getOptionsByPollId(pollId),
+        ).length
+      : 0;
+    if (productionZkpPoll && productionOptionCount > 8) {
+      return buildFailure(
+        "PROOF_INVALID",
+        "Production ZKP v1 polls support at most 8 active options.",
+      );
+    }
+
     let verifiedIdentityId: string | null = null;
     if (requiresVerifiedIdentity) {
       const verifiedIdentity = await verifiedIdentityRepository.getByUserId(viewer.id);
@@ -902,6 +921,7 @@ export const createPollVotingService = (
         encryptedVoteHash,
         expectedVoteCommitment:
           params.expectedVoteCommitment || productionPrivacy.voteCommitment,
+        expectedOptionCount: productionOptionCount,
       });
       if (!proofVerification.ok) {
         return buildFailure(

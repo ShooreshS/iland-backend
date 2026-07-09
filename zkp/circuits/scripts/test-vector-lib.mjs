@@ -7,7 +7,7 @@ export const PUBLIC_INPUT_SCHEMA_VERSION =
 export const TALLY_PUBLIC_INPUT_SCHEMA_VERSION =
   "civicos-groth16-tally-public-inputs-v1";
 export const HASH_SUITE = "poseidon-bn254-v1";
-export const MERKLE_DEPTH = 24;
+export const MERKLE_DEPTH = 32;
 export const TALLY_MAX_VOTES = 64;
 export const TALLY_MAX_OPTIONS = 8;
 
@@ -24,6 +24,7 @@ export const PUBLIC_SIGNAL_NAMES = Object.freeze([
   "pollPolicyHash",
   "credentialSchemaHash",
   "optionSetHash",
+  "optionCount",
   "credentialRoot",
   "nullifier",
   "voteCommitment",
@@ -35,6 +36,7 @@ export const TALLY_PUBLIC_SIGNAL_NAMES = Object.freeze([
   "pollPolicyHash",
   "credentialSchemaHash",
   "optionSetHash",
+  "optionCount",
   "nullifierRoot",
   "voteCommitmentRoot",
   "encryptedVoteRoot",
@@ -47,6 +49,7 @@ export const createBaseWitness = () => ({
   pollPolicyHash: "202",
   credentialSchemaHash: "303",
   optionSetHash: "404",
+  optionCount: "4",
   identitySecret: "7001",
   identityKeyHash: "7005",
   claimsHash: "7006",
@@ -87,8 +90,8 @@ export const deriveMerkleRoot = ({ poseidonHash, leaf, siblings, pathIndices }) 
   }, leaf);
 
 const deriveFixedPoseidonRoot = ({ poseidonHash, leaves }) => {
-  if (leaves.length === 0) {
-    return "0";
+  if (leaves.length !== TALLY_MAX_VOTES) {
+    throw new Error(`fixed Poseidon audit trees require ${TALLY_MAX_VOTES} leaves`);
   }
 
   let level = leaves.map(toDecimalString);
@@ -145,6 +148,7 @@ export const deriveCircuitValues = async (witness = createBaseWitness()) => {
     pollPolicyHash: toDecimalString(input.pollPolicyHash),
     credentialSchemaHash: toDecimalString(input.credentialSchemaHash),
     optionSetHash: toDecimalString(input.optionSetHash),
+    optionCount: toDecimalString(input.optionCount),
     credentialRoot: toDecimalString(input.credentialRoot),
     nullifier: toDecimalString(input.nullifier),
     voteCommitment: toDecimalString(input.voteCommitment),
@@ -176,11 +180,17 @@ export const createInvalidWrongCredentialRootInput = (validInput) => ({
   credentialRoot: (BigInt(validInput.credentialRoot) + 1n).toString(10),
 });
 
+export const createInvalidOutOfRangeOptionInput = (validInput) => ({
+  ...validInput,
+  optionCount: "1",
+});
+
 export const createBaseTallyWitness = () => ({
   pollId: "101",
   pollPolicyHash: "202",
   credentialSchemaHash: "303",
   optionSetHash: "404",
+  optionCount: "4",
   isActive: Array.from({ length: TALLY_MAX_VOTES }, (_, index) =>
     index < 3 ? "1" : "0",
   ),
@@ -291,6 +301,7 @@ export const deriveTallyCircuitValues = async (
     pollPolicyHash: toDecimalString(input.pollPolicyHash),
     credentialSchemaHash: toDecimalString(input.credentialSchemaHash),
     optionSetHash: toDecimalString(input.optionSetHash),
+    optionCount: toDecimalString(input.optionCount),
     nullifierRoot: toDecimalString(input.nullifierRoot),
     voteCommitmentRoot: toDecimalString(input.voteCommitmentRoot),
     encryptedVoteRoot: toDecimalString(input.encryptedVoteRoot),
@@ -319,3 +330,16 @@ export const deriveTallyCircuitValues = async (
     ),
   };
 };
+
+export const createInvalidTallyOutOfRangeOptionInput = (validInput) => ({
+  ...validInput,
+  optionCount: "2",
+});
+
+export const createInvalidTallyCommitmentMismatchInput = (validInput) => ({
+  ...validInput,
+  encryptedVoteCommitments: validInput.encryptedVoteCommitments.map(
+    (commitment, index) =>
+      index === 1 ? (BigInt(commitment) + 1n).toString(10) : commitment,
+  ),
+});

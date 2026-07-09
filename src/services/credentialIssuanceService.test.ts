@@ -12,6 +12,7 @@ import {
   createCredentialIssuanceService,
   hashCivicCredentialClaims,
 } from "./credentialIssuanceService";
+import { CIVIC_CREDENTIAL_REGISTRY_MERKLE_DEPTH } from "./credentialRegistryConstants";
 
 const FIXED_TIME = "2026-07-08T12:00:00.000Z";
 const hex = (char: string): string => char.repeat(64);
@@ -59,7 +60,7 @@ const registryEntry = (credentialCommitment: string): CredentialRegistryRow => (
   claims_hash: hex("c"),
   credential_issuer_id: CIVIC_CREDENTIAL_ISSUER_ID,
   commitment_scheme: "civicos-credential-commitment-v1",
-  merkle_depth: 24,
+  merkle_depth: CIVIC_CREDENTIAL_REGISTRY_MERKLE_DEPTH,
   leaf_index: 0,
   revoked_at: null,
   revocation_reason: null,
@@ -71,7 +72,7 @@ const credentialRoot: CredentialRootRow = {
   id: "credential-root-1",
   root: hex("d"),
   previous_root: null,
-  merkle_depth: 24,
+  merkle_depth: CIVIC_CREDENTIAL_REGISTRY_MERKLE_DEPTH,
   leaf_count: 1,
   latest_credential_registry_id: "credential-registry-1",
   solana_tx_signature: null,
@@ -108,8 +109,14 @@ const createService = (overrides: {
         credentialRoot,
         merklePath: {
           root: credentialRoot.root,
-          siblings: Array.from({ length: 24 }, () => hex("0")),
-          pathIndices: Array.from({ length: 24 }, () => 0),
+          siblings: Array.from(
+            { length: CIVIC_CREDENTIAL_REGISTRY_MERKLE_DEPTH },
+            () => hex("0"),
+          ),
+          pathIndices: Array.from(
+            { length: CIVIC_CREDENTIAL_REGISTRY_MERKLE_DEPTH },
+            () => 0,
+          ),
         },
       }),
     },
@@ -145,7 +152,7 @@ describe("credentialIssuanceService", () => {
           credentialSchemaHash: hex("2"),
           credentialIssuerId: CIVIC_CREDENTIAL_ISSUER_ID,
           commitmentScheme: "civicos-credential-commitment-v1",
-          merkleDepth: 24,
+          merkleDepth: CIVIC_CREDENTIAL_REGISTRY_MERKLE_DEPTH,
         });
         expect(result.material.claimsHash).toMatch(/^[0-9a-f]{64}$/);
       }
@@ -166,8 +173,12 @@ describe("credentialIssuanceService", () => {
       if (result.status !== "material") {
         expect(result.credential.credentialCommitment).toBe(hex("1"));
         expect(result.credential.credentialRoot).toBe(hex("d"));
-        expect(result.credential.credentialRootSiblings).toHaveLength(24);
-        expect(result.credential.credentialRootPathIndices).toHaveLength(24);
+        expect(result.credential.credentialRootSiblings).toHaveLength(
+          CIVIC_CREDENTIAL_REGISTRY_MERKLE_DEPTH,
+        );
+        expect(result.credential.credentialRootPathIndices).toHaveLength(
+          CIVIC_CREDENTIAL_REGISTRY_MERKLE_DEPTH,
+        );
       }
     }
   });

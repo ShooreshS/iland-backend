@@ -45,6 +45,7 @@ const PRODUCTION_PROOF_HASH = "9".repeat(64);
 const PRODUCTION_ENCRYPTED_VOTE_COMMITMENT = "a".repeat(64);
 const POLL_ENCRYPTION_KEY_HASH = "b".repeat(64);
 const PRODUCTION_CIRCUIT_ID = "civicos-groth16-vote-circuit-v1";
+const PRODUCTION_OPTION_COUNT = 1;
 
 const sha256Hex = (value: string): string =>
   createHash("sha256").update(value, "utf8").digest("hex");
@@ -272,6 +273,7 @@ const createProductionVotePrivacyPayload = (
     pollPolicyHash: POLL_POLICY_HASH,
     credentialSchemaHash: CREDENTIAL_SCHEMA_HASH,
     optionSetHash: OPTION_SET_HASH,
+    optionCount: PRODUCTION_OPTION_COUNT,
     credentialRoot: PRODUCTION_CREDENTIAL_ROOT,
     nullifier: PRODUCTION_NULLIFIER,
     voteCommitment: PRODUCTION_VOTE_COMMITMENT,
@@ -603,6 +605,7 @@ describe("pollVotingService.submitVote", () => {
         expect(input.poll.id).toBe(poll.id);
         expect(input.encryptedVoteHash).toBe(encryptedVoteHash);
         expect(input.expectedVoteCommitment).toBe(PRODUCTION_VOTE_COMMITMENT);
+        expect(input.expectedOptionCount).toBe(PRODUCTION_OPTION_COUNT);
         return {
           ok: true,
           auditMaterial: {
@@ -630,6 +633,7 @@ describe("pollVotingService.submitVote", () => {
     const restoreFns = [
       patchMethod(pollRepository, "getById", async () => poll),
       patchMethod(pollRepository, "getOptionByIdForPoll", async () => option),
+      patchMethod(pollRepository, "getOptionsByPollId", async () => [option]),
       patchMethod(
         verifiedIdentityRepository,
         "getByUserId",
@@ -753,6 +757,7 @@ describe("pollVotingService.submitVote", () => {
     const restoreFns = [
       patchMethod(pollRepository, "getById", async () => poll),
       patchMethod(pollRepository, "getOptionByIdForPoll", async () => option),
+      patchMethod(pollRepository, "getOptionsByPollId", async () => [option]),
       patchMethod(
         verifiedIdentityRepository,
         "getByUserId",
@@ -829,6 +834,7 @@ describe("pollVotingService.submitVote", () => {
     const restoreFns = [
       patchMethod(pollRepository, "getById", async () => poll),
       patchMethod(pollRepository, "getOptionByIdForPoll", async () => option),
+      patchMethod(pollRepository, "getOptionsByPollId", async () => [option]),
       patchMethod(
         verifiedIdentityRepository,
         "getByUserId",

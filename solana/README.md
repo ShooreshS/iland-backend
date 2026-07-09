@@ -110,3 +110,9 @@ Last Deployed In Slot: 474682189
 Data Length: 285472 (0x45b20) bytes
 Balance: 1.9880892 SOL
 ```
+
+| Wallet     | pulic key                                    |
+| ---------- | -------------------------------------------- |
+| program:   | FsXuodQtkWjE1EZEAUskvRuj4bGMrKZAHAEf4WEk4oRo |
+| deployer:  | CyB8BhqNfEz3xS5mHc39y6VaJHv2NcU5cof7iY7KkwC  |
+| fee payer: | 2s5L3hu9o6nvugVxpYSLu6WqPPjDcm9MKTHEk6tFUhX5 |

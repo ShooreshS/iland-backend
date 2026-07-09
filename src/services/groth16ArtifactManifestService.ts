@@ -64,6 +64,14 @@ const trustedSetupSchema = z
   })
   .strict();
 
+const circuitParametersSchema = z
+  .object({
+    credentialMerkleDepth: z.number().int().positive().optional(),
+    tallyBatchSize: z.number().int().positive().optional(),
+    maxOptions: z.number().int().positive().optional(),
+  })
+  .strict();
+
 export const groth16ArtifactManifestSchema = z
   .object({
     version: z.literal(GROTH16_ARTIFACT_MANIFEST_VERSION),
@@ -78,6 +86,7 @@ export const groth16ArtifactManifestSchema = z
     verifierKeyHash: hex64Schema,
     provingKeyHash: hex64Schema,
     wasmOrNativeArtifactHash: hex64Schema,
+    circuitParameters: circuitParametersSchema,
     artifacts: z.array(artifactEntrySchema).min(3),
     trustedSetup: trustedSetupSchema.optional(),
     generatedAt: nonEmptyStringSchema.optional(),
@@ -181,6 +190,7 @@ export type Groth16ArtifactManifestConstraints = Partial<{
   trustedSetupTranscriptHash: string;
   hashSuite: "poseidon-bn254-v1";
   protocol: "groth16";
+  circuitParameters: Partial<Groth16ArtifactManifest["circuitParameters"]>;
 }>;
 
 const sha256Hex = (value: string | Uint8Array): string =>
@@ -251,12 +261,28 @@ export const validateGroth16ArtifactManifestConstraints = (
   constraints: Groth16ArtifactManifestConstraints,
 ): Groth16ArtifactManifestValidationResult => {
   const mismatches = Object.entries(constraints)
+    .filter(([key]) => key !== "circuitParameters")
     .filter(([, expected]) => typeof expected === "string" && expected.length > 0)
     .filter(([key, expected]) => {
       const actual = manifest[key as keyof Groth16ArtifactManifest];
       return actual !== expected;
     })
     .map(([key, expected]) => `${key}=${String(expected)}`);
+
+  const circuitParameterMismatches = Object.entries(
+    constraints.circuitParameters ?? {},
+  )
+    .filter(([, expected]) => typeof expected === "number")
+    .filter(([key, expected]) => {
+      const actual =
+        manifest.circuitParameters[
+          key as keyof Groth16ArtifactManifest["circuitParameters"]
+        ];
+      return actual !== expected;
+    })
+    .map(([key, expected]) => `circuitParameters.${key}=${String(expected)}`);
+
+  mismatches.push(...circuitParameterMismatches);
 
   if (mismatches.length > 0) {
     return {

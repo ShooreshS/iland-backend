@@ -28,13 +28,13 @@ import {
 } from "./groth16ProofVerifierService";
 import {
   encodeGroth16VotePublicSignals,
-  verifyGroth16ProofWithSnarkjs,
 } from "./groth16SnarkjsVerifierEngine";
 
 const FIXED_TIME = "2026-07-07T12:00:00.000Z";
 const POLL_POLICY_HASH = "1".repeat(64);
 const CREDENTIAL_SCHEMA_HASH = "2".repeat(64);
 const OPTION_SET_HASH = "3".repeat(64);
+const OPTION_COUNT = 2;
 const CREDENTIAL_ROOT = "4".repeat(64);
 const NULLIFIER = "5".repeat(64);
 const VOTE_COMMITMENT = "6".repeat(64);
@@ -63,19 +63,6 @@ const fixtureEnvelope = JSON.parse(
     "utf8",
   ),
 ) as Groth16VoteProofEnvelopeDto;
-const fixturePublicSignals = JSON.parse(
-  readFileSync(
-    new URL("credential_commitment_vote.public.json", fixtureUrl),
-    "utf8",
-  ),
-) as string[];
-const fixtureVerificationKey = JSON.parse(
-  readFileSync(
-    new URL("credential_commitment_vote.vkey.json", fixtureUrl),
-    "utf8",
-  ),
-);
-
 const createArtifactManifest = (
   overrides: Partial<Groth16ArtifactManifest> = {},
 ): Groth16ArtifactManifest => ({
@@ -91,6 +78,10 @@ const createArtifactManifest = (
   verifierKeyHash: VERIFIER_KEY_HASH,
   provingKeyHash: PROVING_KEY_HASH,
   wasmOrNativeArtifactHash: PROVER_ARTIFACT_HASH,
+  circuitParameters: {
+    credentialMerkleDepth: 32,
+    maxOptions: 8,
+  },
   artifacts: [
     {
       role: "verification_key",
@@ -186,6 +177,7 @@ const createProof = (
     credentialSchemaHash:
       overrides.credentialSchemaHash ?? CREDENTIAL_SCHEMA_HASH,
     optionSetHash: overrides.optionSetHash ?? OPTION_SET_HASH,
+    optionCount: overrides.optionCount ?? OPTION_COUNT,
     credentialRoot: overrides.credentialRoot ?? CREDENTIAL_ROOT,
     nullifier: overrides.nullifier ?? NULLIFIER,
     voteCommitment: overrides.voteCommitment ?? VOTE_COMMITMENT,
@@ -286,6 +278,62 @@ describe("groth16ProofVerifierService", () => {
     }
   });
 
+  it("rejects stale env-loaded vote manifests without circuit parameters", () => {
+    const oldEnv = {
+      enabled: process.env.ZKP_GROTH16_VOTE_VERIFIER_ENABLED,
+      circuitId: process.env.ZKP_GROTH16_VOTE_CIRCUIT_ID,
+      verifierKeyHash: process.env.ZKP_GROTH16_VOTE_VERIFIER_KEY_HASH,
+      publicInputSchemaVersion:
+        process.env.ZKP_GROTH16_VOTE_PUBLIC_INPUT_SCHEMA_VERSION,
+      trustedSetupTranscriptHash:
+        process.env.ZKP_GROTH16_VOTE_TRUSTED_SETUP_TRANSCRIPT_HASH,
+      manifestPath: process.env.ZKP_GROTH16_VOTE_ARTIFACT_MANIFEST_PATH,
+      manifestHash: process.env.ZKP_GROTH16_VOTE_ARTIFACT_MANIFEST_HASH,
+    };
+
+    try {
+      process.env.ZKP_GROTH16_VOTE_VERIFIER_ENABLED = "true";
+      process.env.ZKP_GROTH16_VOTE_CIRCUIT_ID = fixtureManifest.circuitId;
+      process.env.ZKP_GROTH16_VOTE_VERIFIER_KEY_HASH =
+        fixtureManifest.verifierKeyHash;
+      process.env.ZKP_GROTH16_VOTE_PUBLIC_INPUT_SCHEMA_VERSION =
+        fixtureManifest.publicInputSchemaVersion;
+      process.env.ZKP_GROTH16_VOTE_TRUSTED_SETUP_TRANSCRIPT_HASH =
+        fixtureManifest.trustedSetupTranscriptHash;
+      process.env.ZKP_GROTH16_VOTE_ARTIFACT_MANIFEST_PATH =
+        fixtureManifestPath.pathname;
+      process.env.ZKP_GROTH16_VOTE_ARTIFACT_MANIFEST_HASH =
+        fixtureManifestHash;
+
+      const config = getGroth16VerifierConfig();
+      expect(config.voteArtifactManifestStatus).toBe("invalid");
+      expect(config.voteArtifactManifestError).toContain("circuitParameters");
+      expect(isGroth16VoteVerifierConfigured(config)).toBe(false);
+    } finally {
+      const restore = (key: string, value: string | undefined) => {
+        if (value === undefined) {
+          delete process.env[key];
+        } else {
+          process.env[key] = value;
+        }
+      };
+
+      restore("ZKP_GROTH16_VOTE_VERIFIER_ENABLED", oldEnv.enabled);
+      restore("ZKP_GROTH16_VOTE_CIRCUIT_ID", oldEnv.circuitId);
+      restore("ZKP_GROTH16_VOTE_VERIFIER_KEY_HASH", oldEnv.verifierKeyHash);
+      restore(
+        "ZKP_GROTH16_VOTE_PUBLIC_INPUT_SCHEMA_VERSION",
+        oldEnv.publicInputSchemaVersion,
+      );
+      restore(
+        "ZKP_GROTH16_VOTE_TRUSTED_SETUP_TRANSCRIPT_HASH",
+        oldEnv.trustedSetupTranscriptHash,
+      );
+      restore("ZKP_GROTH16_VOTE_ARTIFACT_MANIFEST_PATH", oldEnv.manifestPath);
+      restore("ZKP_GROTH16_VOTE_ARTIFACT_MANIFEST_HASH", oldEnv.manifestHash);
+    }
+  });
+
   it("fails closed when production ZKP poll verification is disabled", async () => {
     const result = await verifyGroth16VoteProofForPoll(
       {
@@ -293,6 +341,7 @@ describe("groth16ProofVerifierService", () => {
         proof: createProof(),
         encryptedVoteHash: ENCRYPTED_VOTE_HASH,
         expectedVoteCommitment: VOTE_COMMITMENT,
+        expectedOptionCount: OPTION_COUNT,
       },
       {
         config: disabledVerifier,
@@ -312,6 +361,7 @@ describe("groth16ProofVerifierService", () => {
         poll: createPoll(),
         proof: createProof(),
         encryptedVoteHash: ENCRYPTED_VOTE_HASH,
+        expectedOptionCount: OPTION_COUNT,
       },
       {
         config: configuredVerifier,
@@ -331,6 +381,7 @@ describe("groth16ProofVerifierService", () => {
         poll: createPoll(),
         proof: createProof(),
         encryptedVoteHash: ENCRYPTED_VOTE_HASH,
+        expectedOptionCount: OPTION_COUNT,
       },
       {
         config: {
@@ -359,6 +410,7 @@ describe("groth16ProofVerifierService", () => {
         proof: createProof(),
         encryptedVoteHash: ENCRYPTED_VOTE_HASH,
         expectedVoteCommitment: VOTE_COMMITMENT,
+        expectedOptionCount: OPTION_COUNT,
       },
       {
         config: configuredVerifier,
@@ -398,32 +450,13 @@ describe("groth16ProofVerifierService", () => {
     }
   });
 
-  it("verifies the local CredentialCommitmentVote proof fixture with snarkjs", async () => {
-    expect(encodeGroth16VotePublicSignals(fixtureEnvelope.publicInputs)).toEqual(
-      fixturePublicSignals,
-    );
-
-    await expect(
-      verifyGroth16ProofWithSnarkjs({
-        verificationKey: fixtureVerificationKey,
-        proof: fixtureEnvelope.proof,
-        publicSignals: fixturePublicSignals,
-      }),
-    ).resolves.toBe(true);
-
-    await expect(
-      verifyGroth16ProofWithSnarkjs({
-        verificationKey: fixtureVerificationKey,
-        proof: fixtureEnvelope.proof,
-        publicSignals: [
-          (BigInt(fixturePublicSignals[0]) + 1n).toString(10),
-          ...fixturePublicSignals.slice(1),
-        ],
-      }),
-    ).resolves.toBe(false);
+  it("rejects the stale pre-freeze CredentialCommitmentVote proof fixture", () => {
+    expect(() =>
+      encodeGroth16VotePublicSignals(fixtureEnvelope.publicInputs),
+    ).toThrow("Groth16 public input optionCount is required.");
   });
 
-  it("accepts the local CredentialCommitmentVote fixture through the default verifier engine", async () => {
+  it("rejects the stale pre-freeze CredentialCommitmentVote fixture through the default verifier engine", async () => {
     const registryRecord = buildGroth16VerifierKeyRegistryRecord(
       fixtureManifest,
       fixtureManifestHash,
@@ -454,6 +487,7 @@ describe("groth16ProofVerifierService", () => {
         proof: fixtureEnvelope,
         encryptedVoteHash: fixtureEnvelope.publicInputs.encryptedVoteHash,
         expectedVoteCommitment: fixtureEnvelope.publicInputs.voteCommitment,
+        expectedOptionCount: fixtureEnvelope.publicInputs.optionCount,
       },
       {
         config: fixtureConfig,
@@ -461,18 +495,12 @@ describe("groth16ProofVerifierService", () => {
       },
     );
 
-    expect(result.ok).toBe(true);
-    if (result.ok) {
-      expect(result.auditMaterial).toMatchObject({
-        nullifier: fixtureEnvelope.publicInputs.nullifier,
-        voteCommitment: fixtureEnvelope.publicInputs.voteCommitment,
-        encryptedVoteHash: fixtureEnvelope.publicInputs.encryptedVoteHash,
-        encryptedVoteCommitment:
-          fixtureEnvelope.publicInputs.encryptedVoteCommitment,
-        proofVerificationStatus: "verified",
-        verifierKeyHash: fixtureManifest.verifierKeyHash,
-        circuitId: fixtureManifest.circuitId,
-      });
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.reason).toBe("PROOF_INVALID");
+      expect(result.message).toBe(
+        "Groth16 vote proof option count is missing or outside the v1 range.",
+      );
     }
   });
 
@@ -483,6 +511,7 @@ describe("groth16ProofVerifierService", () => {
         poll: createPoll(),
         proof: createProof({ publicInputsHash: "a".repeat(64) }),
         encryptedVoteHash: ENCRYPTED_VOTE_HASH,
+        expectedOptionCount: OPTION_COUNT,
       },
       {
         config: configuredVerifier,
@@ -509,6 +538,7 @@ describe("groth16ProofVerifierService", () => {
           status: "not_generated",
         },
         encryptedVoteHash: ENCRYPTED_VOTE_HASH,
+        expectedOptionCount: OPTION_COUNT,
       },
       {
         config: configuredVerifier,
@@ -532,6 +562,7 @@ describe("groth16ProofVerifierService", () => {
         poll: createPoll(),
         proof,
         encryptedVoteHash: ENCRYPTED_VOTE_HASH,
+        expectedOptionCount: OPTION_COUNT,
       },
       {
         config: configuredVerifier,
@@ -551,6 +582,7 @@ describe("groth16ProofVerifierService", () => {
         poll: createPoll(),
         proof: createProof(),
         encryptedVoteHash: ENCRYPTED_VOTE_HASH,
+        expectedOptionCount: OPTION_COUNT,
       },
       {
         config: configuredVerifier,
@@ -573,6 +605,7 @@ describe("groth16ProofVerifierService", () => {
         proof: createProof(),
         encryptedVoteHash: ENCRYPTED_VOTE_HASH,
         expectedVoteCommitment: VOTE_COMMITMENT,
+        expectedOptionCount: OPTION_COUNT,
       },
       {
         config: configuredVerifier,

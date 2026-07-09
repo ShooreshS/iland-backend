@@ -1,4 +1,8 @@
 import { requireSupabaseAdminClient } from "../db/supabaseClient";
+import {
+  CIVIC_CREDENTIAL_REGISTRY_COMMITMENT_SCHEME,
+  CIVIC_CREDENTIAL_REGISTRY_MERKLE_DEPTH,
+} from "../services/credentialRegistryConstants";
 import type {
   CredentialRegistryRow,
   CredentialRootRow,
@@ -132,8 +136,9 @@ export const createCredentialRegistryRepository = (
           claims_hash: input.claims_hash,
           credential_issuer_id: input.credential_issuer_id,
           commitment_scheme:
-            input.commitment_scheme ?? "civicos-credential-commitment-v1",
-          merkle_depth: input.merkle_depth ?? 24,
+            input.commitment_scheme ?? CIVIC_CREDENTIAL_REGISTRY_COMMITMENT_SCHEME,
+          merkle_depth:
+            input.merkle_depth ?? CIVIC_CREDENTIAL_REGISTRY_MERKLE_DEPTH,
           leaf_index: input.leaf_index,
         })
         .select(CREDENTIAL_REGISTRY_COLUMNS)
@@ -146,13 +151,17 @@ export const createCredentialRegistryRepository = (
       return data;
     },
 
-    async getAcceptedRoot(root: string): Promise<CredentialRootRow | null> {
+    async getAcceptedRoot(
+      root: string,
+      merkleDepth: number = CIVIC_CREDENTIAL_REGISTRY_MERKLE_DEPTH,
+    ): Promise<CredentialRootRow | null> {
       const supabase = getSupabaseAdminClient();
 
       const { data, error } = await supabase
         .from("credential_roots")
         .select(CREDENTIAL_ROOT_COLUMNS)
         .eq("root", root)
+        .eq("merkle_depth", merkleDepth)
         .maybeSingle<CredentialRootRow>();
 
       if (error) {
@@ -191,7 +200,8 @@ export const createCredentialRegistryRepository = (
         .insert({
           root: input.root,
           previous_root: input.previous_root ?? null,
-          merkle_depth: input.merkle_depth ?? 24,
+          merkle_depth:
+            input.merkle_depth ?? CIVIC_CREDENTIAL_REGISTRY_MERKLE_DEPTH,
           leaf_count: input.leaf_count,
           latest_credential_registry_id:
             input.latest_credential_registry_id ?? null,

@@ -52,6 +52,7 @@ const productionVoteProofPublicInputsSchema = z
     pollPolicyHash: hex64Schema,
     credentialSchemaHash: hex64Schema,
     optionSetHash: hex64Schema,
+    optionCount: z.number().int().min(1).max(8),
     credentialRoot: hex64Schema,
     nullifier: hex64Schema,
     voteCommitment: hex64Schema,
@@ -105,6 +106,7 @@ const tallyProofPublicInputsSchema = z
     pollPolicyHash: hex64Schema,
     credentialSchemaHash: hex64Schema,
     optionSetHash: hex64Schema,
+    optionCount: z.number().int().min(1).max(8),
     nullifierRoot: hex64Schema,
     voteCommitmentRoot: hex64Schema,
     encryptedVoteRoot: hex64Schema,
@@ -914,6 +916,7 @@ const publicInputsMatch = (
   return (
     left.version === right.version &&
     left.optionSetHash === right.optionSetHash &&
+    left.optionCount === right.optionCount &&
     left.credentialRoot === right.credentialRoot &&
     left.voteCommitment === right.voteCommitment &&
     left.encryptedVoteHash === right.encryptedVoteHash &&

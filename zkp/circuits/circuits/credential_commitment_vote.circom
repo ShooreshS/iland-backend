@@ -1,6 +1,7 @@
 pragma circom 2.1.6;
 
 include "poseidon.circom";
+include "comparators.circom";
 
 template AssertBoolean() {
     signal input in;
@@ -15,6 +16,7 @@ template CredentialCommitmentVote(depth) {
     signal input pollPolicyHash;
     signal input credentialSchemaHash;
     signal input optionSetHash;
+    signal input optionCount;
     signal input credentialRoot;
     signal input nullifier;
     signal input voteCommitment;
@@ -32,6 +34,9 @@ template CredentialCommitmentVote(depth) {
     signal input credentialRootPathIndices[depth];
 
     component optionIndexBitIsBoolean[3];
+    component optionCountAtLeastOne = GreaterEqThan(4);
+    component optionCountAtMostMax = LessEqThan(4);
+    component optionIndexWithinOptions = LessThan(4);
 
     optionIndexBitIsBoolean[0] = AssertBoolean();
     optionIndexBitIsBoolean[1] = AssertBoolean();
@@ -41,6 +46,15 @@ template CredentialCommitmentVote(depth) {
     optionIndexBitIsBoolean[2].in <== optionIndexBits[2];
 
     optionIndex === optionIndexBits[0] + 2 * optionIndexBits[1] + 4 * optionIndexBits[2];
+    optionCountAtLeastOne.in[0] <== optionCount;
+    optionCountAtLeastOne.in[1] <== 1;
+    optionCountAtLeastOne.out === 1;
+    optionCountAtMostMax.in[0] <== optionCount;
+    optionCountAtMostMax.in[1] <== 8;
+    optionCountAtMostMax.out === 1;
+    optionIndexWithinOptions.in[0] <== optionIndex;
+    optionIndexWithinOptions.in[1] <== optionCount;
+    optionIndexWithinOptions.out === 1;
 
     component credentialCommitmentHasher = Poseidon(4);
     credentialCommitmentHasher.inputs[0] <== identitySecret;
@@ -100,9 +114,10 @@ component main {
         pollPolicyHash,
         credentialSchemaHash,
         optionSetHash,
+        optionCount,
         credentialRoot,
         nullifier,
         voteCommitment,
         encryptedVoteCommitment
     ]
-} = CredentialCommitmentVote(24);
+} = CredentialCommitmentVote(32);

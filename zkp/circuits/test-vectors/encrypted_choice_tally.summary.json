@@ -9,6 +9,7 @@
     "pollPolicyHash",
     "credentialSchemaHash",
     "optionSetHash",
+    "optionCount",
     "nullifierRoot",
     "voteCommitmentRoot",
     "encryptedVoteRoot",
@@ -347,5 +348,17 @@
     "0",
     "0",
     "0"
+  ],
+  "invalidVectors": [
+    {
+      "name": "out_of_range_option",
+      "input": "encrypted_choice_tally.invalid_out_of_range_option.input.json",
+      "expected": "witness_generation_fails"
+    },
+    {
+      "name": "encrypted_vote_commitment_mismatch",
+      "input": "encrypted_choice_tally.invalid_encrypted_vote_commitment_mismatch.input.json",
+      "expected": "witness_generation_fails"
+    }
   ]
 }

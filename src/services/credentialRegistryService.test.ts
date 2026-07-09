@@ -12,6 +12,7 @@ process.env.NODE_ENV = "test";
 process.env.AUTH_ENABLE_TRANSITIONAL_CRYPTO_BYPASS = "true";
 
 const {
+  CIVIC_CREDENTIAL_REGISTRY_MERKLE_DEPTH,
   buildCredentialRegistryMerkleMaterial,
   createCredentialRegistryService,
   deriveCredentialIdentityKeyHash,
@@ -100,7 +101,8 @@ const createMockCredentialRegistryRepository = () => {
               row.credential_schema_hash === input.credential_schema_hash) ||
             (row.verified_identity_id === input.verified_identity_id &&
               row.credential_schema_hash === input.credential_schema_hash) ||
-            (row.merkle_depth === (input.merkle_depth ?? 24) &&
+            (row.merkle_depth ===
+              (input.merkle_depth ?? CIVIC_CREDENTIAL_REGISTRY_MERKLE_DEPTH) &&
               row.leaf_index === input.leaf_index),
         )
       ) {
@@ -117,7 +119,8 @@ const createMockCredentialRegistryRepository = () => {
         credential_issuer_id: input.credential_issuer_id,
         commitment_scheme:
           input.commitment_scheme ?? "civicos-credential-commitment-v1",
-        merkle_depth: input.merkle_depth ?? 24,
+        merkle_depth:
+          input.merkle_depth ?? CIVIC_CREDENTIAL_REGISTRY_MERKLE_DEPTH,
         leaf_index: input.leaf_index,
         revoked_at: null,
         revocation_reason: null,
@@ -128,8 +131,15 @@ const createMockCredentialRegistryRepository = () => {
       return row;
     },
 
-    async getAcceptedRoot(root: string): Promise<CredentialRootRow | null> {
-      return rootRows.find((row) => row.root === root) || null;
+    async getAcceptedRoot(
+      root: string,
+      merkleDepth = CIVIC_CREDENTIAL_REGISTRY_MERKLE_DEPTH,
+    ): Promise<CredentialRootRow | null> {
+      return (
+        rootRows.find(
+          (row) => row.root === root && row.merkle_depth === merkleDepth,
+        ) || null
+      );
     },
 
     async getLatestRoot(merkleDepth: number): Promise<CredentialRootRow | null> {
@@ -151,7 +161,8 @@ const createMockCredentialRegistryRepository = () => {
         id: `credential-root-${rootRows.length + 1}`,
         root: input.root,
         previous_root: input.previous_root ?? null,
-        merkle_depth: input.merkle_depth ?? 24,
+        merkle_depth:
+          input.merkle_depth ?? CIVIC_CREDENTIAL_REGISTRY_MERKLE_DEPTH,
         leaf_count: input.leaf_count,
         latest_credential_registry_id:
           input.latest_credential_registry_id ?? null,
@@ -221,7 +232,6 @@ describe("credentialRegistryService", () => {
       credentialSchemaHash: hex("2"),
       claimsHash: hex("3"),
       credentialIssuerId: "did:civicos:issuer:v1",
-      merkleDepth: 3,
     };
 
     const issued = await service.issueCredentialRegistryEntry(input);
@@ -237,6 +247,23 @@ describe("credentialRegistryService", () => {
     await expect(
       service.isAcceptedCredentialRoot(issued.credentialRoot.root),
     ).resolves.toBe(true);
+  });
+
+  it("pins accepted credential roots to the current production depth", async () => {
+    const repository = createMockCredentialRegistryRepository();
+    const service = createCredentialRegistryService({ repository });
+    repository.rootRows.push({
+      id: "credential-root-stale",
+      root: hex("d"),
+      previous_root: null,
+      merkle_depth: 24,
+      leaf_count: 1,
+      latest_credential_registry_id: null,
+      solana_tx_signature: null,
+      created_at: FIXED_TIME,
+    });
+
+    await expect(service.isAcceptedCredentialRoot(hex("d"))).resolves.toBe(false);
   });
 
   it("rejects a different credential commitment for an existing identity", async () => {
