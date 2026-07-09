@@ -112,6 +112,22 @@ CIVICOS_GROTH16_MANIFEST_CIRCUITS=credential_commitment_vote npm run manifests
 The RC manifest is for devnet/internal testing only until a documented
 multi-contributor ceremony replaces it.
 
+To rebuild the full internal RC artifact set for both circuits, including the
+slow powers-of-tau files:
+
+```sh
+npm run clean
+CIVICOS_GROTH16_PTAU_POWERS=16,20 npm run ptau:rc
+npm run setup:rc
+npm run prove:dev
+npm run manifests
+npm run fixtures
+```
+
+This rewrites local build outputs, proof vectors, backend fixtures, and
+`src/zkp-artifacts` manifests. Do not run it while another process is editing
+or reviewing those generated files.
+
 Any older depth-24 RC vote `.zkey`, verifier key, manifest, or mobile bundle is
 superseded by the depth-32 contract and must not be enabled for production
 verification.

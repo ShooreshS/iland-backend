@@ -1,6 +1,6 @@
 # CivicOS Frozen Circuits V1
 
-Status: Phase 1 frozen contract, amended for depth 32 on 2026-07-09 before any production ceremony. Production Groth16 ceremony and pinned production artifacts are Phase 2.
+Status: Phase 1 frozen contract, amended for depth 32 on 2026-07-09 before any production ceremony. Internal RC Groth16 artifacts for both circuits now verify locally; production multi-contributor Groth16 ceremony and pinned production artifacts remain Phase 2 production work.
 
 ## Shared Decisions
 
@@ -119,6 +119,11 @@ Completed in Phase 1:
 Pending for Phase 2:
 
 - Run production multi-contributor Phase-2 ceremonies for both frozen circuits.
-- Generate fresh proving keys, verification keys, proof fixtures, and artifact manifests from this frozen contract.
-- Replace stale pre-freeze local fixture proofs.
+- Generate production proving keys, verification keys, proof fixtures, and artifact manifests from this frozen contract.
 - Record production verifier-key hashes, proving-key hashes, transcript hashes, mobile artifact size, and proving timing.
+
+Completed for internal RC/devnet testing:
+
+- `pot16_final.ptau` and `pot20_final.ptau` verify with `snarkjs powersoftau verify`.
+- Depth-32 vote and 64x8 tally zkeys, verifier keys, manifests, and proof fixtures were regenerated from this frozen contract.
+- Backend verifier tests accept the regenerated vote and tally proof fixtures.
