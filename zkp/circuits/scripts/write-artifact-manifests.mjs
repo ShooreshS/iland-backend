@@ -26,7 +26,7 @@ const circuits = Object.freeze([
     kind: "vote",
     name: "credential_commitment_vote",
     outputDir: "groth16-vote",
-    ptauPower: 14,
+    ptauPower: 16,
     circuitId: "civicos-groth16-vote-circuit-v1",
     publicInputSchemaVersion: "civicos-groth16-vote-public-inputs-v1",
     circuitParameters: {
@@ -40,7 +40,7 @@ const circuits = Object.freeze([
     kind: "tally",
     name: "encrypted_choice_tally",
     outputDir: "groth16-tally",
-    ptauPower: 19,
+    ptauPower: 20,
     circuitId: "civicos-groth16-tally-circuit-v1",
     publicInputSchemaVersion: "civicos-groth16-tally-public-inputs-v1",
     circuitParameters: {

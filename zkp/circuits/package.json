@@ -12,8 +12,10 @@
     "vectors": "node scripts/generate-test-vectors.mjs",
     "test:vectors": "node scripts/verify-test-vectors.mjs",
     "setup:dev": "node scripts/setup-dev-groth16.mjs",
+    "ptau:rc": "node scripts/prepare-rc-ptau.mjs",
     "setup:rc": "node scripts/setup-rc-groth16.mjs",
     "manifests": "node scripts/write-artifact-manifests.mjs",
+    "fixtures": "node scripts/write-proof-fixtures.mjs",
     "prove:dev": "node scripts/prove-dev.mjs",
     "test": "npm run vectors && npm run test:vectors"
   },

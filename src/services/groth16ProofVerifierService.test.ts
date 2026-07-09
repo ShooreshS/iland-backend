@@ -291,6 +291,17 @@ describe("groth16ProofVerifierService", () => {
       manifestHash: process.env.ZKP_GROTH16_VOTE_ARTIFACT_MANIFEST_HASH,
     };
 
+    const dir = mkdtempSync(join(tmpdir(), "civicos-groth16-stale-vote-"));
+    const staleManifest = {
+      ...fixtureManifest,
+    } as Record<string, unknown>;
+    delete staleManifest.circuitParameters;
+    const staleManifestPath = join(dir, "stale-vote.manifest.json");
+    writeFileSync(staleManifestPath, JSON.stringify(staleManifest, null, 2));
+    const staleManifestHash = hashGroth16ArtifactManifest(
+      fixtureManifest,
+    ).replace(/^./, (first) => (first === "0" ? "1" : "0"));
+
     try {
       process.env.ZKP_GROTH16_VOTE_VERIFIER_ENABLED = "true";
       process.env.ZKP_GROTH16_VOTE_CIRCUIT_ID = fixtureManifest.circuitId;
@@ -300,10 +311,8 @@ describe("groth16ProofVerifierService", () => {
         fixtureManifest.publicInputSchemaVersion;
       process.env.ZKP_GROTH16_VOTE_TRUSTED_SETUP_TRANSCRIPT_HASH =
         fixtureManifest.trustedSetupTranscriptHash;
-      process.env.ZKP_GROTH16_VOTE_ARTIFACT_MANIFEST_PATH =
-        fixtureManifestPath.pathname;
-      process.env.ZKP_GROTH16_VOTE_ARTIFACT_MANIFEST_HASH =
-        fixtureManifestHash;
+      process.env.ZKP_GROTH16_VOTE_ARTIFACT_MANIFEST_PATH = staleManifestPath;
+      process.env.ZKP_GROTH16_VOTE_ARTIFACT_MANIFEST_HASH = staleManifestHash;
 
       const config = getGroth16VerifierConfig();
       expect(config.voteArtifactManifestStatus).toBe("invalid");
@@ -331,6 +340,7 @@ describe("groth16ProofVerifierService", () => {
       );
       restore("ZKP_GROTH16_VOTE_ARTIFACT_MANIFEST_PATH", oldEnv.manifestPath);
       restore("ZKP_GROTH16_VOTE_ARTIFACT_MANIFEST_HASH", oldEnv.manifestHash);
+      rmSync(dir, { recursive: true, force: true });
     }
   });
 
@@ -450,13 +460,18 @@ describe("groth16ProofVerifierService", () => {
     }
   });
 
-  it("rejects the stale pre-freeze CredentialCommitmentVote proof fixture", () => {
-    expect(() =>
-      encodeGroth16VotePublicSignals(fixtureEnvelope.publicInputs),
-    ).toThrow("Groth16 public input optionCount is required.");
+  it("keeps the depth-32 CredentialCommitmentVote proof fixture aligned with public signals", () => {
+    expect(encodeGroth16VotePublicSignals(fixtureEnvelope.publicInputs)).toEqual(
+      JSON.parse(
+        readFileSync(
+          new URL("credential_commitment_vote.public.json", fixtureUrl),
+          "utf8",
+        ),
+      ),
+    );
   });
 
-  it("rejects the stale pre-freeze CredentialCommitmentVote fixture through the default verifier engine", async () => {
+  it("accepts the depth-32 CredentialCommitmentVote fixture through the default verifier engine", async () => {
     const registryRecord = buildGroth16VerifierKeyRegistryRecord(
       fixtureManifest,
       fixtureManifestHash,
@@ -495,12 +510,12 @@ describe("groth16ProofVerifierService", () => {
       },
     );
 
-    expect(result.ok).toBe(false);
-    if (!result.ok) {
-      expect(result.reason).toBe("PROOF_INVALID");
-      expect(result.message).toBe(
-        "Groth16 vote proof option count is missing or outside the v1 range.",
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.auditMaterial?.verifierKeyHash).toBe(
+        fixtureManifest.verifierKeyHash,
       );
+      expect(result.auditMaterial?.circuitId).toBe(fixtureManifest.circuitId);
     }
   });
 

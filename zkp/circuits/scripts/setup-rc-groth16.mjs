@@ -10,8 +10,8 @@ const contributionEntropy =
   process.env.CIVICOS_GROTH16_SETUP_ENTROPY ||
   "civicos-internal-release-candidate-not-production";
 const circuits = Object.freeze([
-  { name: "credential_commitment_vote", ptauPower: 14 },
-  { name: "encrypted_choice_tally", ptauPower: 19 },
+  { name: "credential_commitment_vote", ptauPower: 16 },
+  { name: "encrypted_choice_tally", ptauPower: 20 },
 ]);
 const selectedCircuitNames = new Set(
   (process.env.CIVICOS_GROTH16_SETUP_CIRCUITS || "")
@@ -28,9 +28,26 @@ const run = (command, args) => {
   });
 };
 
+const assertFileExists = (path) => {
+  if (!existsSync(resolve(packageRoot, path))) {
+    throw new Error(`${path} was not created.`);
+  }
+};
+
 mkdirSync(buildDir, { recursive: true });
 
-run("npm", ["run", "build:circuit"]);
+if (selectedCircuitNames.size === 1) {
+  const [selectedCircuitName] = selectedCircuitNames;
+  if (selectedCircuitName === "credential_commitment_vote") {
+    run("npm", ["run", "build:vote"]);
+  } else if (selectedCircuitName === "encrypted_choice_tally") {
+    run("npm", ["run", "build:tally"]);
+  } else {
+    throw new Error(`Unknown circuit selected for setup: ${selectedCircuitName}`);
+  }
+} else {
+  run("npm", ["run", "build:circuit"]);
+}
 
 for (const circuit of circuits) {
   if (selectedCircuitNames.size > 0 && !selectedCircuitNames.has(circuit.name)) {
@@ -50,6 +67,7 @@ for (const circuit of circuits) {
     ptauPath,
     `build/${circuit.name}_0000.zkey`,
   ]);
+  assertFileExists(`build/${circuit.name}_0000.zkey`);
   run(snarkjs, [
     "zkey",
     "contribute",
@@ -58,6 +76,7 @@ for (const circuit of circuits) {
     `--name=CivicOS internal RC ${circuit.name} zkey contribution`,
     `-e=${contributionEntropy}-${circuit.name}`,
   ]);
+  assertFileExists(`build/${circuit.name}_final.zkey`);
   run(snarkjs, [
     "zkey",
     "export",
@@ -65,6 +84,7 @@ for (const circuit of circuits) {
     `build/${circuit.name}_final.zkey`,
     `build/${circuit.name}.vkey.json`,
   ]);
+  assertFileExists(`build/${circuit.name}.vkey.json`);
 }
 
 console.log(
