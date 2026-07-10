@@ -38,6 +38,13 @@ export type ZkpSecurityPolicy = Readonly<{
     rotationPlanRequired: true;
     signsOnly: typeof ROOT_PUBLISHER_ACTIONS;
   }>;
+  registryGovernance: Readonly<{
+    registryAuthorityPublicKey: string | null;
+    rootPublisherPublicKey: string | null;
+    separateRootPublisherRequired: true;
+    separationSatisfied: boolean;
+    backendControlsRegistryAuthority: false;
+  }>;
   programUpgradeAuthority: Readonly<{
     programId: string;
     developerWalletAllowed: false;
@@ -84,7 +91,7 @@ export const getZkpSecurityPolicy = (): ZkpSecurityPolicy => {
     phase: 12,
     backendSigner: Object.freeze({
       role: "root_publisher_key",
-      rootPublisherPublicKey: env.solanaAudit.registryAuthority,
+      rootPublisherPublicKey: env.solanaAudit.rootPublisherPublicKey,
       feePayerPublicKey: feePolicy.feePayerPublicKey,
       transactionsEnabled: feePolicy.transactionsEnabled,
       privateKeyMaterialAcceptedByBackend: backendEnvFeePayerSecretConfigured,
@@ -98,6 +105,17 @@ export const getZkpSecurityPolicy = (): ZkpSecurityPolicy => {
       separateClusterKeysRequired: true,
       rotationPlanRequired: true,
       signsOnly: ROOT_PUBLISHER_ACTIONS,
+    }),
+    registryGovernance: Object.freeze({
+      registryAuthorityPublicKey: env.solanaAudit.registryAuthority,
+      rootPublisherPublicKey: env.solanaAudit.rootPublisherPublicKey,
+      separateRootPublisherRequired: true,
+      separationSatisfied: Boolean(
+        env.solanaAudit.registryAuthority &&
+          env.solanaAudit.rootPublisherPublicKey &&
+          env.solanaAudit.registryAuthority !== env.solanaAudit.rootPublisherPublicKey,
+      ),
+      backendControlsRegistryAuthority: false,
     }),
     programUpgradeAuthority: Object.freeze({
       programId: env.solanaAudit.programId,

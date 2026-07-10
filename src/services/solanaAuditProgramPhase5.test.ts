@@ -48,6 +48,7 @@ describe("Phase 5 Solana audit program scaffold", () => {
       "commit_roots",
       "finalize_poll",
       "pub struct PollRegistry",
+      "pub root_publisher: Pubkey",
       "pub struct PollAccount",
       "pub struct PollRootAccount",
       "pub struct FinalResultAccount",
@@ -78,6 +79,8 @@ describe("Phase 5 Solana audit program scaffold", () => {
     expect(source).toContain("now >= poll.opens_at");
     expect(source).not.toContain("now < poll.closes_at");
     expect(source).toContain("token_mint.is_some() == token_program.is_some()");
+    expect(source).toContain("root_publisher != ctx.accounts.authority.key()");
+    expect(source).toContain("has_one = root_publisher");
     expect(source).toContain(
       "final_vote_commitment_root == poll.latest_vote_commitment_root",
     );

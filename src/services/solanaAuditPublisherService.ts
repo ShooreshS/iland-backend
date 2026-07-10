@@ -64,6 +64,7 @@ export type SolanaAuditPublicationResult = Readonly<{
   rootCommitSignature: string | null;
   finalResultSignature: string | null;
   feePayerPublicKey: string;
+  rootPublisherPublicKey: string;
   explorerUrls: Readonly<{
     registry: string | null;
     pollRegistration: string | null;
@@ -297,6 +298,41 @@ const assertAnchorPdaAccount = (input: {
   }
 };
 
+const assertRegistryGovernance = (input: {
+  account: AccountInfo<Buffer>;
+  registryAuthority: PublicKey | null;
+  rootPublisher: PublicKey;
+}) => {
+  const data = Buffer.from(input.account.data);
+  const offset = anchorAccountDiscriminator("PollRegistry").length;
+  const authorityOffset = offset;
+  const rootPublisherOffset = authorityOffset + 32;
+  const requiredLength = rootPublisherOffset + 32;
+
+  if (data.length < requiredLength) {
+    throw new Error("Solana registry account is too small for Phase 8 governance.");
+  }
+
+  const authority = new PublicKey(
+    data.subarray(authorityOffset, authorityOffset + 32),
+  );
+  const rootPublisher = new PublicKey(
+    data.subarray(rootPublisherOffset, rootPublisherOffset + 32),
+  );
+
+  if (input.registryAuthority && !authority.equals(input.registryAuthority)) {
+    throw new Error(
+      `Solana registry authority mismatch: expected ${input.registryAuthority.toBase58()}, found ${authority.toBase58()}.`,
+    );
+  }
+
+  if (!rootPublisher.equals(input.rootPublisher)) {
+    throw new Error(
+      `Solana registry root publisher mismatch: expected ${input.rootPublisher.toBase58()}, found ${rootPublisher.toBase58()}.`,
+    );
+  }
+};
+
 const recoverExistingAccountSignature = async (input: {
   connection: SolanaAuditConnection;
   address: PublicKey;
@@ -368,6 +404,7 @@ const buildInitializeRegistryInstruction = (input: {
   registryAddress: PublicKey;
   authority: PublicKey;
   payer: PublicKey;
+  rootPublisher: PublicKey;
   solanaAuditEnv: SolanaAuditEnv;
 }): TransactionInstruction => {
   const treasury = input.solanaAuditEnv.treasury
@@ -393,6 +430,7 @@ const buildInitializeRegistryInstruction = (input: {
       treasury.toBuffer(),
       writeOptionPubkey(tokenMint),
       writeOptionPubkey(tokenProgram),
+      input.rootPublisher.toBuffer(),
     ]),
   });
 };
@@ -401,7 +439,7 @@ const buildCreatePollInstruction = (input: {
   programId: PublicKey;
   registryAddress: PublicKey;
   pollAddress: PublicKey;
-  authority: PublicKey;
+  rootPublisher: PublicKey;
   pollIdHash: Buffer;
   pollPolicyHash: Buffer;
   credentialSchemaHash: Buffer;
@@ -413,7 +451,7 @@ const buildCreatePollInstruction = (input: {
     keys: [
       { pubkey: input.registryAddress, isSigner: false, isWritable: false },
       { pubkey: input.pollAddress, isSigner: false, isWritable: true },
-      { pubkey: input.authority, isSigner: true, isWritable: true },
+      { pubkey: input.rootPublisher, isSigner: true, isWritable: true },
       { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
     ],
     data: Buffer.concat([
@@ -431,7 +469,7 @@ const buildCommitRootsInstruction = (input: {
   registryAddress: PublicKey;
   pollAddress: PublicKey;
   pollRootAddress: PublicKey;
-  authority: PublicKey;
+  rootPublisher: PublicKey;
   batchIndex: number;
   previousNullifierRoot: Buffer;
   nullifierRoot: Buffer;
@@ -447,7 +485,7 @@ const buildCommitRootsInstruction = (input: {
       { pubkey: input.registryAddress, isSigner: false, isWritable: false },
       { pubkey: input.pollAddress, isSigner: false, isWritable: true },
       { pubkey: input.pollRootAddress, isSigner: false, isWritable: true },
-      { pubkey: input.authority, isSigner: true, isWritable: true },
+      { pubkey: input.rootPublisher, isSigner: true, isWritable: true },
       { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
     ],
     data: Buffer.concat([
@@ -468,7 +506,7 @@ const buildFinalizePollInstruction = (input: {
   registryAddress: PublicKey;
   pollAddress: PublicKey;
   finalResultAddress: PublicKey;
-  authority: PublicKey;
+  rootPublisher: PublicKey;
   voteCommitmentRoot: Buffer;
   nullifierRoot: Buffer;
   encryptedVoteRoot: Buffer;
@@ -481,7 +519,7 @@ const buildFinalizePollInstruction = (input: {
       { pubkey: input.registryAddress, isSigner: false, isWritable: false },
       { pubkey: input.pollAddress, isSigner: false, isWritable: true },
       { pubkey: input.finalResultAddress, isSigner: false, isWritable: true },
-      { pubkey: input.authority, isSigner: true, isWritable: true },
+      { pubkey: input.rootPublisher, isSigner: true, isWritable: true },
       { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
     ],
     data: Buffer.concat([
@@ -544,6 +582,25 @@ export const createSolanaAuditPublisherService = (
       const connection = resolveConnection();
       const signer = resolveFeePayer();
       const programId = new PublicKey(solanaAuditEnv.programId);
+      const rootPublisher = solanaAuditEnv.rootPublisherPublicKey
+        ? new PublicKey(solanaAuditEnv.rootPublisherPublicKey)
+        : signer.publicKey;
+      const registryAuthority = solanaAuditEnv.registryAuthority
+        ? new PublicKey(solanaAuditEnv.registryAuthority)
+        : signer.publicKey;
+
+      if (!rootPublisher.equals(signer.publicKey)) {
+        throw new Error(
+          "Configured Solana audit root publisher does not match the backend signing key.",
+        );
+      }
+
+      if (registryAuthority.equals(rootPublisher)) {
+        throw new Error(
+          "Solana audit registry authority and root publisher must be different keys.",
+        );
+      }
+
       const programAccount = await connection.getAccountInfo(programId);
       assertProgramAccount(programAccount, programId, solanaAuditEnv.cluster);
 
@@ -572,7 +629,18 @@ export const createSolanaAuditPublisherService = (
           programId,
           label: "registry",
         });
+        assertRegistryGovernance({
+          account: registryAccount,
+          registryAuthority,
+          rootPublisher,
+        });
       } else {
+        if (!registryAuthority.equals(signer.publicKey)) {
+          throw new Error(
+            "Solana audit registry is not initialized. Initialize it externally with SOLANA_AUDIT_REGISTRY_AUTHORITY before backend publication.",
+          );
+        }
+
         registrySignature = await sendTransaction({
           connection,
           signer,
@@ -581,8 +649,9 @@ export const createSolanaAuditPublisherService = (
             buildInitializeRegistryInstruction({
               programId,
               registryAddress,
-              authority: signer.publicKey,
+              authority: registryAuthority,
               payer: signer.publicKey,
+              rootPublisher,
               solanaAuditEnv,
             }),
           ],
@@ -609,7 +678,7 @@ export const createSolanaAuditPublisherService = (
               programId,
               registryAddress,
               pollAddress,
-              authority: signer.publicKey,
+              rootPublisher,
               pollIdHash,
               pollPolicyHash: hex32(input.poll.poll_policy_hash ?? ZERO_ROOT),
               credentialSchemaHash: hex32(
@@ -660,7 +729,7 @@ export const createSolanaAuditPublisherService = (
               registryAddress,
               pollAddress,
               pollRootAddress: batchRootAddress,
-              authority: signer.publicKey,
+              rootPublisher,
               batchIndex: batchCommit.batchIndex,
               previousNullifierRoot: hex32(batchCommit.previousNullifierRoot),
               nullifierRoot: hex32(batchCommit.nullifierRoot),
@@ -711,7 +780,7 @@ export const createSolanaAuditPublisherService = (
                 registryAddress,
                 pollAddress,
                 finalResultAddress,
-                authority: signer.publicKey,
+                rootPublisher,
                 voteCommitmentRoot: hex32(input.finalVoteCommitmentRoot),
                 nullifierRoot: hex32(input.finalNullifierRoot),
                 encryptedVoteRoot: hex32(input.finalEncryptedVoteRoot),
@@ -738,6 +807,7 @@ export const createSolanaAuditPublisherService = (
         rootCommitSignature,
         finalResultSignature,
         feePayerPublicKey: signer.publicKey.toBase58(),
+        rootPublisherPublicKey: rootPublisher.toBase58(),
         explorerUrls: Object.freeze({
           registry: buildExplorerUrl(registrySignature, solanaAuditEnv),
           pollRegistration: buildExplorerUrl(

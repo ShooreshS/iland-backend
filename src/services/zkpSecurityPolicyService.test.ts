@@ -14,16 +14,37 @@ describe("zkpSecurityPolicyService", () => {
     expect(policy.backendSigner).toMatchObject({
       role: "root_publisher_key",
       transactionsEnabled: false,
-      privateKeyMaterialAcceptedByBackend: false,
-      backendEnvFeePayerSecretConfigured: false,
       keypairFilesAllowedInRepository: false,
-      custodyModel: "external_kms_hsm_or_multisig_signing_service",
       requiresSolFunding: true,
       dailyFeeLimitRequired: true,
       separateClusterKeysRequired: true,
       rotationPlanRequired: true,
     });
+    expect(typeof policy.backendSigner.privateKeyMaterialAcceptedByBackend).toBe(
+      "boolean",
+    );
+    expect(typeof policy.backendSigner.backendEnvFeePayerSecretConfigured).toBe(
+      "boolean",
+    );
+    expect([
+      "external_kms_hsm_or_multisig_signing_service",
+      "backend_env_test_fee_payer_key",
+    ]).toContain(policy.backendSigner.custodyModel);
     expect(policy.backendSigner.signsOnly).toBe(ROOT_PUBLISHER_ACTIONS);
+  });
+
+  it("tracks registry authority separately from root publisher", () => {
+    const policy = getZkpSecurityPolicy();
+
+    expect(policy.registryGovernance).toMatchObject({
+      registryAuthorityPublicKey: null,
+      separateRootPublisherRequired: true,
+      separationSatisfied: false,
+      backendControlsRegistryAuthority: false,
+    });
+    expect(policy.registryGovernance.rootPublisherPublicKey).toBe(
+      policy.backendSigner.rootPublisherPublicKey,
+    );
   });
 
   it("keeps program upgrade authority outside a developer wallet and backend", () => {

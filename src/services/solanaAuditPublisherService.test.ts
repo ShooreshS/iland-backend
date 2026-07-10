@@ -62,7 +62,11 @@ const createPoll = (overrides: Partial<PollRow> = {}): PollRow => ({
   ...overrides,
 });
 
-const createAuditEnv = (programId: PublicKey, feePayer: PublicKey) =>
+const createAuditEnv = (
+  programId: PublicKey,
+  feePayer: PublicKey,
+  registryAuthority: PublicKey,
+) =>
   ({
     cluster: "devnet",
     rpcUrl: "https://api.devnet.solana.com",
@@ -71,7 +75,8 @@ const createAuditEnv = (programId: PublicKey, feePayer: PublicKey) =>
     tokenProgram: "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb",
     tokenSymbol: "SHOLAN",
     tokenDecimals: 9,
-    registryAuthority: null,
+    registryAuthority: registryAuthority.toBase58(),
+    rootPublisherPublicKey: feePayer.toBase58(),
     treasury: null,
     feePayerPublicKey: feePayer.toBase58(),
     feePayerSecretKey: null,
@@ -89,13 +94,22 @@ const createAccountInfo = (input: {
   owner: PublicKey;
   accountName: string;
   executable?: boolean;
+  registryAuthority?: PublicKey;
+  rootPublisher?: PublicKey;
 }): AccountInfo<Buffer> => ({
   data: input.executable
     ? Buffer.alloc(0)
-    : Buffer.concat([
-        anchorAccountDiscriminator(input.accountName),
-        Buffer.alloc(16),
-      ]),
+    : input.accountName === "PollRegistry"
+      ? Buffer.concat([
+          anchorAccountDiscriminator(input.accountName),
+          (input.registryAuthority ?? Keypair.generate().publicKey).toBuffer(),
+          (input.rootPublisher ?? Keypair.generate().publicKey).toBuffer(),
+          Buffer.alloc(64),
+        ])
+      : Buffer.concat([
+          anchorAccountDiscriminator(input.accountName),
+          Buffer.alloc(16),
+        ]),
   executable: input.executable ?? false,
   lamports: 1,
   owner: input.owner,
@@ -153,6 +167,7 @@ const createConnection = (input: {
 describe("Phase 7 Solana audit publisher", () => {
   it("recovers an existing root PDA signature so DB retries can complete", async () => {
     const feePayer = Keypair.generate();
+    const registryAuthority = Keypair.generate().publicKey;
     const programId = Keypair.generate().publicKey;
     const poll = createPoll();
     const pollIdHash = derivePollIdHash(poll.id);
@@ -179,7 +194,12 @@ describe("Phase 7 Solana audit publisher", () => {
       ],
       [
         registryAddress.toBase58(),
-        createAccountInfo({ owner: programId, accountName: "PollRegistry" }),
+        createAccountInfo({
+          owner: programId,
+          accountName: "PollRegistry",
+          registryAuthority,
+          rootPublisher: feePayer.publicKey,
+        }),
       ],
       [
         pollAddress.toBase58(),
@@ -193,7 +213,11 @@ describe("Phase 7 Solana audit publisher", () => {
     const sentLabels: string[] = [];
     const signatureLookups: string[] = [];
     const service = createSolanaAuditPublisherService({
-      solanaAuditEnv: createAuditEnv(programId, feePayer.publicKey),
+      solanaAuditEnv: createAuditEnv(
+        programId,
+        feePayer.publicKey,
+        registryAuthority,
+      ),
       getBackendFeePayer: () => feePayer,
       getConnection: () =>
         createConnection({
@@ -240,6 +264,7 @@ describe("Phase 7 Solana audit publisher", () => {
 
   it("rejects an existing root PDA that is not owned by the audit program", async () => {
     const feePayer = Keypair.generate();
+    const registryAuthority = Keypair.generate().publicKey;
     const programId = Keypair.generate().publicKey;
     const wrongOwner = Keypair.generate().publicKey;
     const poll = createPoll();
@@ -267,7 +292,12 @@ describe("Phase 7 Solana audit publisher", () => {
       ],
       [
         registryAddress.toBase58(),
-        createAccountInfo({ owner: programId, accountName: "PollRegistry" }),
+        createAccountInfo({
+          owner: programId,
+          accountName: "PollRegistry",
+          registryAuthority,
+          rootPublisher: feePayer.publicKey,
+        }),
       ],
       [
         pollAddress.toBase58(),
@@ -279,7 +309,11 @@ describe("Phase 7 Solana audit publisher", () => {
       ],
     ]);
     const service = createSolanaAuditPublisherService({
-      solanaAuditEnv: createAuditEnv(programId, feePayer.publicKey),
+      solanaAuditEnv: createAuditEnv(
+        programId,
+        feePayer.publicKey,
+        registryAuthority,
+      ),
       getBackendFeePayer: () => feePayer,
       getConnection: () =>
         createConnection({

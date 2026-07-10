@@ -19,10 +19,10 @@ The source-declared program id is the current local deployment key public key. B
 
 ## Instructions
 
-- `initialize_registry`: creates the global registry PDA and sets signer authority/treasury/token mint/token-program metadata.
-- `create_poll`: creates a poll PDA keyed by `poll_id_hash` and stores frozen `poll_policy_hash` / `credential_schema_hash`.
-- `commit_roots`: appends a batch root account, verifies previous nullifier / vote-commitment / encrypted-vote roots and next batch index, and advances the poll latest roots. Commits are allowed after the poll opens and before finalization, so CivicOS can delay publication until result release.
-- `finalize_poll`: stores final vote/nullifier/encrypted-vote roots and the final result hash after the poll closes.
+- `initialize_registry`: creates the global registry PDA and sets signer registry authority, dedicated root publisher, treasury, and token mint/token-program metadata. Registry authority and root publisher must be different keys.
+- `create_poll`: creates a poll PDA keyed by `poll_id_hash` and stores frozen `poll_policy_hash` / `credential_schema_hash`. This is signed by the registry's `root_publisher`.
+- `commit_roots`: appends a batch root account, verifies previous nullifier / vote-commitment / encrypted-vote roots and next batch index, and advances the poll latest roots. This is signed by the registry's `root_publisher`. Commits are allowed after the poll opens and before finalization, so CivicOS can delay publication until result release.
+- `finalize_poll`: stores final vote/nullifier/encrypted-vote roots and the final result hash after the poll closes. This is signed by the registry's `root_publisher`.
 
 ## Minimal Mainnet Footprint
 
@@ -33,7 +33,7 @@ never write to Solana. The only on-chain writes are audit anchors:
 | Operation | Frequency | What it creates |
 | --- | --- | --- |
 | Program deploy | once, plus rare reviewed upgrades | the `civicos_audit` program |
-| `initialize_registry` | once per deployed audit program | registry PDA with authority, treasury, and SHOLAN metadata |
+| `initialize_registry` | once per deployed audit program | registry PDA with registry authority, root publisher, treasury, and SHOLAN metadata |
 | `create_poll` | one per poll | poll PDA with policy/schema hashes and voting window |
 | `commit_roots` | one per sealed 64-vote batch | chained root PDA for nullifier, vote-commitment, and encrypted-vote roots |
 | `finalize_poll` | one per poll | final result PDA with result hash and tally proof hash |
@@ -58,7 +58,8 @@ Deployment and root-publisher signing are intentionally not automated here. Do n
 
 ## Phase 12 Security
 
-- Root publishing must use a dedicated `root_publisher_key` controlled through external KMS/HSM or multisig signing-service custody.
+- Root publishing must use a dedicated `root_publisher_key` controlled through external KMS/HSM or multisig signing-service custody. It must not be the registry authority or program upgrade authority.
+- Registry authority initializes and governs registry configuration. It is not the key used for recurring root publication.
 - Do not commit Solana keypair files or private-key material. The backend records only public signer metadata until transaction publication is explicitly enabled.
 - Program upgrade authority must not remain with a single developer wallet. Use multisig, a timelock where possible, public upgrade announcements, and versioned program IDs.
 - Backend audit decisions are prepared for hash-linked logging through `backend_audit_events`; future root publication can anchor `audit_log_root` alongside poll audit roots.

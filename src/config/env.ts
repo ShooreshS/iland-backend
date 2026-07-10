@@ -102,6 +102,7 @@ const parsed = z
     SOLANA_AUDIT_TOKEN_PROGRAM: solanaPublicKeySchema.optional(),
     SOLANA_AUDIT_PROGRAM_ID: solanaPublicKeySchema.optional(),
     SOLANA_AUDIT_REGISTRY_AUTHORITY: solanaPublicKeySchema.optional(),
+    SOLANA_AUDIT_ROOT_PUBLISHER_PUBLIC_KEY: solanaPublicKeySchema.optional(),
     SOLANA_AUDIT_TREASURY: solanaPublicKeySchema.optional(),
     SOLANA_AUDIT_FEE_PAYER_PUBLIC_KEY: solanaPublicKeySchema.optional(),
     SOLANA_AUDIT_FEE_PAYER_SECRET_KEY: z.string().min(1).optional(),
@@ -233,8 +234,33 @@ const parsed = z
       input.SOLANA_AUDIT_TRANSACTIONS_ENABLED !== undefined
         ? toBoolean(input.SOLANA_AUDIT_TRANSACTIONS_ENABLED)
         : false;
+    const solanaAuditRootPublisherPublicKey =
+      input.SOLANA_AUDIT_ROOT_PUBLISHER_PUBLIC_KEY ??
+      input.SOLANA_AUDIT_FEE_PAYER_PUBLIC_KEY;
+
+    if (
+      input.SOLANA_AUDIT_REGISTRY_AUTHORITY &&
+      solanaAuditRootPublisherPublicKey &&
+      input.SOLANA_AUDIT_REGISTRY_AUTHORITY === solanaAuditRootPublisherPublicKey
+    ) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        message:
+          "SOLANA_AUDIT_REGISTRY_AUTHORITY and SOLANA_AUDIT_ROOT_PUBLISHER_PUBLIC_KEY must be different.",
+        path: ["SOLANA_AUDIT_ROOT_PUBLISHER_PUBLIC_KEY"],
+      });
+    }
 
     if (solanaAuditTransactionsEnabled) {
+      if (!input.SOLANA_AUDIT_REGISTRY_AUTHORITY) {
+        context.addIssue({
+          code: z.ZodIssueCode.custom,
+          message:
+            "SOLANA_AUDIT_REGISTRY_AUTHORITY is required when Solana audit transactions are enabled.",
+          path: ["SOLANA_AUDIT_REGISTRY_AUTHORITY"],
+        });
+      }
+
       if (!input.SOLANA_AUDIT_FEE_PAYER_PUBLIC_KEY) {
         context.addIssue({
           code: z.ZodIssueCode.custom,
@@ -250,6 +276,20 @@ const parsed = z
           message:
             "SOLANA_AUDIT_FEE_PAYER_SECRET_KEY is required when Solana audit transactions are enabled.",
           path: ["SOLANA_AUDIT_FEE_PAYER_SECRET_KEY"],
+        });
+      }
+
+      if (
+        input.SOLANA_AUDIT_ROOT_PUBLISHER_PUBLIC_KEY &&
+        input.SOLANA_AUDIT_FEE_PAYER_PUBLIC_KEY &&
+        input.SOLANA_AUDIT_ROOT_PUBLISHER_PUBLIC_KEY !==
+          input.SOLANA_AUDIT_FEE_PAYER_PUBLIC_KEY
+      ) {
+        context.addIssue({
+          code: z.ZodIssueCode.custom,
+          message:
+            "SOLANA_AUDIT_ROOT_PUBLISHER_PUBLIC_KEY must match SOLANA_AUDIT_FEE_PAYER_PUBLIC_KEY until an external root-publisher signing service is integrated.",
+          path: ["SOLANA_AUDIT_ROOT_PUBLISHER_PUBLIC_KEY"],
         });
       }
 
@@ -490,6 +530,9 @@ const parsed = z
     SOLANA_AUDIT_REGISTRY_AUTHORITY: emptyToUndefined(
       process.env.SOLANA_AUDIT_REGISTRY_AUTHORITY,
     ),
+    SOLANA_AUDIT_ROOT_PUBLISHER_PUBLIC_KEY: emptyToUndefined(
+      process.env.SOLANA_AUDIT_ROOT_PUBLISHER_PUBLIC_KEY,
+    ),
     SOLANA_AUDIT_TREASURY: emptyToUndefined(process.env.SOLANA_AUDIT_TREASURY),
     SOLANA_AUDIT_FEE_PAYER_PUBLIC_KEY: emptyToUndefined(
       process.env.SOLANA_AUDIT_FEE_PAYER_PUBLIC_KEY,
@@ -721,6 +764,10 @@ export const env = Object.freeze({
     tokenSymbol: SHOLAN_TOKEN_DEFAULTS.symbol,
     tokenDecimals: SHOLAN_TOKEN_DEFAULTS.decimals,
     registryAuthority: parsed.SOLANA_AUDIT_REGISTRY_AUTHORITY ?? null,
+    rootPublisherPublicKey:
+      parsed.SOLANA_AUDIT_ROOT_PUBLISHER_PUBLIC_KEY ??
+      parsed.SOLANA_AUDIT_FEE_PAYER_PUBLIC_KEY ??
+      null,
     treasury: parsed.SOLANA_AUDIT_TREASURY ?? null,
     feePayerPublicKey: parsed.SOLANA_AUDIT_FEE_PAYER_PUBLIC_KEY ?? null,
     feePayerSecretKey: parsed.SOLANA_AUDIT_FEE_PAYER_SECRET_KEY ?? null,

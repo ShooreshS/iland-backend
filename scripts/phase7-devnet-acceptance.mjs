@@ -67,6 +67,9 @@ const programId = new PublicKey(
   optionalEnv("SOLANA_AUDIT_PROGRAM_ID") || DEFAULT_PROGRAM_ID,
 );
 const feePayerPublicKey = optionalEnv("SOLANA_AUDIT_FEE_PAYER_PUBLIC_KEY");
+const registryAuthority = optionalEnv("SOLANA_AUDIT_REGISTRY_AUTHORITY");
+const rootPublisherPublicKey =
+  optionalEnv("SOLANA_AUDIT_ROOT_PUBLISHER_PUBLIC_KEY") || feePayerPublicKey;
 
 const connection = new Connection(rpcUrl, "confirmed");
 const programAccount = await connection.getAccountInfo(programId);
@@ -86,6 +89,21 @@ console.log(`  cluster=${cluster}`);
 console.log(`  rpcUrl=${rpcUrl}`);
 console.log(`  programId=${programId.toBase58()}`);
 console.log(`  programAccountDataBytes=${programAccount.data.length}`);
+if (registryAuthority) {
+  console.log(`  registryAuthority=${registryAuthority}`);
+}
+if (rootPublisherPublicKey) {
+  console.log(`  rootPublisher=${rootPublisherPublicKey}`);
+}
+if (
+  registryAuthority &&
+  rootPublisherPublicKey &&
+  registryAuthority === rootPublisherPublicKey
+) {
+  throw new Error(
+    "Phase 8 governance requires SOLANA_AUDIT_REGISTRY_AUTHORITY and SOLANA_AUDIT_ROOT_PUBLISHER_PUBLIC_KEY to be different.",
+  );
+}
 
 if (feePayerPublicKey) {
   const balanceLamports = await connection.getBalance(

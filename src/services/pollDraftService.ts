@@ -389,7 +389,8 @@ const createEditabilityResult = (
     return {
       editable: false,
       errorCode: "POLL_NOT_EDITABLE",
-      message: "Only polls in draft state can be edited.",
+      message:
+        "Published poll policy is frozen. Create a new poll/version for changes.",
       voteCount,
     };
   }
@@ -580,19 +581,37 @@ export const pollDraftService = {
       return contractFailure;
     }
 
-    const createdPoll = await pollRepository.insert(
-      buildPollInsertPayload(
-        pollId,
-        normalized.data,
-        viewerUserId,
-        buildCreateSlug(normalized.data.title),
-        now,
-        null,
-        optionSetHash,
-      ),
+    const finalPollPayload = buildPollInsertPayload(
+      pollId,
+      normalized.data,
+      viewerUserId,
+      buildCreateSlug(normalized.data.title),
+      now,
+      null,
+      optionSetHash,
+    );
+    const stagedPollPayload =
+      finalPollPayload.status === "draft"
+        ? finalPollPayload
+        : { ...finalPollPayload, status: "draft" as const };
+
+    const stagedPoll = await pollRepository.insert(
+      stagedPollPayload,
     );
 
     const createdOptions = await pollRepository.insertOptions(optionRows);
+    const createdPoll =
+      finalPollPayload.status === "draft"
+        ? stagedPoll
+        : await pollRepository.updateById(pollId, finalPollPayload);
+
+    if (!createdPoll) {
+      return {
+        success: false,
+        errorCode: "POLL_NOT_FOUND",
+        message: "The poll could not be finalized after option staging.",
+      };
+    }
 
     return {
       success: true,

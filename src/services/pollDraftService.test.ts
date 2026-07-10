@@ -201,6 +201,74 @@ describe("pollDraftService ZKP audit material", () => {
     }
   });
 
+  it("stages direct active poll creation as draft before freezing policy", async () => {
+    const calls: string[] = [];
+    let insertedPoll: NewPollRow | null = null;
+    let finalizedPoll: NewPollRow | null = null;
+
+    const restoreFns = [
+      patchMethod(pollRepository, "insert", async (input: NewPollRow) => {
+        calls.push(`insert:${input.status}`);
+        insertedPoll = input;
+        return rowFromNewPoll(input);
+      }),
+      patchMethod(
+        pollRepository,
+        "insertOptions",
+        async (options: NewPollOptionRow[]) => {
+          calls.push("insertOptions");
+          return options.map((option, index) =>
+            createOption({
+              id: option.id || `option-${index + 1}`,
+              poll_id: option.poll_id,
+              label: option.label,
+              description: option.description,
+              color: option.color,
+              display_order: option.display_order,
+              is_active: option.is_active,
+              created_at: option.created_at || FIXED_TIME,
+            }),
+          );
+        },
+      ),
+      patchMethod(pollRepository, "updateById", async (_pollId, input) => {
+        calls.push(`update:${input.status}`);
+        finalizedPoll = input;
+        return rowFromNewPoll(input);
+      }),
+    ];
+
+    try {
+      const result = await pollDraftService.createPoll(
+        {
+          title: "Direct active poll",
+          options: ["Yes", "No"],
+          eligibilityRule: {
+            requiresVerifiedIdentity: true,
+          },
+        },
+        "creator-1",
+      );
+
+      expect(result.success).toBe(true);
+      expect(calls).toEqual(["insert:draft", "insertOptions", "update:active"]);
+      const stagedPayload = insertedPoll as NewPollRow | null;
+      const finalizedPayload = finalizedPoll as NewPollRow | null;
+      if (!stagedPayload || !finalizedPayload) {
+        throw new Error("Expected staged and finalized poll payloads.");
+      }
+      expect(stagedPayload.status).toBe("draft");
+      expect(finalizedPayload.status).toBe("active");
+      expect(stagedPayload.poll_policy_hash).toBe(
+        finalizedPayload.poll_policy_hash,
+      );
+      expect(stagedPayload.option_set_hash).toBe(finalizedPayload.option_set_hash);
+      expect(result.poll?.status).toBe("active");
+    } finally {
+      restoreFns.reverse().forEach((restore) => restore());
+    }
+  });
+
   it("rejects production ZKP poll creation without an encryption key id", async () => {
     const result = await pollDraftService.createPoll(
       {
@@ -349,6 +417,38 @@ describe("pollDraftService ZKP audit material", () => {
       ]);
       expect(result.poll.pollPolicyHash).toBe(pollPolicyHash);
       expect(result.poll.optionSetHash).toBe(optionSetHash);
+    } finally {
+      restoreFns.reverse().forEach((restore) => restore());
+    }
+  });
+
+  it("rejects edits to an active poll even before votes exist", async () => {
+    const existingPoll = createPoll({
+      id: "44444444-4444-4444-8444-444444444444",
+      status: "active",
+    });
+
+    const restoreFns = [
+      patchMethod(pollRepository, "getById", async () => existingPoll),
+      patchMethod(pollRepository, "getOptionsByPollId", async () => []),
+      patchMethod(voteRepository, "countByPollId", async () => 0),
+    ];
+
+    try {
+      const result = await pollDraftService.updateDraftPoll(
+        {
+          pollId: existingPoll.id,
+          title: "Changed",
+          options: ["A", "B"],
+        },
+        "creator-1",
+      );
+
+      expect(result).toMatchObject({
+        success: false,
+        errorCode: "POLL_NOT_EDITABLE",
+      });
+      expect(result.message).toContain("policy is frozen");
     } finally {
       restoreFns.reverse().forEach((restore) => restore());
     }

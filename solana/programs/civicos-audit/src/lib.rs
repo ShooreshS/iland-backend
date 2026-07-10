@@ -13,14 +13,20 @@ pub mod civicos_audit {
         treasury: Pubkey,
         token_mint: Option<Pubkey>,
         token_program: Option<Pubkey>,
+        root_publisher: Pubkey,
     ) -> Result<()> {
         require!(
             token_mint.is_some() == token_program.is_some(),
             AuditError::InvalidTokenConfig
         );
+        require!(
+            root_publisher != ctx.accounts.authority.key(),
+            AuditError::AuthoritySeparationRequired
+        );
 
         let registry = &mut ctx.accounts.registry;
         registry.authority = ctx.accounts.authority.key();
+        registry.root_publisher = root_publisher;
         registry.treasury = treasury;
         registry.token_mint = token_mint;
         registry.token_program = token_program;
@@ -41,7 +47,7 @@ pub mod civicos_audit {
         let poll = &mut ctx.accounts.poll;
         poll.registry = ctx.accounts.registry.key();
         poll.poll_id_hash = poll_id_hash;
-        poll.creator = ctx.accounts.authority.key();
+        poll.creator = ctx.accounts.root_publisher.key();
         poll.poll_policy_hash = poll_policy_hash;
         poll.credential_schema_hash = credential_schema_hash;
         poll.opens_at = opens_at;
@@ -112,7 +118,7 @@ pub mod civicos_audit {
         poll_root.previous_encrypted_vote_root = previous_encrypted_vote_root;
         poll_root.encrypted_vote_root = encrypted_vote_root;
         poll_root.accepted_count = accepted_count;
-        poll_root.submitted_by = ctx.accounts.authority.key();
+        poll_root.submitted_by = ctx.accounts.root_publisher.key();
         poll_root.submitted_at = now;
         poll_root.bump = ctx.bumps.poll_root;
         Ok(())
@@ -179,19 +185,19 @@ pub struct CreatePoll<'info> {
     #[account(
         seeds = [b"registry"],
         bump = registry.bump,
-        has_one = authority @ AuditError::Unauthorized
+        has_one = root_publisher @ AuditError::Unauthorized
     )]
     pub registry: Account<'info, PollRegistry>,
     #[account(
         init,
-        payer = authority,
+        payer = root_publisher,
         space = 8 + PollAccount::LEN,
         seeds = [b"poll", poll_id_hash.as_ref()],
         bump
     )]
     pub poll: Account<'info, PollAccount>,
     #[account(mut)]
-    pub authority: Signer<'info>,
+    pub root_publisher: Signer<'info>,
     pub system_program: Program<'info, System>,
 }
 
@@ -201,7 +207,7 @@ pub struct CommitRoots<'info> {
     #[account(
         seeds = [b"registry"],
         bump = registry.bump,
-        has_one = authority @ AuditError::Unauthorized
+        has_one = root_publisher @ AuditError::Unauthorized
     )]
     pub registry: Account<'info, PollRegistry>,
     #[account(
@@ -213,14 +219,14 @@ pub struct CommitRoots<'info> {
     pub poll: Account<'info, PollAccount>,
     #[account(
         init,
-        payer = authority,
+        payer = root_publisher,
         space = 8 + PollRootAccount::LEN,
         seeds = [b"poll-root", poll.key().as_ref(), &batch_index.to_le_bytes()],
         bump
     )]
     pub poll_root: Account<'info, PollRootAccount>,
     #[account(mut)]
-    pub authority: Signer<'info>,
+    pub root_publisher: Signer<'info>,
     pub system_program: Program<'info, System>,
 }
 
@@ -229,7 +235,7 @@ pub struct FinalizePoll<'info> {
     #[account(
         seeds = [b"registry"],
         bump = registry.bump,
-        has_one = authority @ AuditError::Unauthorized
+        has_one = root_publisher @ AuditError::Unauthorized
     )]
     pub registry: Account<'info, PollRegistry>,
     #[account(
@@ -241,20 +247,21 @@ pub struct FinalizePoll<'info> {
     pub poll: Account<'info, PollAccount>,
     #[account(
         init,
-        payer = authority,
+        payer = root_publisher,
         space = 8 + FinalResultAccount::LEN,
         seeds = [b"final-result", poll.key().as_ref()],
         bump
     )]
     pub final_result: Account<'info, FinalResultAccount>,
     #[account(mut)]
-    pub authority: Signer<'info>,
+    pub root_publisher: Signer<'info>,
     pub system_program: Program<'info, System>,
 }
 
 #[account]
 pub struct PollRegistry {
     pub authority: Pubkey,
+    pub root_publisher: Pubkey,
     pub treasury: Pubkey,
     pub token_mint: Option<Pubkey>,
     pub token_program: Option<Pubkey>,
@@ -262,7 +269,7 @@ pub struct PollRegistry {
 }
 
 impl PollRegistry {
-    pub const LEN: usize = 32 + 32 + (1 + 32) + (1 + 32) + 1;
+    pub const LEN: usize = 32 + 32 + 32 + (1 + 32) + (1 + 32) + 1;
 }
 
 #[account]
@@ -363,6 +370,8 @@ pub enum AuditError {
     InvalidFinalRoots,
     #[msg("Token mint and token program must be both present or both absent.")]
     InvalidTokenConfig,
+    #[msg("Registry authority and root publisher must be separate keys.")]
+    AuthoritySeparationRequired,
 }
 
 #[cfg(test)]
@@ -371,7 +380,7 @@ mod tests {
 
     #[test]
     fn account_sizes_match_phase_5_layout() {
-        assert_eq!(PollRegistry::LEN, 131);
+        assert_eq!(PollRegistry::LEN, 163);
         assert_eq!(PollAccount::LEN, 323);
         assert_eq!(PollRootAccount::LEN, 281);
         assert_eq!(FinalResultAccount::LEN, 202);
