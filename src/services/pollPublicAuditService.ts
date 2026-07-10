@@ -1031,7 +1031,9 @@ export const pollPublicAuditService = {
     }
 
     const publishFinalResult =
-      isPollFinalResultPublishable(poll) && !uncommittedSealedRemainder;
+      isPollFinalResultPublishable(poll) &&
+      !uncommittedSealedRemainder &&
+      (!isProductionZkpPoll(poll) || Boolean(material.tallyProof));
 
     try {
       const publication = await solanaAuditPublisherService.publishPollAudit({
