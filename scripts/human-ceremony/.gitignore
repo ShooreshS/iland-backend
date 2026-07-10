@@ -1,0 +1,5 @@
+input/*.zkey
+output/*
+!output/README.txt
+final/
+coordinator/ceremony-verification-*.log
