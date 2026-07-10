@@ -30,13 +30,13 @@ CivicOS v1 keeps user-facing voting operations off-chain. Votes, vote proofs,
 backend verification, encrypted ballot payloads, receipts, and receipt lookup
 never write to Solana. The only on-chain writes are audit anchors:
 
-| Operation | Frequency | What it creates |
-| --- | --- | --- |
-| Program deploy | once, plus rare reviewed upgrades | the `civicos_audit` program |
-| `initialize_registry` | once per deployed audit program | registry PDA with registry authority, root publisher, treasury, and SHOLAN metadata |
-| `create_poll` | one per poll | poll PDA with policy/schema hashes and voting window |
-| `commit_roots` | one per sealed 64-vote batch | chained root PDA for nullifier, vote-commitment, and encrypted-vote roots |
-| `finalize_poll` | one per poll | final result PDA with result hash and tally proof hash |
+| Operation             | Frequency                         | What it creates                                                                     |
+| --------------------- | --------------------------------- | ----------------------------------------------------------------------------------- |
+| Program deploy        | once, plus rare reviewed upgrades | the `civicos_audit` program                                                         |
+| `initialize_registry` | once per deployed audit program   | registry PDA with registry authority, root publisher, treasury, and SHOLAN metadata |
+| `create_poll`         | one per poll                      | poll PDA with policy/schema hashes and voting window                                |
+| `commit_roots`        | one per sealed 64-vote batch      | chained root PDA for nullifier, vote-commitment, and encrypted-vote roots           |
+| `finalize_poll`       | one per poll                      | final result PDA with result hash and tally proof hash                              |
 
 SHOLAN is recorded as token metadata in the registry. It does not execute the
 audit logic, store votes/proofs, or pay Solana network fees. Backend-sponsored
@@ -128,6 +128,74 @@ Authority: CyB8BhqNfEz3xS5mHc39y6VaJHv2NcU5cof7iY7KkwC
 Last Deployed In Slot: 474682189
 Data Length: 285472 (0x45b20) bytes
 Balance: 1.9880892 SOL
+
+# Registry
+
+Generating a new keypair
+Wrote new keypair to /Users/shooresh/.config/solana/civicos/devnet-registry-authority.json
+=======================================================================
+pubkey: H2t19XHeyNaeLk5WJC1oHEE7V8vSxjoTtJYygGFkvE2F
+=======================================================================
+Save this seed phrase to recover your new keypair:
+cost boss spoon add broccoli skin weird matter rifle ribbon draft total
+=======================================================================
+REGISTRY_AUTHORITY=H2t19XHeyNaeLk5WJC1oHEE7V8vSxjoTtJYygGFkvE2F
+ROOT_PUBLISHER=2s5L3hu9o6nvugVxpYSLu6WqPPjDcm9MKTHEk6tFUhX5
+DEPLOYER=CyB8BhqNfEz3xS5mHc39y6VaJHv2NcU5cof7iY7KkwC
+FEE_PAYER=2s5L3hu9o6nvugVxpYSLu6WqPPjDcm9MKTHEk6tFUhX5
+
+# extend the program account
+
+shooresh@Shooreshs-MacBook-Pro solana % cd /Users/shooresh/Documents/hello1/iland24/back/solana
+
+export PROGRAM_ID=FsXuodQtkWjE1EZEAUskvRuj4bGMrKZAHAEf4WEk4oRo
+export DEPLOYER_KEYPAIR="$HOME/.config/solana/civicos/devnet-program-deployer.json"
+
+NO_DNA=1 solana balance "$DEPLOYER_KEYPAIR" --url devnet
+25.98728752 SOL
+shooresh@Shooreshs-MacBook-Pro solana % NO_DNA=1 solana program extend "$PROGRAM_ID" 32768 \
+  --url devnet \
+  --keypair "$DEPLOYER_KEYPAIR"
+
+Extended Program Id FsXuodQtkWjE1EZEAUskvRuj4bGMrKZAHAEf4WEk4oRo by 32768 bytes
+
+shooresh@Shooreshs-MacBook-Pro solana % NO_DNA=1 solana program show "$PROGRAM_ID" --url devnet
+
+Program Id: FsXuodQtkWjE1EZEAUskvRuj4bGMrKZAHAEf4WEk4oRo
+Owner: BPFLoaderUpgradeab1e11111111111111111111111
+ProgramData Address: BeHBmueTyD3pxSV33s3BjXoqQXwgBXTUnfwG9Tq8xk7p
+Authority: CyB8BhqNfEz3xS5mHc39y6VaJHv2NcU5cof7iY7KkwC
+Last Deployed In Slot: 475282549
+Data Length: 318240 (0x4db20) bytes
+Balance: 2.21615448 SOL
+
+# re-deploy
+NO_DNA=1 anchor deploy \
+  --provider.cluster devnet \
+  --provider.wallet "$DEPLOYER_KEYPAIR"
+Deploying cluster: https://api.devnet.solana.com
+Upgrade authority: /Users/shooresh/.config/solana/civicos/devnet-program-deployer.json
+Deploying program "civicos_audit"...
+Program path: /Users/shooresh/Documents/hello1/iland24/back/solana/target/deploy/civicos_audit.so...
+Program Id: FsXuodQtkWjE1EZEAUskvRuj4bGMrKZAHAEf4WEk4oRo
+
+Signature: QNNFPzKbPkd4vWLBWMFJC7Vs4hTKmxWhhuemryCUNHqSA66wM5yu6wGdrETSzCAtFF8674qLDpknuaBBENyZH4v
+
+Waiting for program FsXuodQtkWjE1EZEAUskvRuj4bGMrKZAHAEf4WEk4oRo to be confirmed...
+Program confirmed on-chain
+Idl data length: 1574 bytes
+Step 0/1574
+Step 600/1574
+Step 1200/1574
+Idl account C5WWz269riZFngbSJSAuiYAUEYbb7FxVe5tpoRPEhgMk successfully upgraded
+Deploy success
+
+# init the registry result
+registry=GbiuZZynd7mw6LWVKA4yVYdgWtia1g5M8U35jWnSyrMN
+registryAuthority=H2t19XHeyNaeLk5WJC1oHEE7V8vSxjoTtJYygGFkvE2F
+rootPublisher=2s5L3hu9o6nvugVxpYSLu6WqPPjDcm9MKTHEk6tFUhX5
+signature=4atRoxMPwDS1R9JC4viScFqAYGWCUK2zX7wauFpDXTYBFqtsMcqLmPidvzQXqHrn3USudwSkrdSukkMy2kktWinw
+
 ```
 
 | Wallet     | pulic key                                    |
