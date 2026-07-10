@@ -9,6 +9,7 @@
     "typecheck": "bunx tsc --noEmit",
     "audit:verify": "node scripts/verify-public-audit.mjs",
     "zkp:env": "node scripts/print-zkp-artifact-env.mjs",
+    "zkp:replace-example-polls": "bun scripts/replace-example-polls-with-production-zkp.ts",
     "oidc:signing-keys": "bun scripts/oidc-signing-keys.ts",
     "oidc:clients": "bun scripts/oidc-clients.ts"
   },

@@ -15,3 +15,14 @@ solana/target/
 solana/.anchor/
 solana/test-ledger/
 solana/programs/*/target/
+
+# Human ceremonies
+scripts/human-ceremony/input/*.zkey
+scripts/human-ceremony/output/*
+
+# Human ceremony generated contributor artifacts
+scripts/human-ceremony/**/*.zkey
+scripts/human-ceremony/**/*.ptau
+scripts/human-ceremony/*.zip
+scripts/human-ceremony/contributor*/
+scripts/human-ceremony/final/
