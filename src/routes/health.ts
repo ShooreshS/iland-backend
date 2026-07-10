@@ -1,5 +1,9 @@
 import { json } from "../middleware/json";
-import { getHealthStatus, getSupabaseHealthStatus } from "../services/healthService";
+import {
+  getHealthStatus,
+  getSupabaseHealthStatus,
+  getZkpHealthStatus,
+} from "../services/healthService";
 import type { RouteDefinition } from "../types/http";
 
 const healthRoute: RouteDefinition = {
@@ -17,4 +21,17 @@ const dbHealthRoute: RouteDefinition = {
   },
 };
 
-export const healthRoutes: RouteDefinition[] = [healthRoute, dbHealthRoute];
+const zkpHealthRoute: RouteDefinition = {
+  method: "GET",
+  path: "/health/zkp",
+  handler: () => {
+    const result = getZkpHealthStatus();
+    return json(result, result.ok ? 200 : 503);
+  },
+};
+
+export const healthRoutes: RouteDefinition[] = [
+  healthRoute,
+  dbHealthRoute,
+  zkpHealthRoute,
+];

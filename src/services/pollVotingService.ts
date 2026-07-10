@@ -1078,6 +1078,16 @@ export const createPollVotingService = (
         expectedOptionCount: productionOptionCount,
       });
       if (!proofVerification.ok) {
+        if (proofVerification.reason.startsWith("VERIFIER_")) {
+          console.error("[zkp] production vote verifier rejected before proof acceptance", {
+            pollId,
+            reason: proofVerification.reason,
+            message: proofVerification.message,
+            circuitId: productionPrivacy.proof.circuitId,
+            verifierKeyHash: productionPrivacy.proof.verifierKeyHash,
+          });
+        }
+
         return rejectProductionVote(
           mapVoteVerifierReasonToAuditReasonCode(proofVerification.reason),
           proofVerification.reason === "PROOF_REQUIRED"

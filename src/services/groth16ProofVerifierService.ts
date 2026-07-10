@@ -1,5 +1,13 @@
 import { createHash } from "node:crypto";
 
+import {
+  DEFAULT_GROTH16_VOTE_ARTIFACT_MANIFEST_HASH,
+  DEFAULT_GROTH16_VOTE_ARTIFACT_MANIFEST_PATH,
+  DEFAULT_GROTH16_VOTE_CIRCUIT_ID,
+  DEFAULT_GROTH16_VOTE_PUBLIC_INPUT_SCHEMA_VERSION,
+  DEFAULT_GROTH16_VOTE_TRUSTED_SETUP_TRANSCRIPT_HASH,
+  DEFAULT_GROTH16_VOTE_VERIFIER_KEY_HASH,
+} from "../config/zkpGroth16ArtifactDefaults";
 import type { PollRow } from "../types/db";
 import type { JsonValue } from "../types/json";
 import {
@@ -189,13 +197,16 @@ const loadVoteArtifactManifestFromEnv = (values: {
   trustedSetupTranscriptHash: string | null;
 }): Groth16VerifierConfig => {
   const voteArtifactManifestPath = normalizeOptionalString(
-    process.env.ZKP_GROTH16_VOTE_ARTIFACT_MANIFEST_PATH,
+    process.env.ZKP_GROTH16_VOTE_ARTIFACT_MANIFEST_PATH ??
+      DEFAULT_GROTH16_VOTE_ARTIFACT_MANIFEST_PATH,
   );
   const rawVoteArtifactManifestHash = normalizeOptionalString(
-    process.env.ZKP_GROTH16_VOTE_ARTIFACT_MANIFEST_HASH,
+    process.env.ZKP_GROTH16_VOTE_ARTIFACT_MANIFEST_HASH ??
+      DEFAULT_GROTH16_VOTE_ARTIFACT_MANIFEST_HASH,
   );
   const voteArtifactManifestHash = normalizeHex64(
-    process.env.ZKP_GROTH16_VOTE_ARTIFACT_MANIFEST_HASH,
+    process.env.ZKP_GROTH16_VOTE_ARTIFACT_MANIFEST_HASH ??
+      DEFAULT_GROTH16_VOTE_ARTIFACT_MANIFEST_HASH,
   );
 
   if (!voteArtifactManifestPath) {
@@ -318,17 +329,23 @@ export const getGroth16VerifierConfig = (): Groth16VerifierConfig =>
       process.env.ZKP_GROTH16_VOTE_VERIFIER_ENABLED,
     ),
     voteCircuitId: normalizeOptionalString(
-      process.env.ZKP_GROTH16_VOTE_CIRCUIT_ID,
+      process.env.ZKP_GROTH16_VOTE_CIRCUIT_ID ??
+        DEFAULT_GROTH16_VOTE_CIRCUIT_ID,
     ),
     voteVerifierKeyHash: normalizeHex64(
-      process.env.ZKP_GROTH16_VOTE_VERIFIER_KEY_HASH,
+      process.env.ZKP_GROTH16_VOTE_VERIFIER_KEY_HASH ??
+        DEFAULT_GROTH16_VOTE_VERIFIER_KEY_HASH,
     ),
     publicInputSchemaVersion: normalizeOptionalString(
-      process.env.ZKP_GROTH16_VOTE_PUBLIC_INPUT_SCHEMA_VERSION,
-    ) ?? normalizeOptionalString(process.env.ZKP_GROTH16_PUBLIC_INPUT_SCHEMA_VERSION),
+      process.env.ZKP_GROTH16_VOTE_PUBLIC_INPUT_SCHEMA_VERSION ??
+        process.env.ZKP_GROTH16_PUBLIC_INPUT_SCHEMA_VERSION ??
+        DEFAULT_GROTH16_VOTE_PUBLIC_INPUT_SCHEMA_VERSION,
+    ),
     trustedSetupTranscriptHash: normalizeHex64(
-      process.env.ZKP_GROTH16_VOTE_TRUSTED_SETUP_TRANSCRIPT_HASH,
-    ) ?? normalizeHex64(process.env.ZKP_GROTH16_TRUSTED_SETUP_TRANSCRIPT_HASH),
+      process.env.ZKP_GROTH16_VOTE_TRUSTED_SETUP_TRANSCRIPT_HASH ??
+        process.env.ZKP_GROTH16_TRUSTED_SETUP_TRANSCRIPT_HASH ??
+        DEFAULT_GROTH16_VOTE_TRUSTED_SETUP_TRANSCRIPT_HASH,
+    ),
   });
 
 export const isGroth16VoteVerifierConfigured = (
@@ -398,6 +415,18 @@ export const verifyGroth16VoteProofForPoll = async (
   }
 
   if (!isGroth16VoteVerifierConfigured(config)) {
+    console.error("[zkp] Groth16 vote verifier is not fully configured", {
+      enabled: config.voteVerifierEnabled,
+      circuitId: config.voteCircuitId,
+      verifierKeyHash: config.voteVerifierKeyHash,
+      publicInputSchemaVersion: config.publicInputSchemaVersion,
+      trustedSetupTranscriptHash: config.trustedSetupTranscriptHash,
+      artifactManifestPath: config.voteArtifactManifestPath,
+      artifactManifestHash: config.voteArtifactManifestHash,
+      artifactManifestStatus: config.voteArtifactManifestStatus,
+      artifactManifestError: config.voteArtifactManifestError,
+    });
+
     return reject(
       "VERIFIER_UNCONFIGURED",
       "Groth16 vote proof verification is enabled but verifier artifacts are not fully configured.",

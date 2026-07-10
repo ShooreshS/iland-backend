@@ -252,7 +252,7 @@ describe("groth16ProofVerifierService", () => {
     try {
       process.env.ZKP_GROTH16_VOTE_VERIFIER_ENABLED = "true";
       process.env.ZKP_GROTH16_VOTE_ARTIFACT_MANIFEST_PATH = manifestPath;
-      delete process.env.ZKP_GROTH16_VOTE_ARTIFACT_MANIFEST_HASH;
+      process.env.ZKP_GROTH16_VOTE_ARTIFACT_MANIFEST_HASH = "";
 
       const config = getGroth16VerifierConfig();
       expect(config.voteArtifactManifestStatus).toBe("invalid");

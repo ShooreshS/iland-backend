@@ -1,5 +1,13 @@
 import { createHash } from "node:crypto";
 
+import {
+  DEFAULT_GROTH16_TALLY_ARTIFACT_MANIFEST_HASH,
+  DEFAULT_GROTH16_TALLY_ARTIFACT_MANIFEST_PATH,
+  DEFAULT_GROTH16_TALLY_CIRCUIT_ID,
+  DEFAULT_GROTH16_TALLY_PUBLIC_INPUT_SCHEMA_VERSION,
+  DEFAULT_GROTH16_TALLY_TRUSTED_SETUP_TRANSCRIPT_HASH,
+  DEFAULT_GROTH16_TALLY_VERIFIER_KEY_HASH,
+} from "../config/zkpGroth16ArtifactDefaults";
 import type { PollRow } from "../types/db";
 import type { JsonValue } from "../types/json";
 import {
@@ -196,10 +204,12 @@ const loadTallyArtifactManifestFromEnv = (values: {
   tallyTrustedSetupTranscriptHash: string | null;
 }): Groth16TallyVerifierConfig => {
   const tallyArtifactManifestPath = normalizeOptionalString(
-    process.env.ZKP_GROTH16_TALLY_ARTIFACT_MANIFEST_PATH,
+    process.env.ZKP_GROTH16_TALLY_ARTIFACT_MANIFEST_PATH ??
+      DEFAULT_GROTH16_TALLY_ARTIFACT_MANIFEST_PATH,
   );
   const tallyArtifactManifestHash = normalizeHex64(
-    process.env.ZKP_GROTH16_TALLY_ARTIFACT_MANIFEST_HASH,
+    process.env.ZKP_GROTH16_TALLY_ARTIFACT_MANIFEST_HASH ??
+      DEFAULT_GROTH16_TALLY_ARTIFACT_MANIFEST_HASH,
   );
 
   if (!tallyArtifactManifestPath) {
@@ -339,16 +349,20 @@ export const getGroth16TallyVerifierConfig = (): Groth16TallyVerifierConfig =>
       process.env.ZKP_GROTH16_TALLY_VERIFIER_ENABLED,
     ),
     tallyCircuitId: normalizeOptionalString(
-      process.env.ZKP_GROTH16_TALLY_CIRCUIT_ID,
+      process.env.ZKP_GROTH16_TALLY_CIRCUIT_ID ??
+        DEFAULT_GROTH16_TALLY_CIRCUIT_ID,
     ),
     tallyVerifierKeyHash: normalizeHex64(
-      process.env.ZKP_GROTH16_TALLY_VERIFIER_KEY_HASH,
+      process.env.ZKP_GROTH16_TALLY_VERIFIER_KEY_HASH ??
+        DEFAULT_GROTH16_TALLY_VERIFIER_KEY_HASH,
     ),
     tallyPublicInputSchemaVersion: normalizeOptionalString(
-      process.env.ZKP_GROTH16_TALLY_PUBLIC_INPUT_SCHEMA_VERSION,
+      process.env.ZKP_GROTH16_TALLY_PUBLIC_INPUT_SCHEMA_VERSION ??
+        DEFAULT_GROTH16_TALLY_PUBLIC_INPUT_SCHEMA_VERSION,
     ),
     tallyTrustedSetupTranscriptHash: normalizeHex64(
-      process.env.ZKP_GROTH16_TALLY_TRUSTED_SETUP_TRANSCRIPT_HASH,
+      process.env.ZKP_GROTH16_TALLY_TRUSTED_SETUP_TRANSCRIPT_HASH ??
+        DEFAULT_GROTH16_TALLY_TRUSTED_SETUP_TRANSCRIPT_HASH,
     ),
   });
 
@@ -429,6 +443,18 @@ export const verifyGroth16TallyProofForPoll = async (
   }
 
   if (!isGroth16TallyVerifierConfigured(config)) {
+    console.error("[zkp] Groth16 tally verifier is not fully configured", {
+      enabled: config.tallyVerifierEnabled,
+      circuitId: config.tallyCircuitId,
+      verifierKeyHash: config.tallyVerifierKeyHash,
+      publicInputSchemaVersion: config.tallyPublicInputSchemaVersion,
+      trustedSetupTranscriptHash: config.tallyTrustedSetupTranscriptHash,
+      artifactManifestPath: config.tallyArtifactManifestPath,
+      artifactManifestHash: config.tallyArtifactManifestHash,
+      artifactManifestStatus: config.tallyArtifactManifestStatus,
+      artifactManifestError: config.tallyArtifactManifestError,
+    });
+
     return reject(
       "VERIFIER_UNCONFIGURED",
       "Groth16 tally proof verification is enabled but verifier artifacts are not fully configured.",

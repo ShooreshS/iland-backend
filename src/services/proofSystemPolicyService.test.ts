@@ -90,8 +90,12 @@ describe("proofSystemPolicyService", () => {
       anonymousVoteTable: "poll_zk_votes",
       tallyProofRequired: true,
       onChainZkVerifierEnabled: false,
-      artifactManifestConfigured: false,
-      verifierKeyRegistryRecord: null,
+      artifactManifestConfigured: true,
+    });
+    expect(policy.productionTarget.verifierKeyRegistryRecord).toMatchObject({
+      artifactKind: "vote",
+      circuitId: "civicos-groth16-vote-circuit-v1",
+      publicInputSchemaVersion: "civicos-groth16-vote-public-inputs-v1",
     });
   });
 });
