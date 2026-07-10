@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import {
+  type AccountInfo,
   clusterApiUrl,
   Connection,
   Keypair,
@@ -14,10 +15,12 @@ import env from "../config/env";
 import type { PollRow } from "../types/db";
 
 const ANCHOR_GLOBAL_NAMESPACE = "global";
+const ANCHOR_ACCOUNT_NAMESPACE = "account";
 const POLL_ID_HASH_DOMAIN = "org.civicos.audit:poll-id:v1";
 const DEFAULT_LOCALNET_RPC_URL = "http://127.0.0.1:8899";
 const DEFAULT_OPEN_POLL_SECONDS = 365 * 24 * 60 * 60;
 const ZERO_ROOT = "0".repeat(64);
+const RECOVERED_EXISTING_ACCOUNT_SIGNATURE_LIMIT = 1;
 
 export type SolanaAuditBatchCommitInput = Readonly<{
   batchIndex: number;
@@ -69,11 +72,38 @@ export type SolanaAuditPublicationResult = Readonly<{
   }>;
 }>;
 
+type SolanaAuditEnv = typeof env.solanaAudit;
+
+export type SolanaAuditConnection = Pick<
+  Connection,
+  | "getAccountInfo"
+  | "getLatestBlockhash"
+  | "getSignaturesForAddress"
+  | "simulateTransaction"
+>;
+
+export type SendSolanaTransaction = (input: {
+  connection: SolanaAuditConnection;
+  signer: Keypair;
+  instructions: TransactionInstruction[];
+  label: string;
+}) => Promise<string>;
+
+export type SolanaAuditPublisherDeps = Readonly<{
+  solanaAuditEnv?: SolanaAuditEnv;
+  getConnection?: () => SolanaAuditConnection;
+  getBackendFeePayer?: () => Keypair;
+  sendTransaction?: SendSolanaTransaction;
+}>;
+
 const sha256 = (value: string | Buffer): Buffer =>
   createHash("sha256").update(value).digest();
 
 const anchorDiscriminator = (instructionName: string): Buffer =>
   sha256(`${ANCHOR_GLOBAL_NAMESPACE}:${instructionName}`).subarray(0, 8);
+
+const anchorAccountDiscriminator = (accountName: string): Buffer =>
+  sha256(`${ANCHOR_ACCOUNT_NAMESPACE}:${accountName}`).subarray(0, 8);
 
 const normalizeSecretKeyBytes = (value: string): Uint8Array => {
   const trimmed = value.trim();
@@ -109,19 +139,19 @@ const normalizeSecretKeyBytes = (value: string): Uint8Array => {
   );
 };
 
-const getBackendFeePayer = (): Keypair => {
-  if (!env.solanaAudit.feePayerSecretKey) {
+const getBackendFeePayer = (solanaAuditEnv: SolanaAuditEnv): Keypair => {
+  if (!solanaAuditEnv.feePayerSecretKey) {
     throw new Error("Solana audit fee payer secret is not configured.");
   }
 
   const keypair = Keypair.fromSecretKey(
-    normalizeSecretKeyBytes(env.solanaAudit.feePayerSecretKey),
+    normalizeSecretKeyBytes(solanaAuditEnv.feePayerSecretKey),
   );
   const publicKey = keypair.publicKey.toBase58();
 
   if (
-    env.solanaAudit.feePayerPublicKey &&
-    env.solanaAudit.feePayerPublicKey !== publicKey
+    solanaAuditEnv.feePayerPublicKey &&
+    solanaAuditEnv.feePayerPublicKey !== publicKey
   ) {
     throw new Error(
       "Configured Solana audit fee payer public key does not match the secret key.",
@@ -131,20 +161,20 @@ const getBackendFeePayer = (): Keypair => {
   return keypair;
 };
 
-const resolveRpcUrl = (): string => {
-  if (env.solanaAudit.rpcUrl) {
-    return env.solanaAudit.rpcUrl;
+const resolveRpcUrl = (solanaAuditEnv: SolanaAuditEnv): string => {
+  if (solanaAuditEnv.rpcUrl) {
+    return solanaAuditEnv.rpcUrl;
   }
 
-  if (env.solanaAudit.cluster === "localnet") {
+  if (solanaAuditEnv.cluster === "localnet") {
     return DEFAULT_LOCALNET_RPC_URL;
   }
 
-  return clusterApiUrl(env.solanaAudit.cluster);
+  return clusterApiUrl(solanaAuditEnv.cluster);
 };
 
-const getConnection = (): Connection =>
-  new Connection(resolveRpcUrl(), {
+const getConnection = (solanaAuditEnv: SolanaAuditEnv): Connection =>
+  new Connection(resolveRpcUrl(solanaAuditEnv), {
     commitment: "confirmed",
   });
 
@@ -210,18 +240,80 @@ const deriveFinalResultAddress = (
     programId,
   )[0];
 
-const buildExplorerUrl = (signature: string | null): string | null => {
+const buildExplorerUrl = (
+  signature: string | null,
+  solanaAuditEnv: SolanaAuditEnv,
+): string | null => {
   if (!signature) {
     return null;
   }
 
-  if (env.solanaAudit.cluster === "mainnet-beta") {
+  if (solanaAuditEnv.cluster === "mainnet-beta") {
     return `https://explorer.solana.com/tx/${signature}`;
   }
 
   const cluster =
-    env.solanaAudit.cluster === "localnet" ? "custom" : env.solanaAudit.cluster;
+    solanaAuditEnv.cluster === "localnet" ? "custom" : solanaAuditEnv.cluster;
   return `https://explorer.solana.com/tx/${signature}?cluster=${cluster}`;
+};
+
+const assertProgramAccount = (
+  account: AccountInfo<Buffer> | null,
+  programId: PublicKey,
+  cluster: string,
+) => {
+  if (!account) {
+    throw new Error(
+      `CivicOS audit program ${programId.toBase58()} is not deployed on ${cluster}.`,
+    );
+  }
+
+  if (!account.executable) {
+    throw new Error(
+      `CivicOS audit program ${programId.toBase58()} exists on ${cluster}, but the account is not executable.`,
+    );
+  }
+};
+
+const assertAnchorPdaAccount = (input: {
+  account: AccountInfo<Buffer>;
+  accountName: string;
+  address: PublicKey;
+  programId: PublicKey;
+  label: string;
+}) => {
+  if (!input.account.owner.equals(input.programId)) {
+    throw new Error(
+      `Solana ${input.label} account ${input.address.toBase58()} is not owned by program ${input.programId.toBase58()}.`,
+    );
+  }
+
+  const data = Buffer.from(input.account.data);
+  const expected = anchorAccountDiscriminator(input.accountName);
+  if (data.length < expected.length || !data.subarray(0, expected.length).equals(expected)) {
+    throw new Error(
+      `Solana ${input.label} account ${input.address.toBase58()} does not match Anchor account ${input.accountName}.`,
+    );
+  }
+};
+
+const recoverExistingAccountSignature = async (input: {
+  connection: SolanaAuditConnection;
+  address: PublicKey;
+  label: string;
+}): Promise<string> => {
+  const signatures = await input.connection.getSignaturesForAddress(
+    input.address,
+    { limit: RECOVERED_EXISTING_ACCOUNT_SIGNATURE_LIMIT },
+    "confirmed",
+  );
+  const signature = signatures.find((entry) => !entry.err)?.signature ?? null;
+  if (!signature) {
+    throw new Error(
+      `Solana ${input.label} account ${input.address.toBase58()} already exists, but no confirmed transaction signature could be recovered.`,
+    );
+  }
+  return signature;
 };
 
 const getUnixTimestampSeconds = (value: string | null | undefined): number | null => {
@@ -276,15 +368,16 @@ const buildInitializeRegistryInstruction = (input: {
   registryAddress: PublicKey;
   authority: PublicKey;
   payer: PublicKey;
+  solanaAuditEnv: SolanaAuditEnv;
 }): TransactionInstruction => {
-  const treasury = env.solanaAudit.treasury
-    ? new PublicKey(env.solanaAudit.treasury)
+  const treasury = input.solanaAuditEnv.treasury
+    ? new PublicKey(input.solanaAuditEnv.treasury)
     : input.authority;
-  const tokenMint = env.solanaAudit.tokenMint
-    ? new PublicKey(env.solanaAudit.tokenMint)
+  const tokenMint = input.solanaAuditEnv.tokenMint
+    ? new PublicKey(input.solanaAuditEnv.tokenMint)
     : null;
-  const tokenProgram = env.solanaAudit.tokenProgram
-    ? new PublicKey(env.solanaAudit.tokenProgram)
+  const tokenProgram = input.solanaAuditEnv.tokenProgram
+    ? new PublicKey(input.solanaAuditEnv.tokenProgram)
     : null;
 
   return new TransactionInstruction({
@@ -401,13 +494,9 @@ const buildFinalizePollInstruction = (input: {
     ]),
   });
 
-const sendSimulatedTransaction = async (input: {
-  connection: Connection;
-  signer: Keypair;
-  instructions: TransactionInstruction[];
-  label: string;
-}): Promise<string> => {
-  const latestBlockhash = await input.connection.getLatestBlockhash("confirmed");
+const sendSimulatedTransaction: SendSolanaTransaction = async (input) => {
+  const connection = input.connection as Connection;
+  const latestBlockhash = await connection.getLatestBlockhash("confirmed");
   const transaction = new Transaction({
     feePayer: input.signer.publicKey,
     blockhash: latestBlockhash.blockhash,
@@ -416,7 +505,7 @@ const sendSimulatedTransaction = async (input: {
 
   transaction.sign(input.signer);
 
-  const simulation = await input.connection.simulateTransaction(transaction);
+  const simulation = await connection.simulateTransaction(transaction);
   if (simulation.value.err) {
     throw new Error(
       `Solana ${input.label} simulation failed: ${JSON.stringify(simulation.value.err)}`,
@@ -424,7 +513,7 @@ const sendSimulatedTransaction = async (input: {
   }
 
   const signature = await sendAndConfirmRawTransaction(
-    input.connection,
+    connection,
     transaction.serialize(),
     {
       commitment: "confirmed",
@@ -435,184 +524,234 @@ const sendSimulatedTransaction = async (input: {
   return signature;
 };
 
-export const solanaAuditPublisherService = {
-  async publishPollAudit(
-    input: SolanaAuditPublicationInput,
-  ): Promise<SolanaAuditPublicationResult> {
-    if (!env.solanaAudit.transactionsEnabled) {
-      throw new Error("Solana audit transactions are not enabled.");
-    }
+export const createSolanaAuditPublisherService = (
+  deps: SolanaAuditPublisherDeps = {},
+) => {
+  const solanaAuditEnv = deps.solanaAuditEnv ?? env.solanaAudit;
+  const resolveConnection = deps.getConnection ?? (() => getConnection(solanaAuditEnv));
+  const resolveFeePayer =
+    deps.getBackendFeePayer ?? (() => getBackendFeePayer(solanaAuditEnv));
+  const sendTransaction = deps.sendTransaction ?? sendSimulatedTransaction;
 
-    const connection = getConnection();
-    const signer = getBackendFeePayer();
-    const programId = new PublicKey(env.solanaAudit.programId);
-    const programAccount = await connection.getAccountInfo(programId);
-    if (!programAccount) {
-      throw new Error(
-        `CivicOS audit program ${programId.toBase58()} is not deployed on ${env.solanaAudit.cluster}.`,
-      );
-    }
-
-    const registryAddress = deriveRegistryAddress(programId);
-    const pollIdHash = derivePollIdHash(input.poll.id);
-    const pollAddress = derivePollAddress(programId, pollIdHash);
-    const orderedBatchCommits = [...input.batchCommits].sort(
-      (left, right) => left.batchIndex - right.batchIndex,
-    );
-    const finalResultAddress =
-      input.publishFinalResult && input.acceptedVoteCount > 0
-        ? deriveFinalResultAddress(programId, pollAddress)
-        : null;
-
-    const [registryAccount, pollAccount] = await Promise.all([
-      connection.getAccountInfo(registryAddress),
-      connection.getAccountInfo(pollAddress),
-    ]);
-
-    let registrySignature: string | null = null;
-    if (!registryAccount) {
-      registrySignature = await sendSimulatedTransaction({
-        connection,
-        signer,
-        label: "initialize_registry",
-        instructions: [
-          buildInitializeRegistryInstruction({
-            programId,
-            registryAddress,
-            authority: signer.publicKey,
-            payer: signer.publicKey,
-          }),
-        ],
-      });
-    }
-
-    let pollRegistrationSignature: string | null = null;
-    if (!pollAccount) {
-      const { opensAt, closesAt } = resolveOnChainPollWindow(input.poll);
-      pollRegistrationSignature = await sendSimulatedTransaction({
-        connection,
-        signer,
-        label: "create_poll",
-        instructions: [
-          buildCreatePollInstruction({
-            programId,
-            registryAddress,
-            pollAddress,
-            authority: signer.publicKey,
-            pollIdHash,
-            pollPolicyHash: hex32(input.poll.poll_policy_hash ?? ZERO_ROOT),
-            credentialSchemaHash: hex32(
-              input.poll.credential_schema_hash ?? ZERO_ROOT,
-            ),
-            opensAt,
-            closesAt,
-          }),
-        ],
-      });
-    }
-
-    const rootCommits: SolanaAuditBatchCommitResult[] = [];
-    for (const batchCommit of orderedBatchCommits) {
-      const batchRootAddress = derivePollRootAddress(
-        programId,
-        pollAddress,
-        batchCommit.batchIndex,
-      );
-      const rootAccount = await connection.getAccountInfo(batchRootAddress);
-      if (rootAccount) {
-        rootCommits.push({
-          batchIndex: batchCommit.batchIndex,
-          rootAddress: batchRootAddress.toBase58(),
-          signature: null,
-        });
-        continue;
+  return Object.freeze({
+    async publishPollAudit(
+      input: SolanaAuditPublicationInput,
+    ): Promise<SolanaAuditPublicationResult> {
+      if (!solanaAuditEnv.transactionsEnabled) {
+        throw new Error("Solana audit transactions are not enabled.");
       }
 
-      const signature = await sendSimulatedTransaction({
-        connection,
-        signer,
-        label: `commit_roots[batch ${batchCommit.batchIndex}]`,
-        instructions: [
-          buildCommitRootsInstruction({
-            programId,
-            registryAddress,
-            pollAddress,
-            pollRootAddress: batchRootAddress,
-            authority: signer.publicKey,
-            batchIndex: batchCommit.batchIndex,
-            previousNullifierRoot: hex32(batchCommit.previousNullifierRoot),
-            nullifierRoot: hex32(batchCommit.nullifierRoot),
-            previousVoteCommitmentRoot: hex32(
-              batchCommit.previousVoteCommitmentRoot,
-            ),
-            voteCommitmentRoot: hex32(batchCommit.voteCommitmentRoot),
-            previousEncryptedVoteRoot: hex32(
-              batchCommit.previousEncryptedVoteRoot,
-            ),
-            encryptedVoteRoot: hex32(batchCommit.encryptedVoteRoot),
-            acceptedCountDelta: batchCommit.acceptedCountDelta,
-          }),
-        ],
-      });
-      rootCommits.push({
-        batchIndex: batchCommit.batchIndex,
-        rootAddress: batchRootAddress.toBase58(),
-        signature,
-      });
-    }
+      const connection = resolveConnection();
+      const signer = resolveFeePayer();
+      const programId = new PublicKey(solanaAuditEnv.programId);
+      const programAccount = await connection.getAccountInfo(programId);
+      assertProgramAccount(programAccount, programId, solanaAuditEnv.cluster);
 
-    const lastRootCommit = rootCommits[rootCommits.length - 1] ?? null;
-    const rootCommitSignature =
-      [...rootCommits].reverse().find((commit) => commit.signature)?.signature ??
-      null;
+      const registryAddress = deriveRegistryAddress(programId);
+      const pollIdHash = derivePollIdHash(input.poll.id);
+      const pollAddress = derivePollAddress(programId, pollIdHash);
+      const orderedBatchCommits = [...input.batchCommits].sort(
+        (left, right) => left.batchIndex - right.batchIndex,
+      );
+      const finalResultAddress =
+        input.publishFinalResult && input.acceptedVoteCount > 0
+          ? deriveFinalResultAddress(programId, pollAddress)
+          : null;
 
-    let finalResultSignature: string | null = null;
-    if (finalResultAddress) {
-      const finalResultAccount = await connection.getAccountInfo(finalResultAddress);
-      if (!finalResultAccount) {
-        finalResultSignature = await sendSimulatedTransaction({
+      const [registryAccount, pollAccount] = await Promise.all([
+        connection.getAccountInfo(registryAddress),
+        connection.getAccountInfo(pollAddress),
+      ]);
+
+      let registrySignature: string | null = null;
+      if (registryAccount) {
+        assertAnchorPdaAccount({
+          account: registryAccount,
+          accountName: "PollRegistry",
+          address: registryAddress,
+          programId,
+          label: "registry",
+        });
+      } else {
+        registrySignature = await sendTransaction({
           connection,
           signer,
-          label: "finalize_poll",
+          label: "initialize_registry",
           instructions: [
-            buildFinalizePollInstruction({
+            buildInitializeRegistryInstruction({
               programId,
               registryAddress,
-              pollAddress,
-              finalResultAddress,
               authority: signer.publicKey,
-              voteCommitmentRoot: hex32(input.finalVoteCommitmentRoot),
-              nullifierRoot: hex32(input.finalNullifierRoot),
-              encryptedVoteRoot: hex32(input.finalEncryptedVoteRoot),
-              resultHash: hex32(input.resultHash),
-              tallyProofHash: input.tallyProofHash ? hex32(input.tallyProofHash) : null,
+              payer: signer.publicKey,
+              solanaAuditEnv,
             }),
           ],
         });
       }
-    }
 
-    return Object.freeze({
-      cluster: env.solanaAudit.cluster,
-      programId: programId.toBase58(),
-      registryAddress: registryAddress.toBase58(),
-      pollAddress: pollAddress.toBase58(),
-      rootAddress: lastRootCommit?.rootAddress ?? null,
-      finalResultAddress: finalResultAddress?.toBase58() ?? null,
-      registrySignature,
-      pollRegistrationSignature,
-      rootCommits: Object.freeze(rootCommits),
-      rootCommitSignature,
-      finalResultSignature,
-      feePayerPublicKey: signer.publicKey.toBase58(),
-      explorerUrls: Object.freeze({
-        registry: buildExplorerUrl(registrySignature),
-        pollRegistration: buildExplorerUrl(pollRegistrationSignature),
-        rootCommit: buildExplorerUrl(rootCommitSignature),
-        finalResult: buildExplorerUrl(finalResultSignature),
-      }),
-    });
-  },
+      let pollRegistrationSignature: string | null = null;
+      if (pollAccount) {
+        assertAnchorPdaAccount({
+          account: pollAccount,
+          accountName: "PollAccount",
+          address: pollAddress,
+          programId,
+          label: "poll",
+        });
+      } else {
+        const { opensAt, closesAt } = resolveOnChainPollWindow(input.poll);
+        pollRegistrationSignature = await sendTransaction({
+          connection,
+          signer,
+          label: "create_poll",
+          instructions: [
+            buildCreatePollInstruction({
+              programId,
+              registryAddress,
+              pollAddress,
+              authority: signer.publicKey,
+              pollIdHash,
+              pollPolicyHash: hex32(input.poll.poll_policy_hash ?? ZERO_ROOT),
+              credentialSchemaHash: hex32(
+                input.poll.credential_schema_hash ?? ZERO_ROOT,
+              ),
+              opensAt,
+              closesAt,
+            }),
+          ],
+        });
+      }
+
+      const rootCommits: SolanaAuditBatchCommitResult[] = [];
+      for (const batchCommit of orderedBatchCommits) {
+        const batchRootAddress = derivePollRootAddress(
+          programId,
+          pollAddress,
+          batchCommit.batchIndex,
+        );
+        const rootAccount = await connection.getAccountInfo(batchRootAddress);
+        if (rootAccount) {
+          assertAnchorPdaAccount({
+            account: rootAccount,
+            accountName: "PollRootAccount",
+            address: batchRootAddress,
+            programId,
+            label: `root batch ${batchCommit.batchIndex}`,
+          });
+          rootCommits.push({
+            batchIndex: batchCommit.batchIndex,
+            rootAddress: batchRootAddress.toBase58(),
+            signature: await recoverExistingAccountSignature({
+              connection,
+              address: batchRootAddress,
+              label: `root batch ${batchCommit.batchIndex}`,
+            }),
+          });
+          continue;
+        }
+
+        const signature = await sendTransaction({
+          connection,
+          signer,
+          label: `commit_roots[batch ${batchCommit.batchIndex}]`,
+          instructions: [
+            buildCommitRootsInstruction({
+              programId,
+              registryAddress,
+              pollAddress,
+              pollRootAddress: batchRootAddress,
+              authority: signer.publicKey,
+              batchIndex: batchCommit.batchIndex,
+              previousNullifierRoot: hex32(batchCommit.previousNullifierRoot),
+              nullifierRoot: hex32(batchCommit.nullifierRoot),
+              previousVoteCommitmentRoot: hex32(
+                batchCommit.previousVoteCommitmentRoot,
+              ),
+              voteCommitmentRoot: hex32(batchCommit.voteCommitmentRoot),
+              previousEncryptedVoteRoot: hex32(
+                batchCommit.previousEncryptedVoteRoot,
+              ),
+              encryptedVoteRoot: hex32(batchCommit.encryptedVoteRoot),
+              acceptedCountDelta: batchCommit.acceptedCountDelta,
+            }),
+          ],
+        });
+        rootCommits.push({
+          batchIndex: batchCommit.batchIndex,
+          rootAddress: batchRootAddress.toBase58(),
+          signature,
+        });
+      }
+
+      const lastRootCommit = rootCommits[rootCommits.length - 1] ?? null;
+      const rootCommitSignature =
+        [...rootCommits].reverse().find((commit) => commit.signature)?.signature ??
+        null;
+
+      let finalResultSignature: string | null = null;
+      if (finalResultAddress) {
+        const finalResultAccount =
+          await connection.getAccountInfo(finalResultAddress);
+        if (finalResultAccount) {
+          assertAnchorPdaAccount({
+            account: finalResultAccount,
+            accountName: "FinalResultAccount",
+            address: finalResultAddress,
+            programId,
+            label: "final result",
+          });
+        } else {
+          finalResultSignature = await sendTransaction({
+            connection,
+            signer,
+            label: "finalize_poll",
+            instructions: [
+              buildFinalizePollInstruction({
+                programId,
+                registryAddress,
+                pollAddress,
+                finalResultAddress,
+                authority: signer.publicKey,
+                voteCommitmentRoot: hex32(input.finalVoteCommitmentRoot),
+                nullifierRoot: hex32(input.finalNullifierRoot),
+                encryptedVoteRoot: hex32(input.finalEncryptedVoteRoot),
+                resultHash: hex32(input.resultHash),
+                tallyProofHash: input.tallyProofHash
+                  ? hex32(input.tallyProofHash)
+                  : null,
+              }),
+            ],
+          });
+        }
+      }
+
+      return Object.freeze({
+        cluster: solanaAuditEnv.cluster,
+        programId: programId.toBase58(),
+        registryAddress: registryAddress.toBase58(),
+        pollAddress: pollAddress.toBase58(),
+        rootAddress: lastRootCommit?.rootAddress ?? null,
+        finalResultAddress: finalResultAddress?.toBase58() ?? null,
+        registrySignature,
+        pollRegistrationSignature,
+        rootCommits: Object.freeze(rootCommits),
+        rootCommitSignature,
+        finalResultSignature,
+        feePayerPublicKey: signer.publicKey.toBase58(),
+        explorerUrls: Object.freeze({
+          registry: buildExplorerUrl(registrySignature, solanaAuditEnv),
+          pollRegistration: buildExplorerUrl(
+            pollRegistrationSignature,
+            solanaAuditEnv,
+          ),
+          rootCommit: buildExplorerUrl(rootCommitSignature, solanaAuditEnv),
+          finalResult: buildExplorerUrl(finalResultSignature, solanaAuditEnv),
+        }),
+      });
+    },
+  });
 };
+
+export const solanaAuditPublisherService = createSolanaAuditPublisherService();
 
 export default solanaAuditPublisherService;

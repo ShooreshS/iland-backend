@@ -24,6 +24,24 @@ The source-declared program id is the current local deployment key public key. B
 - `commit_roots`: appends a batch root account, verifies previous nullifier / vote-commitment / encrypted-vote roots and next batch index, and advances the poll latest roots. Commits are allowed after the poll opens and before finalization, so CivicOS can delay publication until result release.
 - `finalize_poll`: stores final vote/nullifier/encrypted-vote roots and the final result hash after the poll closes.
 
+## Minimal Mainnet Footprint
+
+CivicOS v1 keeps user-facing voting operations off-chain. Votes, vote proofs,
+backend verification, encrypted ballot payloads, receipts, and receipt lookup
+never write to Solana. The only on-chain writes are audit anchors:
+
+| Operation | Frequency | What it creates |
+| --- | --- | --- |
+| Program deploy | once, plus rare reviewed upgrades | the `civicos_audit` program |
+| `initialize_registry` | once per deployed audit program | registry PDA with authority, treasury, and SHOLAN metadata |
+| `create_poll` | one per poll | poll PDA with policy/schema hashes and voting window |
+| `commit_roots` | one per sealed 64-vote batch | chained root PDA for nullifier, vote-commitment, and encrypted-vote roots |
+| `finalize_poll` | one per poll | final result PDA with result hash and tally proof hash |
+
+SHOLAN is recorded as token metadata in the registry. It does not execute the
+audit logic, store votes/proofs, or pay Solana network fees. Backend-sponsored
+root publication fees are paid in SOL by the configured audit fee-payer.
+
 ## Build
 
 ```bash

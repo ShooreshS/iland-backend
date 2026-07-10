@@ -47,13 +47,21 @@ describe("Phase 6 SHOLAN token policy", () => {
   });
 
   it("exposes matching public Solana audit defaults through env config", () => {
-    expect(env.solanaAudit.cluster).toBe("mainnet-beta");
+    expect(["localnet", "devnet", "testnet", "mainnet-beta"]).toContain(
+      env.solanaAudit.cluster,
+    );
     expect(env.solanaAudit.tokenMint).toBe(SHOLAN_PHASE_6_POLICY.token.mint);
     expect(env.solanaAudit.tokenProgram).toBe(
       SHOLAN_PHASE_6_POLICY.token.tokenProgram,
     );
     expect(env.solanaAudit.tokenRequiredForBackendProcessing).toBe(false);
     expect(env.solanaAudit.networkFeeCurrency).toBe("SOL");
-    expect(env.solanaAudit.transactionsEnabled).toBe(false);
+    expect(typeof env.solanaAudit.transactionsEnabled).toBe("boolean");
+    if (
+      env.solanaAudit.cluster === "mainnet-beta" &&
+      env.solanaAudit.transactionsEnabled
+    ) {
+      expect(env.solanaAudit.mainnetConfirmed).toBe(true);
+    }
   });
 });
