@@ -7,9 +7,9 @@
   "curve": "bn254",
   "hashSuite": "poseidon-bn254-v1",
   "publicInputSchemaVersion": "civicos-groth16-tally-public-inputs-v1",
-  "trustedSetupTranscriptHash": "f0c13a6505b5928a590e61c0fe69771df796930aad710a9d936fa5f8cbc85538",
-  "verifierKeyHash": "a39da35b3a84fd418b3ccf69be0e51e255bd721f885dfccd101dbda999d042e6",
-  "provingKeyHash": "b6dbe5df0cb3baa043e6b879e443a2cf4fd1731cc7a684a23072dd1ae475192c",
+  "trustedSetupTranscriptHash": "143eadcd0f2f03f92ba7e63d3c119a65a5d9b803df95c202283affeb928da211",
+  "verifierKeyHash": "d1caee54892e1b522f63ce45c939b8e146987d429c728447e897f5cd7d68a731",
+  "provingKeyHash": "8804c71c7470a9def6a4f836a5ce8b2888ea4481a389f7d455b78862d3063215",
   "wasmOrNativeArtifactHash": "37615f37e35b38bc7ec2712de229baf48390835007b94b55f4f4b44d9680ea12",
   "circuitParameters": {
     "tallyBatchSize": 64,
@@ -19,14 +19,14 @@
     {
       "role": "verification_key",
       "path": "encrypted_choice_tally.vkey.json",
-      "sha256": "a39da35b3a84fd418b3ccf69be0e51e255bd721f885dfccd101dbda999d042e6",
+      "sha256": "d1caee54892e1b522f63ce45c939b8e146987d429c728447e897f5cd7d68a731",
       "format": "snarkjs-vkey-json",
-      "bytes": 4579
+      "bytes": 4573
     },
     {
       "role": "proving_key",
       "path": "../../../zkp/circuits/build/encrypted_choice_tally_final.zkey",
-      "sha256": "b6dbe5df0cb3baa043e6b879e443a2cf4fd1731cc7a684a23072dd1ae475192c",
+      "sha256": "8804c71c7470a9def6a4f836a5ce8b2888ea4481a389f7d455b78862d3063215",
       "format": "zkey",
       "bytes": 139669342
     },
@@ -43,15 +43,22 @@
       "sha256": "0366592433b95361f063c43622df1d631ced90d1dcd2c35c16d9374b30ffcf10",
       "format": "r1cs",
       "bytes": 40205428
+    },
+    {
+      "role": "metadata",
+      "path": "../../../zkp/circuits/build/encrypted_choice_tally.phase2-transcript.json",
+      "sha256": "65073dc8d92b8ef071ac9dfbce9023a6df6e591439a3445607ae9082cbd9934b",
+      "format": "json",
+      "bytes": 1880
     }
   ],
   "trustedSetup": {
     "ceremony": "internal-release-candidate-single-contributor",
-    "phase1TranscriptHash": "98e15d9907322aa764864ad312ee4ca77463e0741afa3ec2b2463b00bc33d230",
-    "phase2TranscriptHash": "f0c13a6505b5928a590e61c0fe69771df796930aad710a9d936fa5f8cbc85538",
+    "phase1TranscriptHash": "6b91f6d9156cd553eedd5af4c1b764a3665b86a667bf41f1fb73e939efec449d",
+    "phase2TranscriptHash": "143eadcd0f2f03f92ba7e63d3c119a65a5d9b803df95c202283affeb928da211",
     "contributionCount": 1,
-    "notes": "For devnet/internal testing only. Replace with a documented multi-contributor production ceremony before mainnet production use."
+    "notes": "Internal release-candidate artifact for devnet/internal testing only. Not a final audited multi-contributor production ceremony."
   },
-  "generatedAt": "2026-07-09T20:31:27.311Z",
-  "notes": "Internal release-candidate artifact for 64-vote x 8-option tally testing. Not a final audited multi-contributor production ceremony."
+  "generatedAt": "2026-07-09T22:56:54Z",
+  "notes": "Internal release-candidate artifact for devnet/internal testing only. Not a final audited multi-contributor production ceremony."
 }
