@@ -468,6 +468,9 @@ const sortSummaries = (summaries: PollSummaryDto[]): PollSummaryDto[] =>
     return right.poll.createdAt.localeCompare(left.poll.createdAt);
   });
 
+const isPollVisibleToViewer = (poll: PollRow, viewerUserId: string): boolean =>
+  poll.status !== "draft" || poll.created_by_user_id === viewerUserId;
+
 const buildResults = (
   poll: PollDto,
   options: PollOptionDto[],
@@ -706,7 +709,9 @@ export const createPollVotingService = (
 
   return {
   async getPollSummaries(viewerUserId: string): Promise<PollSummaryDto[]> {
-    const polls = await pollRepository.listAll();
+    const polls = (await pollRepository.listAll()).filter((poll) =>
+      isPollVisibleToViewer(poll, viewerUserId),
+    );
     if (polls.length === 0) {
       return [];
     }
@@ -765,6 +770,9 @@ export const createPollVotingService = (
   async getPollDetails(pollId: string, viewerUserId: string): Promise<PollDetailsDto | null> {
     const pollRow = await pollRepository.getById(pollId);
     if (!pollRow) {
+      return null;
+    }
+    if (!isPollVisibleToViewer(pollRow, viewerUserId)) {
       return null;
     }
 

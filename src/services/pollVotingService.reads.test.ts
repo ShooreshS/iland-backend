@@ -214,4 +214,73 @@ describe("pollVotingService read paths", () => {
       restoreFns.reverse().forEach((restore) => restore());
     }
   });
+
+  it("keeps draft polls private to their creator in summary and detail reads", async () => {
+    const activePoll = createPoll({
+      id: "poll-active",
+      slug: "poll-active",
+      title: "Active poll",
+      status: "active",
+      created_by_user_id: "owner-1",
+    });
+    const viewerDraft = createPoll({
+      id: "poll-viewer-draft",
+      slug: "poll-viewer-draft",
+      title: "Viewer draft",
+      status: "draft",
+      created_by_user_id: "viewer-user-1",
+    });
+    const otherDraft = createPoll({
+      id: "poll-other-draft",
+      slug: "poll-other-draft",
+      title: "Other draft",
+      status: "draft",
+      created_by_user_id: "other-user-1",
+    });
+
+    const restoreFns = [
+      patchMethod(pollRepository, "listAll", async () => [
+        activePoll,
+        viewerDraft,
+        otherDraft,
+      ]),
+      patchMethod(pollRepository, "getById", async (pollId: string) => (
+        pollId === otherDraft.id ? otherDraft : activePoll
+      )),
+      patchMethod(pollRepository, "getOptionsByPollIds", async (pollIds: string[]) =>
+        pollIds.map((pollId, index) =>
+          createOption({
+            id: `${pollId}-option`,
+            poll_id: pollId,
+            display_order: index,
+          }),
+        ),
+      ),
+      patchMethod(pollRepository, "getOptionsByPollId", async (pollId: string) => [
+        createOption({ id: `${pollId}-option`, poll_id: pollId }),
+      ]),
+      patchMethod(voteRepository, "getViewerVotesByPollIds", async () => []),
+      patchMethod(voteRepository, "getByUserIdAndPollId", async () => null),
+      patchMethod(voteRepository, "countValidByPollId", async () => 0),
+      patchMethod(voteRepository, "countValidByPollIdAndOptionId", async () => 0),
+      patchMethod(voteRepository, "getLatestValidSubmittedAtByPollId", async () => null),
+    ];
+
+    try {
+      const summaries = await pollVotingService.getPollSummaries("viewer-user-1");
+
+      expect(summaries.map((summary) => summary.poll.id)).toEqual([
+        activePoll.id,
+        viewerDraft.id,
+      ]);
+
+      const hiddenDraftDetails = await pollVotingService.getPollDetails(
+        otherDraft.id,
+        "viewer-user-1",
+      );
+      expect(hiddenDraftDetails).toBeNull();
+    } finally {
+      restoreFns.reverse().forEach((restore) => restore());
+    }
+  });
 });
