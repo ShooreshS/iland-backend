@@ -15,7 +15,7 @@ BACKEND_ROOT="$(cd "${KIT_ROOT}/../.." && pwd)"
 CIRCUIT_ROOT="${BACKEND_ROOT}/zkp/circuits"
 BUILD_DIR="${CIRCUIT_ROOT}/build"
 SNARKJS="${CIRCUIT_ROOT}/node_modules/.bin/snarkjs"
-INPUT_DIR="${KIT_ROOT}/input"
+INPUT_DIR="${KIT_ROOT}/contributor/input"
 PTAU_BASE_URL="https://storage.googleapis.com/zkevm/ptau"
 
 export NODE_OPTIONS="${NODE_OPTIONS:---max-old-space-size=16384}"

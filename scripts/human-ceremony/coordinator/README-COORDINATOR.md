@@ -1,7 +1,7 @@
 # Coordinator guide — CivicOS production Groth16 Phase-2 ceremony
 
 This folder is for the ceremony coordinator (CivicOS), not for contributors.
-Contributors only need the kit root: `README.md`, `contribute.mjs`, `input/`.
+Contributors receive only the `contributor/` folder (README.md, README.pdf, contribute.mjs, input/, output/) — zip that folder, not the kit root.
 
 ## The model
 
@@ -37,7 +37,7 @@ randomness adaptively.
    last contribution. This prevents anyone from grinding the final beacon.
 
 3. **Relay.** For each contributor:
-   - Zip the kit root (README.md, contribute.mjs, input/) and send it.
+   - Zip the `contributor/` folder and send it.
    - When `output/` comes back, **verify before accepting**:
      ```sh
      zkp/circuits/node_modules/.bin/snarkjs zkey verify \

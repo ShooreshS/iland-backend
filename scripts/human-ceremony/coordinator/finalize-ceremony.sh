@@ -29,7 +29,7 @@ BACKEND_ROOT="$(cd "${KIT_ROOT}/../.." && pwd)"
 CIRCUIT_ROOT="${BACKEND_ROOT}/zkp/circuits"
 BUILD_DIR="${CIRCUIT_ROOT}/build"
 SNARKJS="${CIRCUIT_ROOT}/node_modules/.bin/snarkjs"
-INPUT_DIR="${KIT_ROOT}/input"
+INPUT_DIR="${KIT_ROOT}/contributor/input"
 FINAL_DIR="${KIT_ROOT}/final"
 VERIFY_LOG="${SCRIPT_DIR}/ceremony-verification-$(date -u +%Y%m%d-%H%M%S).log"
 
