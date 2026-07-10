@@ -561,6 +561,8 @@ export type CreatePollRequestDto = {
   eligibilityRule?: Partial<PollEligibilityRule> | null;
   votePrivacyMode?: PollVotePrivacyMode;
   pollEncryptionKeyId?: string | null;
+  startsAt?: string | null;
+  endsAt?: string | null;
 };
 
 export type UpdateDraftPollRequestDto = {
@@ -576,6 +578,8 @@ export type UpdateDraftPollRequestDto = {
   eligibilityRule?: Partial<PollEligibilityRule> | null;
   votePrivacyMode?: PollVotePrivacyMode;
   pollEncryptionKeyId?: string | null;
+  startsAt?: string | null;
+  endsAt?: string | null;
 };
 
 export type PollManagementErrorCode =

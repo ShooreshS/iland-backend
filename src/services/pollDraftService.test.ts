@@ -145,6 +145,8 @@ describe("pollDraftService ZKP audit material", () => {
           title: "Country poll",
           options: ["Yes", "No"],
           status: "draft",
+          startsAt: "2026-08-01T09:30:00.000Z",
+          endsAt: "2026-08-08T17:45:00.000Z",
           jurisdictionType: "real_country",
           jurisdictionCountryCode: " ir ",
           eligibilityRule: {
@@ -181,9 +183,13 @@ describe("pollDraftService ZKP audit material", () => {
       expect(optionSetHash).toMatch(/^[0-9a-f]{64}$/);
       expect(insertedPayload.vote_privacy_mode).toBe("zk_preprover_audit");
       expect(insertedPayload.poll_encryption_key_id).toBeNull();
+      expect(insertedPayload.starts_at).toBe("2026-08-01T09:30:00.000Z");
+      expect(insertedPayload.ends_at).toBe("2026-08-08T17:45:00.000Z");
       expect(insertedPayload.jurisdiction_country_code).toBe("IR");
       expect(insertedPayload.allowed_document_country_codes).toEqual(["IR"]);
       expect(policy.pollId).toBe(insertedPollId);
+      expect(policy.votingWindow.opensAt).toBe("2026-08-01T09:30:00.000Z");
+      expect(policy.votingWindow.closesAt).toBe("2026-08-08T17:45:00.000Z");
       expect(policy.eligibilityRules).toMatchObject({
         requiresVerifiedIdentity: true,
         acceptedDocumentCountryCodes: ["IR"],

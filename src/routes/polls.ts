@@ -34,6 +34,13 @@ const pollEncryptionKeyIdSchema = z
   .nullable()
   .optional();
 
+const optionalTimestampSchema = z
+  .string()
+  .trim()
+  .datetime({ offset: true })
+  .nullable()
+  .optional();
+
 const voteProofPublicInputsSchema = z
   .object({
     pollId: z.string().trim().min(1),
@@ -261,6 +268,8 @@ const createPollRequestSchema = z.object({
     .optional(),
   votePrivacyMode: votePrivacyModeSchema.optional(),
   pollEncryptionKeyId: pollEncryptionKeyIdSchema,
+  startsAt: optionalTimestampSchema,
+  endsAt: optionalTimestampSchema,
 });
 
 const updateDraftRequestSchema = createPollRequestSchema.extend({

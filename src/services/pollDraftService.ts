@@ -63,6 +63,8 @@ type NormalizedPollMutationInput = {
   eligibilityRule: PollEligibilityRule;
   votePrivacyMode: PollVotePrivacyMode;
   pollEncryptionKeyId: string | null;
+  startsAt: string | null;
+  endsAt: string | null;
 };
 
 const slugify = (value: string): string =>
@@ -82,6 +84,22 @@ const toArray = (value: string[] | null | undefined): string[] =>
 const normalizeOptionalString = (value: string | null | undefined): string | null => {
   const normalized = typeof value === "string" ? value.trim() : "";
   return normalized.length > 0 ? normalized : null;
+};
+
+const normalizeOptionalTimestamp = (
+  value: string | null | undefined,
+): string | null => {
+  const normalized = normalizeOptionalString(value);
+  if (!normalized) {
+    return null;
+  }
+
+  const timestamp = Date.parse(normalized);
+  if (!Number.isFinite(timestamp)) {
+    return null;
+  }
+
+  return new Date(timestamp).toISOString();
 };
 
 const normalizeVotePrivacyMode = (
@@ -272,6 +290,39 @@ const normalizeMutationInput = (
 
   const votePrivacyMode = normalizeVotePrivacyMode(input.votePrivacyMode);
   const pollEncryptionKeyId = normalizeOptionalString(input.pollEncryptionKeyId);
+  const startsAt = normalizeOptionalTimestamp(input.startsAt);
+  const endsAt = normalizeOptionalTimestamp(input.endsAt);
+
+  if (input.startsAt && !startsAt) {
+    return {
+      error: createFailureResult(
+        "VALIDATION_FAILED",
+        "Poll start time must be a valid ISO timestamp.",
+      ),
+    };
+  }
+
+  if (input.endsAt && !endsAt) {
+    return {
+      error: createFailureResult(
+        "VALIDATION_FAILED",
+        "Poll end time must be a valid ISO timestamp.",
+      ),
+    };
+  }
+
+  if (
+    startsAt &&
+    endsAt &&
+    Date.parse(endsAt) <= Date.parse(startsAt)
+  ) {
+    return {
+      error: createFailureResult(
+        "VALIDATION_FAILED",
+        "Poll end time must be after the start time.",
+      ),
+    };
+  }
 
   if (
     votePrivacyMode === PRODUCTION_ZKP_VOTE_PRIVACY_MODE &&
@@ -323,6 +374,8 @@ const normalizeMutationInput = (
       eligibilityRule,
       votePrivacyMode,
       pollEncryptionKeyId,
+      startsAt,
+      endsAt,
     },
   };
 };
@@ -586,8 +639,8 @@ export const pollDraftService = {
       normalized.data,
       viewerUserId,
       buildCreateSlug(normalized.data.title),
-      now,
-      null,
+      normalized.data.startsAt || now,
+      normalized.data.endsAt,
       optionSetHash,
     );
     const stagedPollPayload =
@@ -730,8 +783,8 @@ export const pollDraftService = {
         normalized.data,
         existingPoll.created_by_user_id || viewerUserId,
         existingPoll.slug,
-        existingPoll.starts_at,
-        existingPoll.ends_at,
+        normalized.data.startsAt || existingPoll.starts_at,
+        input.endsAt === undefined ? existingPoll.ends_at : normalized.data.endsAt,
         optionSetHash,
       ),
     );
@@ -832,6 +885,8 @@ export const pollDraftService = {
           },
           votePrivacyMode,
           pollEncryptionKeyId,
+          startsAt: existingPoll.starts_at || now,
+          endsAt: existingPoll.ends_at,
         },
         existingPoll.created_by_user_id || viewerUserId,
         existingPoll.slug,
