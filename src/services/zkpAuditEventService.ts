@@ -27,6 +27,7 @@ export type ZkpAuditEventType =
 
 export const ZKP_AUDIT_REJECTION_REASON_CODES = Object.freeze({
   pollNotActive: "poll_not_active",
+  plaintextOptionSubmitted: "plaintext_option_submitted",
   optionNotFound: "option_not_found",
   optionNotInPoll: "option_not_in_poll",
   optionInactive: "option_inactive",

@@ -707,10 +707,14 @@ describe("pollVotingService.submitVote", () => {
     let insertedPayload: Record<string, unknown> | null = null;
     let legacyInsertCalls = 0;
     let verifiedIdentityDuplicateChecks = 0;
+    let plaintextOptionLookupCalls = 0;
 
     const restoreFns = [
       patchMethod(pollRepository, "getById", async () => poll),
-      patchMethod(pollRepository, "getOptionByIdForPoll", async () => option),
+      patchMethod(pollRepository, "getOptionByIdForPoll", async () => {
+        plaintextOptionLookupCalls += 1;
+        throw new Error("Production ZKP votes must not look up plaintext option ids.");
+      }),
       patchMethod(pollRepository, "getOptionsByPollId", async () => [option]),
       patchMethod(
         verifiedIdentityRepository,
@@ -765,7 +769,6 @@ describe("pollVotingService.submitVote", () => {
     try {
       const result = await service.submitVote({
         pollId: poll.id,
-        optionId: option.id,
         viewer,
         privacy,
         encryptedVote,
@@ -774,6 +777,7 @@ describe("pollVotingService.submitVote", () => {
 
       expect(result.success).toBe(true);
       expect(legacyInsertCalls).toBe(0);
+      expect(plaintextOptionLookupCalls).toBe(0);
       expect(verifiedIdentityDuplicateChecks).toBe(0);
       const insertedRecord = insertedPayload as Record<string, unknown> | null;
       expect(insertedRecord).toMatchObject({
@@ -800,10 +804,11 @@ describe("pollVotingService.submitVote", () => {
       }
       expect(result.receipt).toMatchObject({
         pollId: poll.id,
-        optionId: option.id,
         voteCommitment: PRODUCTION_VOTE_COMMITMENT,
         proofHash: PRODUCTION_PROOF_HASH,
       });
+      expect(result.viewerVote).toBeNull();
+      expect(result.receipt?.optionId).toBeUndefined();
       expect(audit.events).toHaveLength(1);
       expect(audit.events[0]).toMatchObject({
         type: "voteAccepted",
@@ -823,6 +828,64 @@ describe("pollVotingService.submitVote", () => {
       });
       expect(JSON.stringify(audit.events)).not.toContain("viewer-user-1");
       expect(JSON.stringify(audit.events)).not.toContain("verified-identity-1");
+    } finally {
+      restoreFns.reverse().forEach((restore) => restore());
+    }
+  });
+
+  it("rejects production ZKP submissions that include plaintext option id", async () => {
+    const viewer = createViewer();
+    const poll = createPoll({
+      requires_verified_identity: true,
+      poll_policy_hash: POLL_POLICY_HASH,
+      credential_schema_hash: CREDENTIAL_SCHEMA_HASH,
+      vote_privacy_mode: "zk_secret_ballot_v1",
+      option_set_hash: OPTION_SET_HASH,
+      poll_encryption_key_id: "poll-key-1",
+    });
+    const option = createOption();
+    const encryptedVote = createEncryptedVotePayload();
+    const encryptedVoteHash = hashEncryptedVotePayload(encryptedVote);
+    const privacy = createProductionVotePrivacyPayload(encryptedVoteHash);
+    const audit = createMockZkpAuditEventService();
+    const service = createPollVotingService({
+      getPollEncryptionKeyForPoll,
+      zkpAuditEventService: audit.service,
+      verifyGroth16VoteProofForPoll: async () => {
+        throw new Error("Verifier should not be called for plaintext option leaks.");
+      },
+    });
+
+    const restoreFns = [
+      patchMethod(pollRepository, "getById", async () => poll),
+    ];
+
+    try {
+      const result = await service.submitVote({
+        pollId: poll.id,
+        optionId: option.id,
+        viewer,
+        privacy,
+        encryptedVote,
+      });
+
+      expect(result.success).toBe(false);
+      if (!result.success) {
+        expect(result.errorCode).toBe("PROOF_INVALID");
+        expect(result.reasonCode).toBe("plaintext_option_submitted");
+        expect(result.message).toContain("plaintext option");
+      }
+      expect(audit.events).toHaveLength(1);
+      expect(audit.events[0]).toMatchObject({
+        type: "voteRejected",
+        input: {
+          pollId: poll.id,
+          reasonCode: "plaintext_option_submitted",
+          errorCode: "PROOF_INVALID",
+        },
+      });
+      expect(JSON.stringify(audit.events)).not.toContain(option.id);
+      expect(JSON.stringify(audit.events)).not.toContain("viewer-user-1");
     } finally {
       restoreFns.reverse().forEach((restore) => restore());
     }
@@ -875,7 +938,6 @@ describe("pollVotingService.submitVote", () => {
     try {
       const result = await service.submitVote({
         pollId: poll.id,
-        optionId: option.id,
         viewer,
         privacy,
         encryptedVote,
@@ -954,7 +1016,6 @@ describe("pollVotingService.submitVote", () => {
     try {
       const result = await service.submitVote({
         pollId: poll.id,
-        optionId: option.id,
         viewer,
         privacy: createVotePrivacyPayload(),
         encryptedVote,
@@ -1047,7 +1108,6 @@ describe("pollVotingService.submitVote", () => {
     try {
       const result = await service.submitVote({
         pollId: poll.id,
-        optionId: option.id,
         viewer,
         privacy,
         encryptedVote,

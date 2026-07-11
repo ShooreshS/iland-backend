@@ -210,7 +210,7 @@ const voteRequestPublicInputsSchema = z.union([
 const voteRequestSchema = z
   .object({
     pollId: z.string().trim().min(1).optional(),
-    optionId: z.string().trim().min(1),
+    optionId: z.string().trim().min(1).optional(),
     pollPolicyHash: hex64Schema.optional(),
     nullifier: hex64Schema.optional(),
     voteCommitment: hex64Schema.nullable().optional(),
@@ -897,6 +897,15 @@ const buildVotePrivacyFromRequest = (
   };
 };
 
+const isProductionVotePrivacyPayload = (
+  privacy: VoteSubmissionRequestDto["privacy"],
+): boolean =>
+  Boolean(
+    privacy &&
+      "votePrivacyMode" in privacy &&
+      privacy.votePrivacyMode === "zk_secret_ballot_v1",
+  );
+
 const publicInputsMatch = (
   left: z.infer<typeof voteRequestPublicInputsSchema>,
   right: z.infer<typeof voteRequestPublicInputsSchema>,
@@ -993,6 +1002,27 @@ const createSubmitVoteRoute = (path: string): RouteDefinition => ({
     }
 
     const privacy = buildVotePrivacyFromRequest(parsedBody.data);
+    const productionVoteRequest = isProductionVotePrivacyPayload(privacy);
+    if (productionVoteRequest && parsedBody.data.optionId) {
+      return json(
+        {
+          error: "invalid_request",
+          message:
+            "Production ZKP vote requests must not include plaintext optionId.",
+        },
+        400,
+      );
+    }
+    if (!productionVoteRequest && !parsedBody.data.optionId) {
+      return json(
+        {
+          error: "invalid_request",
+          message: "Legacy/dev vote requests must include optionId.",
+        },
+        400,
+      );
+    }
+
     if (
       parsedBody.data.nullifier &&
       privacy?.nullifier &&

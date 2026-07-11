@@ -275,7 +275,7 @@ export type PublicVoteReceiptLookupDto = {
 export type VoteReceiptDto = {
   version: "civicos-vote-receipt-v1";
   pollId: string;
-  optionId: string;
+  optionId?: string | null;
   voteCommitment: string;
   voteCommitmentLeafHash: string;
   proofHash: string;
@@ -392,7 +392,7 @@ export type VotePrivacyPayloadDto =
   | ProductionVotePrivacyPayloadDto;
 
 export type VoteSubmissionRequestDto = {
-  optionId: string;
+  optionId?: string;
   privacy?: VotePrivacyPayloadDto | null;
   voteCommitment?: string | null;
   encryptedVote?: unknown;
@@ -401,7 +401,7 @@ export type VoteSubmissionRequestDto = {
 
 export type VoteSubmissionSuccessDto = {
   success: true;
-  viewerVote: ViewerVoteSummaryDto;
+  viewerVote?: ViewerVoteSummaryDto | null;
   receipt?: VoteReceiptDto | null;
 };
 

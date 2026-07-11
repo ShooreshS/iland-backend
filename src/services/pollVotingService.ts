@@ -184,7 +184,7 @@ type VoteRejectedAuditFields = Partial<
 
 const buildVoteReceipt = (input: {
   pollId: string;
-  optionId: string;
+  optionId?: string | null;
   voteCommitment: string;
   voteCommitmentLeafHash?: string;
   proofHash: string;
@@ -192,7 +192,7 @@ const buildVoteReceipt = (input: {
 }): VoteReceiptDto => ({
   version: "civicos-vote-receipt-v1",
   pollId: input.pollId,
-  optionId: input.optionId,
+  ...(input.optionId ? { optionId: input.optionId } : {}),
   voteCommitment: input.voteCommitment,
   voteCommitmentLeafHash:
     input.voteCommitmentLeafHash ??
@@ -903,13 +903,14 @@ export const createPollVotingService = (
 
   async submitVote(params: {
     pollId: string;
-    optionId: string;
+    optionId?: string | null;
     viewer: UserRow;
     privacy?: VotePrivacyPayloadDto | null;
     expectedVoteCommitment?: string | null;
     encryptedVote?: unknown;
   }): Promise<VoteSubmissionResultDto> {
-    const { pollId, optionId, viewer, privacy } = params;
+    const { pollId, viewer, privacy } = params;
+    const optionId = toStringOrEmpty(params.optionId);
 
     const poll = await pollRepository.getById(pollId);
     if (!poll) {
@@ -947,6 +948,21 @@ export const createPollVotingService = (
       );
     };
 
+    if (productionZkpPoll && optionId) {
+      return rejectProductionVote(
+        ZKP_AUDIT_REJECTION_REASON_CODES.plaintextOptionSubmitted,
+        "PROOF_INVALID",
+        "Production ZKP vote submissions must not include plaintext option id.",
+      );
+    }
+
+    if (!productionZkpPoll && !optionId) {
+      return buildFailure(
+        "OPTION_NOT_FOUND",
+        "A poll option is required for legacy/dev vote submissions.",
+      );
+    }
+
     if (poll.status !== "active") {
       return rejectProductionVote(
         ZKP_AUDIT_REJECTION_REASON_CODES.pollNotActive,
@@ -967,30 +983,35 @@ export const createPollVotingService = (
     const requiresVerifiedIdentity =
       pollPolicy.eligibilityRules.requiresVerifiedIdentity;
 
-    const optionInPoll = await pollRepository.getOptionByIdForPoll(pollId, optionId);
-    if (!optionInPoll) {
-      const option = await pollRepository.getOptionById(optionId);
-      if (!option) {
+    if (!productionZkpPoll) {
+      const optionInPoll = await pollRepository.getOptionByIdForPoll(
+        pollId,
+        optionId,
+      );
+      if (!optionInPoll) {
+        const option = await pollRepository.getOptionById(optionId);
+        if (!option) {
+          return rejectProductionVote(
+            ZKP_AUDIT_REJECTION_REASON_CODES.optionNotFound,
+            "OPTION_NOT_FOUND",
+            "The requested poll option does not exist.",
+          );
+        }
+
         return rejectProductionVote(
-          ZKP_AUDIT_REJECTION_REASON_CODES.optionNotFound,
-          "OPTION_NOT_FOUND",
-          "The requested poll option does not exist.",
+          ZKP_AUDIT_REJECTION_REASON_CODES.optionNotInPoll,
+          "OPTION_NOT_IN_POLL",
+          "The requested option does not belong to the poll.",
         );
       }
 
-      return rejectProductionVote(
-        ZKP_AUDIT_REJECTION_REASON_CODES.optionNotInPoll,
-        "OPTION_NOT_IN_POLL",
-        "The requested option does not belong to the poll.",
-      );
-    }
-
-    if (!optionInPoll.is_active) {
-      return rejectProductionVote(
-        ZKP_AUDIT_REJECTION_REASON_CODES.optionInactive,
-        "OPTION_NOT_FOUND",
-        "The requested poll option is not active.",
-      );
+      if (!optionInPoll.is_active) {
+        return rejectProductionVote(
+          ZKP_AUDIT_REJECTION_REASON_CODES.optionInactive,
+          "OPTION_NOT_FOUND",
+          "The requested poll option is not active.",
+        );
+      }
     }
 
     const productionOptionCount = productionZkpPoll
@@ -1267,14 +1288,9 @@ export const createPollVotingService = (
 
         return {
           success: true,
-          viewerVote: {
-            pollId: insertedVote.poll_id,
-            optionId,
-            submittedAt: insertedVote.accepted_at,
-          },
+          viewerVote: null,
           receipt: buildVoteReceipt({
             pollId: insertedVote.poll_id,
-            optionId,
             voteCommitment: insertedVote.vote_commitment,
             voteCommitmentLeafHash: await hashPublicAuditLeafForPoll(
               poll,
