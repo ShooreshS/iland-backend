@@ -1,6 +1,7 @@
 import identityProfileRepository from "../repositories/identityProfileRepository";
 import pollMapRefreshQueueRepository from "../repositories/pollMapRefreshQueueRepository";
 import pollRepository from "../repositories/pollRepository";
+import pollTallyProofRepository from "../repositories/pollTallyProofRepository";
 import pollZkVoteRepository from "../repositories/pollZkVoteRepository";
 import verifiedIdentityRepository from "../repositories/verifiedIdentityRepository";
 import voteRepository from "../repositories/voteRepository";
@@ -23,6 +24,7 @@ import pollEncryptionKeyService, {
   CIVIC_ENCRYPTED_VOTE_KEY_AGREEMENT,
   CIVIC_ENCRYPTED_VOTE_KDF,
 } from "./pollEncryptionKeyService";
+import pollEncryptedTallyService from "./pollEncryptedTallyService";
 import {
   hashPublicAuditLeaf,
   hashPublicAuditLeafForPoll,
@@ -45,7 +47,7 @@ import type {
   VoteSubmissionResultDto,
   PollVotePrivacyMode,
 } from "../types/contracts";
-import type { PollOptionRow, PollRow, UserRow } from "../types/db";
+import type { PollOptionRow, PollRow, PollTallyProofRow, UserRow } from "../types/db";
 import type { JsonValue } from "../types/json";
 
 const POLL_STATUS_SORT_ORDER: Record<PollDto["status"], number> = {
@@ -219,6 +221,38 @@ const HEX_64_PATTERN = /^[0-9a-f]{64}$/;
 const normalizeHex64 = (value: unknown): string | null => {
   const normalized = toStringOrEmpty(value).toLowerCase();
   return HEX_64_PATTERN.test(normalized) ? normalized : null;
+};
+
+const readTallyProofCounts = (
+  tallyProof: PollTallyProofRow | null,
+): Record<string, number> | null => {
+  if (!tallyProof || !isPlainObject(tallyProof.proof_envelope_json)) {
+    return null;
+  }
+
+  const publicInputs = tallyProof.proof_envelope_json.publicInputs;
+  if (!isPlainObject(publicInputs) || !Array.isArray(publicInputs.optionResults)) {
+    return null;
+  }
+
+  return publicInputs.optionResults.reduce<Record<string, number> | null>(
+    (acc, entry) => {
+      if (!acc || !isPlainObject(entry)) {
+        return null;
+      }
+
+      const optionId =
+        typeof entry.optionId === "string" ? entry.optionId.trim() : "";
+      const count = typeof entry.count === "number" ? entry.count : NaN;
+      if (!optionId || !Number.isInteger(count) || count < 0) {
+        return null;
+      }
+
+      acc[optionId] = count;
+      return acc;
+    },
+    {},
+  );
 };
 
 const isProductionZkpPoll = (poll: PollRow): boolean =>
@@ -790,14 +824,50 @@ export const createPollVotingService = (
         : voteRepository.getLatestValidSubmittedAtByPollId(pollId),
     ]);
 
-    const optionCountEntries = productionPoll
-      ? optionRows.map((option) => [option.id, 0] as const)
-      : await Promise.all(
-          optionRows.map(async (option) => [
-            option.id,
-            await voteRepository.countValidByPollIdAndOptionId(pollId, option.id),
-          ] as const),
-        );
+    const poll = mapPoll(pollRow);
+    const options = optionRows.map(mapOption);
+
+    if (productionPoll) {
+      const [provisionalTally, latestTallyProof] = await Promise.all([
+        pollEncryptedTallyService.getProvisionalTally({
+          poll: pollRow,
+          options: optionRows,
+        }),
+        pollTallyProofRepository.getLatestByPollId(pollId),
+      ]);
+      const provisionalResults = buildResults(poll, options, {
+        countsByOptionId: provisionalTally.countsByOptionId,
+        totalVotes: provisionalTally.totalVotes,
+        latestSubmittedAt: provisionalTally.updatedAt,
+      });
+      const verifiedCounts = readTallyProofCounts(latestTallyProof);
+      const verifiedResults =
+        latestTallyProof && verifiedCounts
+          ? buildResults(poll, options, {
+              countsByOptionId: verifiedCounts,
+              totalVotes: latestTallyProof.accepted_count,
+              latestSubmittedAt: latestTallyProof.verified_at,
+            })
+          : null;
+      const results = verifiedResults ?? provisionalResults;
+
+      return {
+        poll,
+        options,
+        viewerVote: null,
+        totalVotes: exactTotalVotes,
+        results,
+        provisionalResults,
+        verifiedResults,
+      };
+    }
+
+    const optionCountEntries = await Promise.all(
+      optionRows.map(async (option) => [
+        option.id,
+        await voteRepository.countValidByPollIdAndOptionId(pollId, option.id),
+      ] as const),
+    );
     const countsByOptionId = optionCountEntries.reduce<Record<string, number>>(
       (acc, [optionId, count]) => {
         acc[optionId] = count;
@@ -806,8 +876,6 @@ export const createPollVotingService = (
       {},
     );
 
-    const poll = mapPoll(pollRow);
-    const options = optionRows.map(mapOption);
     const results = buildResults(poll, options, {
       countsByOptionId,
       totalVotes: exactTotalVotes,

@@ -299,6 +299,8 @@ export type PollDetailsDto = {
   viewerVote: ViewerVoteSummaryDto | null;
   totalVotes: number;
   results: PollResultsSummaryDto;
+  provisionalResults?: PollResultsSummaryDto | null;
+  verifiedResults?: PollResultsSummaryDto | null;
 };
 
 export type VoteSubmissionErrorCode =

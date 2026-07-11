@@ -94,6 +94,24 @@ export const pollZkVoteRepository = {
     return (data || []) as PublicZkAuditVoteRecordRow[];
   },
 
+  async getAcceptedByPollId(pollId: string): Promise<PollZkVoteRow[]> {
+    const supabase = requireSupabaseAdminClient();
+
+    const { data, error } = await supabase
+      .from("poll_zk_votes")
+      .select(POLL_ZK_VOTE_COLUMNS)
+      .eq("poll_id", pollId)
+      .eq("proof_verification_status", "verified")
+      .order("accepted_at", { ascending: true })
+      .order("id", { ascending: true });
+
+    if (error) {
+      throw error;
+    }
+
+    return (data || []) as PollZkVoteRow[];
+  },
+
   async markAcceptedAuditRecordsBatch(input: {
     pollId: string;
     batchId: string;

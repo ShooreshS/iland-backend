@@ -1,8 +1,11 @@
 import { describe, expect, it } from "bun:test";
 import pollRepository from "../repositories/pollRepository";
+import pollTallyProofRepository from "../repositories/pollTallyProofRepository";
+import pollZkVoteRepository from "../repositories/pollZkVoteRepository";
 import voteRepository from "../repositories/voteRepository";
+import pollEncryptedTallyService from "./pollEncryptedTallyService";
 import { pollVotingService } from "./pollVotingService";
-import type { PollOptionRow, PollRow, VoteRow } from "../types/db";
+import type { PollOptionRow, PollRow, PollTallyProofRow, VoteRow } from "../types/db";
 
 const FIXED_TIME = "2026-04-08T12:00:00.000Z";
 
@@ -177,6 +180,74 @@ describe("pollVotingService read paths", () => {
       expect(
         details?.results.optionResults.reduce((sum, entry) => sum + entry.count, 0),
       ).toBe(1_000_000);
+    } finally {
+      restoreFns.reverse().forEach((restore) => restore());
+    }
+  });
+
+  it("returns provisional and verified result summaries for production secret ballot polls", async () => {
+    const poll = createPoll({
+      vote_privacy_mode: "zk_secret_ballot_v1",
+      option_set_hash: "a".repeat(64),
+      poll_encryption_key_id: "poll-key-1",
+    });
+    const optionA = createOption({ id: "option-a", label: "Yes", display_order: 0 });
+    const optionB = createOption({ id: "option-b", label: "No", display_order: 1 });
+    const tallyProof: PollTallyProofRow = {
+      id: "tally-proof-1",
+      poll_id: poll.id,
+      result_hash: "1".repeat(64),
+      tally_proof_hash: "2".repeat(64),
+      tally_public_inputs_hash: "3".repeat(64),
+      tally_verifier_key_hash: "4".repeat(64),
+      tally_circuit_id: "civicos-groth16-tally-circuit-v1",
+      nullifier_root: "5".repeat(64),
+      vote_commitment_root: "6".repeat(64),
+      encrypted_vote_root: "7".repeat(64),
+      accepted_count: 2,
+      proof_envelope_json: {
+        publicInputs: {
+          optionResults: [
+            { optionId: optionA.id, count: 1 },
+            { optionId: optionB.id, count: 1 },
+          ],
+        },
+      },
+      verified_at: "2026-04-08T14:00:00.000Z",
+      created_at: "2026-04-08T14:00:00.000Z",
+    };
+
+    const restoreFns = [
+      patchMethod(pollRepository, "getById", async () => poll),
+      patchMethod(pollRepository, "getOptionsByPollId", async () => [optionA, optionB]),
+      patchMethod(pollZkVoteRepository, "countAcceptedByPollId", async () => 3),
+      patchMethod(pollEncryptedTallyService, "getProvisionalTally", async () => ({
+        countsByOptionId: {
+          [optionA.id]: 2,
+          [optionB.id]: 1,
+        },
+        totalVotes: 3,
+        updatedAt: "2026-04-08T13:59:00.000Z",
+      })),
+      patchMethod(pollTallyProofRepository, "getLatestByPollId", async () => tallyProof),
+    ];
+
+    try {
+      const details = await pollVotingService.getPollDetails(poll.id, "viewer-user-1");
+
+      expect(details).not.toBeNull();
+      expect(details?.viewerVote).toBeNull();
+      expect(details?.totalVotes).toBe(3);
+      expect(details?.provisionalResults?.totalVotes).toBe(3);
+      expect(
+        details?.provisionalResults?.optionResults.find((entry) => entry.optionId === optionA.id)?.count,
+      ).toBe(2);
+      expect(details?.verifiedResults?.totalVotes).toBe(2);
+      expect(
+        details?.verifiedResults?.optionResults.find((entry) => entry.optionId === optionB.id)?.count,
+      ).toBe(1);
+      expect(details?.results.totalVotes).toBe(2);
+      expect(details?.results.updatedAt).toBe("2026-04-08T14:00:00.000Z");
     } finally {
       restoreFns.reverse().forEach((restore) => restore());
     }
