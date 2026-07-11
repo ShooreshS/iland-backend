@@ -38,8 +38,8 @@ const OPTION_COLOR_PALETTE = [
 ];
 const MIN_PUBLISHABLE_ACTIVE_OPTIONS = 2;
 const PRODUCTION_ZKP_MAX_OPTIONS = 8;
-const DEFAULT_VOTE_PRIVACY_MODE = "zk_preprover_audit" as const;
 const PRODUCTION_ZKP_VOTE_PRIVACY_MODE = "zk_secret_ballot_v1" as const;
+const DEFAULT_VOTE_PRIVACY_MODE = PRODUCTION_ZKP_VOTE_PRIVACY_MODE;
 const KNOWN_VOTE_PRIVACY_MODES = new Set<PollVotePrivacyMode>([
   "legacy_identity_linked",
   "zk_preprover_audit",

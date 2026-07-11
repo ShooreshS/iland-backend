@@ -145,6 +145,7 @@ describe("pollDraftService ZKP audit material", () => {
           title: "Country poll",
           options: ["Yes", "No"],
           status: "draft",
+          pollEncryptionKeyId: "poll-key-1",
           startsAt: "2026-08-01T09:30:00.000Z",
           endsAt: "2026-08-08T17:45:00.000Z",
           jurisdictionType: "real_country",
@@ -181,8 +182,8 @@ describe("pollDraftService ZKP audit material", () => {
       expect(pollPolicyHash).toMatch(/^[0-9a-f]{64}$/);
       expect(credentialSchemaHash).toMatch(/^[0-9a-f]{64}$/);
       expect(optionSetHash).toMatch(/^[0-9a-f]{64}$/);
-      expect(insertedPayload.vote_privacy_mode).toBe("zk_preprover_audit");
-      expect(insertedPayload.poll_encryption_key_id).toBeNull();
+      expect(insertedPayload.vote_privacy_mode).toBe("zk_secret_ballot_v1");
+      expect(insertedPayload.poll_encryption_key_id).toBe("poll-key-1");
       expect(insertedPayload.starts_at).toBe("2026-08-01T09:30:00.000Z");
       expect(insertedPayload.ends_at).toBe("2026-08-08T17:45:00.000Z");
       expect(insertedPayload.jurisdiction_country_code).toBe("IR");
@@ -201,7 +202,8 @@ describe("pollDraftService ZKP audit material", () => {
       expect(result.poll.pollPolicyHash).toBe(pollPolicyHash);
       expect(result.poll.credentialSchemaHash).toBe(credentialSchemaHash);
       expect(result.poll.optionSetHash).toBe(optionSetHash);
-      expect(result.poll.votePrivacyMode).toBe("zk_preprover_audit");
+      expect(result.poll.votePrivacyMode).toBe("zk_secret_ballot_v1");
+      expect(result.poll.pollEncryptionKeyId).toBe("poll-key-1");
     } finally {
       restoreFns.reverse().forEach((restore) => restore());
     }
@@ -249,6 +251,7 @@ describe("pollDraftService ZKP audit material", () => {
         {
           title: "Direct active poll",
           options: ["Yes", "No"],
+          pollEncryptionKeyId: "poll-key-1",
           eligibilityRule: {
             requiresVerifiedIdentity: true,
           },
@@ -369,6 +372,8 @@ describe("pollDraftService ZKP audit material", () => {
       requires_verified_identity: true,
       allowed_home_area_ids: ["area-b", "area-a"],
       starts_at: null,
+      vote_privacy_mode: "zk_secret_ballot_v1",
+      poll_encryption_key_id: "poll-key-1",
     });
     const existingOptions = [
       createOption({ id: "option-a", label: "A" }),

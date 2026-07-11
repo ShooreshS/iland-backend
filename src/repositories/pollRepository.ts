@@ -77,9 +77,7 @@ const resolveVotePrivacyMode = (
     return candidate;
   }
 
-  return row.poll_policy_hash && row.credential_schema_hash
-    ? "zk_preprover_audit"
-    : "legacy_identity_linked";
+  return "zk_secret_ballot_v1";
 };
 
 const withPollContractDefaults = (row: PartialPollRow): PollRow => ({
@@ -114,7 +112,7 @@ const buildPollInsertPayload = (input: NewPollRow) => ({
 });
 
 const buildPollContractPayload = (input: NewPollRow) => ({
-  vote_privacy_mode: input.vote_privacy_mode ?? "zk_preprover_audit",
+  vote_privacy_mode: input.vote_privacy_mode ?? "zk_secret_ballot_v1",
   option_set_hash: input.option_set_hash ?? null,
   poll_encryption_key_id: input.poll_encryption_key_id ?? null,
 });

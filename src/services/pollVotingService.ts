@@ -72,8 +72,12 @@ const normalizeVotePrivacyMode = (
     return value;
   }
 
-  return "zk_preprover_audit";
+  return "zk_secret_ballot_v1";
 };
+
+const isDevLegacyVotePathEnabled = (): boolean =>
+  process.env.NODE_ENV !== "production" &&
+  process.env.CIVICOS_ENABLE_LEGACY_VOTE_PATH === "true";
 
 const mapPoll = (row: PollRow): PollDto => {
   const allowedDocumentCountryCodes = toArray(row.allowed_document_country_codes);
@@ -914,6 +918,12 @@ export const createPollVotingService = (
 
     const submittedAt = new Date().toISOString();
     const productionZkpPoll = isProductionZkpPoll(poll);
+    if (!productionZkpPoll && !isDevLegacyVotePathEnabled()) {
+      return buildFailure(
+        "PROOF_REQUIRED",
+        "This backend only accepts production ZKP vote submissions.",
+      );
+    }
     const rejectProductionVote = async (
       reasonCode: ZkpAuditRejectionReasonCode,
       errorCode: VoteSubmissionErrorCode,

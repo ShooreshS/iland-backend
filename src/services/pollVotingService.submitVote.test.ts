@@ -47,6 +47,10 @@ const POLL_ENCRYPTION_KEY_HASH = "b".repeat(64);
 const PRODUCTION_CIRCUIT_ID = "civicos-groth16-vote-circuit-v1";
 const PRODUCTION_OPTION_COUNT = 1;
 
+// Legacy/pre-prover vote tests are retained only as explicit internal
+// references. Normal backend behavior must fail closed without this dev flag.
+process.env.CIVICOS_ENABLE_LEGACY_VOTE_PATH = "true";
+
 const sha256Hex = (value: string): string =>
   createHash("sha256").update(value, "utf8").digest("hex");
 
@@ -96,6 +100,9 @@ const createPoll = (overrides: Partial<PollRow> = {}): PollRow => ({
   ends_at: null,
   created_at: FIXED_TIME,
   updated_at: FIXED_TIME,
+  vote_privacy_mode: "legacy_identity_linked",
+  option_set_hash: null,
+  poll_encryption_key_id: null,
   ...overrides,
 });
 
@@ -369,6 +376,54 @@ const createMockZkpAuditEventService = () => {
 };
 
 describe("pollVotingService.submitVote", () => {
+  it("fails closed for non-production poll vote modes unless the dev legacy flag is set", async () => {
+    const previousFlag = process.env.CIVICOS_ENABLE_LEGACY_VOTE_PATH;
+    delete process.env.CIVICOS_ENABLE_LEGACY_VOTE_PATH;
+
+    const viewer = createViewer();
+    const poll = createPoll({
+      vote_privacy_mode: "zk_preprover_audit",
+      requires_verified_identity: false,
+    });
+    const option = createOption();
+    let insertCalls = 0;
+
+    const restoreFns = [
+      patchMethod(pollRepository, "getById", async () => poll),
+      patchMethod(pollRepository, "getOptionByIdForPoll", async () => option),
+      patchMethod(voteRepository, "insert", async (input) => {
+        insertCalls += 1;
+        return createVote({
+          poll_id: input.poll_id,
+          option_id: input.option_id,
+          user_id: input.user_id,
+        });
+      }),
+    ];
+
+    try {
+      const result = await pollVotingService.submitVote({
+        pollId: poll.id,
+        optionId: option.id,
+        viewer,
+      });
+
+      expect(result.success).toBe(false);
+      if (!result.success) {
+        expect(result.errorCode).toBe("PROOF_REQUIRED");
+        expect(result.message).toContain("production ZKP");
+      }
+      expect(insertCalls).toBe(0);
+    } finally {
+      if (previousFlag === undefined) {
+        delete process.env.CIVICOS_ENABLE_LEGACY_VOTE_PATH;
+      } else {
+        process.env.CIVICOS_ENABLE_LEGACY_VOTE_PATH = previousFlag;
+      }
+      restoreFns.reverse().forEach((restore) => restore());
+    }
+  });
+
   it("rejects verified poll vote when viewer has no linked verified identity", async () => {
     const viewer = createViewer();
     const poll = createPoll({ requires_verified_identity: true });
