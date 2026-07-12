@@ -21,6 +21,20 @@ const hex64Schema = z
   .regex(/^[0-9a-f]{64}$/i)
   .transform((value) => value.toLowerCase());
 
+const pollIdParamSchema = z.string().trim().uuid();
+
+const parsePollIdParam = (value: string | undefined) =>
+  pollIdParamSchema.safeParse(value || "");
+
+const invalidPollIdResponse = () =>
+  json(
+    {
+      error: "invalid_poll_id",
+      message: "Poll id must be a UUID.",
+    },
+    400,
+  );
+
 const votePrivacyModeSchema = z.enum([
   "legacy_identity_linked",
   "zk_preprover_audit",
@@ -627,18 +641,12 @@ export const createGetPollAuditRoute = (
     method: "GET",
     path: "/polls/:id/audit",
     handler: async ({ params }) => {
-      const pollId = params.id?.trim() || "";
-      if (!pollId) {
-        return json(
-          {
-            error: "invalid_poll_id",
-            message: "A poll id is required.",
-          },
-          400,
-        );
+      const parsedPollId = parsePollIdParam(params.id);
+      if (!parsedPollId.success) {
+        return invalidPollIdResponse();
       }
 
-      const audit = await getPublicPollAudit(pollId);
+      const audit = await getPublicPollAudit(parsedPollId.data);
       if (!audit) {
         return json(
           {
@@ -669,15 +677,9 @@ export const createGetPollAuditInclusionRoute = (
     method: "GET",
     path: "/polls/:id/audit/inclusion",
     handler: async ({ params, url }) => {
-      const pollId = params.id?.trim() || "";
-      if (!pollId) {
-        return json(
-          {
-            error: "invalid_poll_id",
-            message: "A poll id is required.",
-          },
-          400,
-        );
+      const parsedPollId = parsePollIdParam(params.id);
+      if (!parsedPollId.success) {
+        return invalidPollIdResponse();
       }
 
       const parsedQuery = auditInclusionQuerySchema.safeParse({
@@ -696,7 +698,7 @@ export const createGetPollAuditInclusionRoute = (
       }
 
       const result = await getPublicPollAuditInclusionProof({
-        pollId,
+        pollId: parsedPollId.data,
         tree: parsedQuery.data.tree,
         leafHash: parsedQuery.data.leafHash,
       });
@@ -722,16 +724,10 @@ export const createGetPollReceiptRoute = (
     method: "GET",
     path: "/polls/:id/receipt/:voteCommitment",
     handler: async ({ params }) => {
-      const pollId = params.id?.trim() || "";
       const voteCommitment = params.voteCommitment?.trim() || "";
-      if (!pollId) {
-        return json(
-          {
-            error: "invalid_poll_id",
-            message: "A poll id is required.",
-          },
-          400,
-        );
+      const parsedPollId = parsePollIdParam(params.id);
+      if (!parsedPollId.success) {
+        return invalidPollIdResponse();
       }
 
       const parsedVoteCommitment = hex64Schema.safeParse(voteCommitment);
@@ -746,7 +742,7 @@ export const createGetPollReceiptRoute = (
       }
 
       const receipt = await getPublicVoteReceipt({
-        pollId,
+        pollId: parsedPollId.data,
         voteCommitment: parsedVoteCommitment.data,
       });
       if (!receipt) {
@@ -773,19 +769,13 @@ const publishPollAuditRoute: RouteDefinition = {
       return viewerResult.response;
     }
 
-    const pollId = params.id?.trim() || "";
-    if (!pollId) {
-      return json(
-        {
-          error: "invalid_poll_id",
-          message: "A poll id is required.",
-        },
-        400,
-      );
+    const parsedPollId = parsePollIdParam(params.id);
+    if (!parsedPollId.success) {
+      return invalidPollIdResponse();
     }
 
     const result = await pollPublicAuditService.publishPollAudit({
-      pollId,
+      pollId: parsedPollId.data,
       viewerUserId: viewerResult.viewer.userId,
     });
 
@@ -809,15 +799,9 @@ const submitTallyProofRoute: RouteDefinition = {
       return viewerResult.response;
     }
 
-    const pollId = params.id?.trim() || "";
-    if (!pollId) {
-      return json(
-        {
-          error: "invalid_poll_id",
-          message: "A poll id is required.",
-        },
-        400,
-      );
+    const parsedPollId = parsePollIdParam(params.id);
+    if (!parsedPollId.success) {
+      return invalidPollIdResponse();
     }
 
     let requestBody: unknown;
@@ -845,7 +829,7 @@ const submitTallyProofRoute: RouteDefinition = {
     }
 
     const result = await pollPublicAuditService.submitTallyProof({
-      pollId,
+      pollId: parsedPollId.data,
       viewerUserId: viewerResult.viewer.userId,
       proof: parsedBody.data.proof as Groth16TallyProofEnvelopeDto,
     });

@@ -80,6 +80,8 @@ const requireEnv = (name) => {
 const optionalEnv = (name) => process.env[name]?.trim() || null;
 
 const normalizeBaseUrl = (value) => value.replace(/\/+$/u, "");
+const uuidPattern =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
 
 const cluster = optionalEnv("SOLANA_AUDIT_CLUSTER") || DEFAULT_CLUSTER;
 const rpcUrl =
@@ -160,6 +162,12 @@ const duplicateVotePayloadFile = optionalEnv(
 if (!receiptVoteCommitment && !allowMissingReceipt && !allowPartial) {
   throw new Error(
     "CIVICOS_PHASE7_RECEIPT_VOTE_COMMITMENT is required for strict Phase 7 acceptance. Set CIVICOS_PHASE7_ALLOW_MISSING_RECEIPT=true only for a partial diagnostic run.",
+  );
+}
+
+if (!uuidPattern.test(pollId)) {
+  throw new Error(
+    `CIVICOS_PHASE7_POLL_ID must be the CivicOS poll UUID from the app receipt/details, not a Solana address or transaction signature. Received: ${pollId}`,
   );
 }
 
@@ -344,11 +352,15 @@ if (verifyOnly) {
 
 const afterAudit = await requestJson(auditPath);
 writeJsonArtifact("audit-after.json", afterAudit);
-const receipt = receiptVoteCommitment
+const receiptLookup = receiptVoteCommitment
   ? await requestJson(
       `${pollPath}/receipt/${encodeURIComponent(receiptVoteCommitment)}`,
+      {
+        allowHttpError: true,
+      },
     )
   : null;
+const receipt = receiptLookup?.body ?? null;
 
 const auditFile = writeJsonArtifact("audit.json", afterAudit);
 const receiptFile = receipt ? join(artifactDir, "receipt.json") : null;
@@ -374,8 +386,15 @@ if (!allowPartial) {
   if (!verifyOnly && !publication?.publication?.finalResultSignature) {
     throw new Error("Strict Phase 7 acceptance requires a final result Solana transaction.");
   }
-  if (!receipt) {
-    throw new Error("Strict Phase 7 acceptance requires a receipt inclusion artifact.");
+  if (!receiptLookup?.ok || !receipt?.included) {
+    throw new Error(
+      [
+        "Strict Phase 7 acceptance requires a receipt inclusion artifact.",
+        `The supplied vote commitment was not found in this poll's public audit tree: ${receiptVoteCommitment}.`,
+        `Receipt lookup status=${receiptLookup?.status ?? "(not requested)"}, batchStatus=${receipt?.batchStatus ?? "(none)"}, matchingLeafCount=${receipt?.matchingLeafCount ?? "(none)"}.`,
+        "Use the full Vote commitment from this exact poll's receipt, or run with CIVICOS_PHASE7_ALLOW_MISSING_RECEIPT=true only for a root-publication diagnostic.",
+      ].join(" "),
+    );
   }
 }
 

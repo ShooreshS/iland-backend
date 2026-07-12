@@ -8,6 +8,8 @@ node_modules
 test.json
 test.md
 dev
+tmp/
+
 sso-client-secrets/
 
 # Solana / Anchor build output
