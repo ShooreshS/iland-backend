@@ -1,5 +1,8 @@
 #!/usr/bin/env bun
 process.env.ILAND_ENV_VALIDATION_SCOPE = "supabase-admin-script";
+// This command only generates/verifies/records a tally proof. It never sends
+// Solana transactions, so local publish-wallet env should not block it.
+process.env.SOLANA_AUDIT_TRANSACTIONS_ENABLED = "false";
 
 type ParsedArgs = {
   pollId: string | null;
