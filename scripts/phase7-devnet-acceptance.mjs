@@ -18,6 +18,9 @@ const helpRequested = args.includes("--help") || args.includes("-h");
 const preflightOnly =
   args.includes("--preflight-only") ||
   process.env.CIVICOS_PHASE7_PREFLIGHT_ONLY === "true";
+const verifyOnly =
+  args.includes("--verify-only") ||
+  process.env.CIVICOS_PHASE7_VERIFY_ONLY === "true";
 const confirmSend = process.env.CIVICOS_PHASE7_CONFIRM_SEND === "true";
 const allowPartial = process.env.CIVICOS_PHASE7_ALLOW_PARTIAL === "true";
 const allowMissingReceipt =
@@ -26,6 +29,11 @@ const allowMissingReceipt =
 const usage = () => {
   console.error(`Usage:
   node scripts/phase7-devnet-acceptance.mjs --preflight-only
+  CIVICOS_PHASE7_VERIFY_ONLY=true \\
+  CIVICOS_PHASE7_BACKEND_URL=https://... \\
+  CIVICOS_PHASE7_POLL_ID=<poll id> \\
+  CIVICOS_PHASE7_RECEIPT_VOTE_COMMITMENT=<64-byte hex> \\
+    node scripts/phase7-devnet-acceptance.mjs
   CIVICOS_PHASE7_CONFIRM_SEND=true \\
   CIVICOS_PHASE7_BACKEND_URL=https://... \\
   CIVICOS_PHASE7_BEARER_TOKEN=<access token> \\
@@ -46,7 +54,11 @@ This script does not create votes or generate mobile proofs. It verifies the
 Phase 7 publication leg after a production ZKP poll already has accepted
 proof-backed votes and, for final publication, a verified tally proof.
 
-By default, confirmed runs are strict and require a receipt vote commitment,
+Use --verify-only / CIVICOS_PHASE7_VERIFY_ONLY=true after publishing from a
+signed-in owner device; verify-only mode does not need a bearer token and does
+not call POST /audit/publish.
+
+By default, non-preflight runs are strict and require a receipt vote commitment,
 published roots, a verified tally proof, and a final result transaction. For a
 partial publication rehearsal only, set CIVICOS_PHASE7_ALLOW_PARTIAL=true.
 `);
@@ -130,7 +142,7 @@ if (preflightOnly) {
   process.exit(0);
 }
 
-if (!confirmSend) {
+if (!confirmSend && !verifyOnly) {
   usage();
   throw new Error(
     "Refusing to call backend publication without CIVICOS_PHASE7_CONFIRM_SEND=true.",
@@ -138,7 +150,7 @@ if (!confirmSend) {
 }
 
 const backendUrl = normalizeBaseUrl(requireEnv("CIVICOS_PHASE7_BACKEND_URL"));
-const bearerToken = requireEnv("CIVICOS_PHASE7_BEARER_TOKEN");
+const bearerToken = verifyOnly ? null : requireEnv("CIVICOS_PHASE7_BEARER_TOKEN");
 const pollId = requireEnv("CIVICOS_PHASE7_POLL_ID");
 const receiptVoteCommitment = optionalEnv("CIVICOS_PHASE7_RECEIPT_VOTE_COMMITMENT");
 const duplicateVotePayloadFile = optionalEnv(
@@ -184,6 +196,7 @@ const transcriptLines = [
   `- Root publisher: ${rootPublisherPublicKey || "(not set)"}`,
   `- Fee payer: ${feePayerPublicKey || "(not set)"}`,
   `- Strict mode: ${allowPartial ? "no" : "yes"}`,
+  `- Verify only: ${verifyOnly ? "yes" : "no"}`,
   `- Receipt commitment supplied: ${receiptVoteCommitment ? "yes" : "no"}`,
   `- Duplicate vote payload supplied: ${duplicateVotePayloadFile ? "yes" : "no"}`,
   "",
@@ -266,6 +279,11 @@ pushTranscript(
 
 let duplicateVoteDrill = null;
 if (duplicateVotePayloadFile) {
+  if (verifyOnly) {
+    throw new Error(
+      "CIVICOS_PHASE7_DUPLICATE_VOTE_PAYLOAD_FILE cannot be used in verify-only mode because replaying a vote requires authentication.",
+    );
+  }
   const duplicatePayload = JSON.parse(readFileSync(duplicateVotePayloadFile, "utf8"));
   duplicateVoteDrill = await requestJson(`${pollPath}/vote`, {
     method: "POST",
@@ -304,13 +322,24 @@ if (duplicateVotePayloadFile) {
   );
 }
 
-console.log("Calling backend audit publication route...");
-const publication = await requestJson(publishPath, {
-  method: "POST",
-  authenticated: true,
-});
-if (publication.success !== true) {
-  throw new Error(`Publication failed: ${JSON.stringify(publication)}`);
+let publication = null;
+if (verifyOnly) {
+  console.log("Verify-only mode: skipping backend audit publication route.");
+  pushTranscript(
+    "## Publication Call",
+    "",
+    "- Skipped: audit publication was performed from the signed-in owner device.",
+    "",
+  );
+} else {
+  console.log("Calling backend audit publication route...");
+  publication = await requestJson(publishPath, {
+    method: "POST",
+    authenticated: true,
+  });
+  if (publication.success !== true) {
+    throw new Error(`Publication failed: ${JSON.stringify(publication)}`);
+  }
 }
 
 const afterAudit = await requestJson(auditPath);
@@ -323,7 +352,9 @@ const receipt = receiptVoteCommitment
 
 const auditFile = writeJsonArtifact("audit.json", afterAudit);
 const receiptFile = receipt ? join(artifactDir, "receipt.json") : null;
-const publicationFile = writeJsonArtifact("publication.json", publication);
+const publicationFile = publication
+  ? writeJsonArtifact("publication.json", publication)
+  : null;
 if (receipt && receiptFile) {
   writeFileSync(receiptFile, `${JSON.stringify(receipt, null, 2)}\n`);
 }
@@ -340,7 +371,7 @@ if (!allowPartial) {
   if (!afterAudit.tallyProofHash) {
     throw new Error("Strict Phase 7 acceptance requires a verified tally proof hash.");
   }
-  if (!publication.publication?.finalResultSignature) {
+  if (!verifyOnly && !publication?.publication?.finalResultSignature) {
     throw new Error("Strict Phase 7 acceptance requires a final result Solana transaction.");
   }
   if (!receipt) {
@@ -383,7 +414,10 @@ pushTranscript(
   `- Published root transactions: ${rootTransactions.length}`,
   ...rootTransactions.map((signature) => `  - ${signature}`),
   `- Final result transaction: ${
-    publication.publication?.finalResultSignature || "(not published)"
+    publication?.publication?.finalResultSignature ||
+    afterAudit.finalResultPublication?.transactionSignature ||
+    afterAudit.resultPublication?.transactionSignature ||
+    "(not published)"
   }`,
   "",
   "## Public Verifier",
@@ -398,7 +432,7 @@ pushTranscript(
   `- Health: ${zkpHealthFile}`,
   `- Audit before: ${join(artifactDir, "audit-before.json")}`,
   `- Audit after: ${auditFile}`,
-  `- Publication: ${publicationFile}`,
+  `- Publication: ${publicationFile || "(skipped in verify-only mode)"}`,
   `- Receipt: ${receiptFile || "(not captured)"}`,
   `- Public verifier output: ${join(artifactDir, "public-audit-verifier.txt")}`,
   "",
@@ -413,5 +447,10 @@ console.log(`  transcript=${transcriptFile}`);
 console.log(`  publicationStatus=${afterAudit.publicationStatus}`);
 console.log(`  rootCommits=${afterAudit.rootCommits.length}`);
 console.log(
-  `  finalResultTx=${publication.publication?.finalResultSignature || "(not published)"}`,
+  `  finalResultTx=${
+    publication?.publication?.finalResultSignature ||
+    afterAudit.finalResultPublication?.transactionSignature ||
+    afterAudit.resultPublication?.transactionSignature ||
+    "(not published)"
+  }`,
 );

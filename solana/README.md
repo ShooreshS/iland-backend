@@ -59,8 +59,26 @@ Deployment and root-publisher signing are intentionally not automated here. Do n
 ## Phase 7 Devnet Acceptance
 
 After a real app build creates a production `zk_secret_ballot_v1` poll and at
-least one phone-generated proof-backed vote is accepted, run the strict Phase 7
-publication acceptance from the backend repo:
+least one phone-generated proof-backed vote is accepted, publish from the
+signed-in poll-owner device, then run strict public verification from the
+backend repo:
+
+```bash
+cd /Users/shooresh/Documents/hello1/iland24/back
+
+CIVICOS_PHASE7_VERIFY_ONLY=true \
+CIVICOS_PHASE7_BACKEND_URL="https://iland-backend-production.up.railway.app" \
+CIVICOS_PHASE7_POLL_ID="<poll id>" \
+CIVICOS_PHASE7_RECEIPT_VOTE_COMMITMENT="<vote commitment from the app receipt>" \
+bun run phase7:acceptance
+```
+
+Verify-only mode does not need a bearer token and does not call the protected
+publication route. It verifies the public audit material after the owner device
+has already published it.
+
+If a poll-owner bearer access token is available, the runner can perform the
+publication call itself:
 
 ```bash
 cd /Users/shooresh/Documents/hello1/iland24/back
@@ -73,13 +91,14 @@ CIVICOS_PHASE7_RECEIPT_VOTE_COMMITMENT="<vote commitment from the app receipt>" 
 bun run phase7:acceptance
 ```
 
-The strict runner requires:
+Strict acceptance requires:
 
 - `/health/zkp` reports configured vote and tally verifiers;
 - the poll has accepted proof-backed encrypted votes;
 - the poll has a verified tally proof;
-- audit publication writes at least one root transaction and a final result
-  transaction on devnet;
+- audit publication writes at least one root transaction on devnet;
+- when the runner performs publication itself, the publish response includes a
+  final result transaction;
 - the receipt inclusion proof verifies against the public audit JSON.
 
 It writes evidence under `tmp/phase7/<poll-id>-<timestamp>/`, including:

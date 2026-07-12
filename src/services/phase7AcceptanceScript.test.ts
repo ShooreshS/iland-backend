@@ -20,6 +20,14 @@ describe("Phase 7 acceptance runner", () => {
     expect(source).toContain("CIVICOS_PHASE7_ALLOW_PARTIAL");
   });
 
+  it("supports verifying a poll already published from the signed-in owner device", () => {
+    const source = scriptSource();
+
+    expect(source).toContain("CIVICOS_PHASE7_VERIFY_ONLY");
+    expect(source).toContain("Verify-only mode: skipping backend audit publication route.");
+    expect(source).toContain("audit publication was performed from the signed-in owner device");
+  });
+
   it("supports duplicate-nullifier negative drill from a saved phone payload", () => {
     const source = scriptSource();
 
