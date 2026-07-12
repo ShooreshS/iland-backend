@@ -127,6 +127,7 @@ const encryptOpening = (input: {
   publicKeyJwk: JsonValue;
   encryptedVoteCommitment: string;
   optionIndex: number;
+  includeVoteRandomness?: boolean;
 }): JsonValue => {
   const pollEncryptionKeyId = input.poll.poll_encryption_key_id || "";
   const optionSetHash = input.poll.option_set_hash || "";
@@ -161,7 +162,9 @@ const encryptOpening = (input: {
     optionIndex: input.optionIndex,
     optionSetHash,
     encryptedVoteRandomness: "9".repeat(64),
-    voteRandomness: "a".repeat(64),
+    ...(input.includeVoteRandomness === false
+      ? {}
+      : { voteRandomness: "a".repeat(64) }),
     encryptedVoteCommitment: input.encryptedVoteCommitment,
   });
   const cipher = createCipheriv("aes-256-gcm", key, nonce);
@@ -330,5 +333,45 @@ describe("pollEncryptedTallyService", () => {
       encryptedVoteRandomness: "9".repeat(64),
       voteRandomness: "a".repeat(64),
     });
+  });
+
+  it("rejects final tally witness material when voteRandomness is missing", async () => {
+    const poll = createPoll();
+    const optionA = createOption({ id: "option-a", label: "Yes", display_order: 0 });
+    const optionB = createOption({ id: "option-b", label: "No", display_order: 1 });
+    const { keyRow, publicKeyJwk } = createPollKeyRow(poll);
+    const encryptedVoteCommitment = "b".repeat(64);
+    const encryptedVote = encryptOpening({
+      poll,
+      publicKeyJwk,
+      encryptedVoteCommitment,
+      optionIndex: 1,
+      includeVoteRandomness: false,
+    });
+    const vote = createVote({
+      encrypted_vote: encryptedVote,
+      encrypted_vote_commitment: encryptedVoteCommitment,
+      accepted_at: "2026-07-11T10:01:00.000Z",
+    });
+    const service = createPollEncryptedTallyService({
+      pollEncryptionKeys: {
+        getByPollId: async () => keyRow,
+      },
+      pollZkVotes: {
+        getAcceptedByPollId: async () => [vote],
+      },
+    });
+
+    const batch = await service.getFinalizationBatch({
+      poll,
+      options: [optionB, optionA],
+    });
+
+    expect(batch.success).toBe(false);
+    if (batch.success) {
+      throw new Error("Expected finalization batch rejection.");
+    }
+    expect(batch.errorCode).toBe("UNDECRYPTABLE_VOTE_OPENING");
+    expect(batch.message).toContain("missing voteRandomness");
   });
 });

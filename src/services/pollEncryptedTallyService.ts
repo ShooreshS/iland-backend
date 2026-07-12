@@ -30,6 +30,16 @@ type PollEncryptedTallyRepositoryDeps = Readonly<{
   ballotCustodyPolicy?: BallotCustodyPolicy;
 }>;
 
+type FinalizationVoteOpeningResult =
+  | Readonly<{
+      success: true;
+      vote: DecryptedAcceptedEncryptedVote;
+    }>
+  | Readonly<{
+      success: false;
+      reason: string;
+    }>;
+
 export type ProvisionalEncryptedTally = Readonly<{
   countsByOptionId: Record<string, number>;
   totalVotes: number;
@@ -238,7 +248,7 @@ const decryptAcceptedVoteForFinalization = (input: {
   options: readonly PollOptionRow[];
   vote: PollZkVoteRow;
   privateKeyJwk: JsonValue;
-}): DecryptedAcceptedEncryptedVote | null => {
+}): FinalizationVoteOpeningResult => {
   let opening: Record<string, unknown> | null = null;
   try {
     opening = decryptVoteOpening({
@@ -247,7 +257,17 @@ const decryptAcceptedVoteForFinalization = (input: {
       poll: input.poll,
     });
   } catch {
-    return null;
+    return {
+      success: false,
+      reason: "the vote opening could not be decrypted or authenticated",
+    };
+  }
+
+  if (!opening) {
+    return {
+      success: false,
+      reason: "the vote opening could not be decrypted or authenticated",
+    };
   }
 
   const optionIds = optionIdsByIndex(input.options);
@@ -266,36 +286,65 @@ const decryptAcceptedVoteForFinalization = (input: {
     opening?.encryptedVoteRandomness,
   );
   const voteRandomness = normalizeHex64(opening?.voteRandomness);
+  const failures: string[] = [];
 
+  if (asString(opening.version) !== ENCRYPTED_VOTE_OPENING_VERSION) {
+    failures.push("opening version mismatch");
+  }
+  if (asString(opening.pollId) !== input.poll.id) {
+    failures.push("poll id mismatch");
+  }
+  if (asString(opening.optionSetHash) !== asString(input.poll.option_set_hash)) {
+    failures.push("option set hash mismatch");
+  }
   if (
-    !opening ||
-    asString(opening.version) !== ENCRYPTED_VOTE_OPENING_VERSION ||
-    asString(opening.pollId) !== input.poll.id ||
-    asString(opening.optionSetHash) !== asString(input.poll.option_set_hash) ||
     asString(opening.encryptedVoteCommitment) !==
-      input.vote.encrypted_vote_commitment ||
-    (openingOptionId && openingOptionId !== optionId) ||
-    optionIndex === null ||
-    !optionId ||
-    !nullifier ||
-    !voteCommitment ||
-    !encryptedVoteCommitment ||
-    !encryptedVoteRandomness ||
-    !voteRandomness
+    input.vote.encrypted_vote_commitment
   ) {
-    return null;
+    failures.push("encrypted vote commitment mismatch");
+  }
+  if (openingOptionId && openingOptionId !== optionId) {
+    failures.push("option id mismatch");
+  }
+  if (optionIndex === null || !optionId) {
+    failures.push("invalid option index");
+  }
+  if (!nullifier) {
+    failures.push("missing nullifier");
+  }
+  if (!voteCommitment) {
+    failures.push("missing vote commitment");
+  }
+  if (!encryptedVoteCommitment) {
+    failures.push("missing encrypted vote commitment");
+  }
+  if (!encryptedVoteRandomness) {
+    failures.push("missing encryptedVoteRandomness");
+  }
+  if (!voteRandomness) {
+    failures.push("missing voteRandomness");
+  }
+
+  if (failures.length > 0) {
+    return {
+      success: false,
+      reason: failures.join(", "),
+    };
   }
 
   return {
-    id: input.vote.id,
-    nullifier,
-    voteCommitment,
-    encryptedVoteCommitment,
-    encryptedVoteRandomness,
-    voteRandomness,
-    optionId,
-    optionIndex,
-    acceptedAt: input.vote.accepted_at,
+    success: true,
+    vote: {
+      id: input.vote.id,
+      nullifier: nullifier!,
+      voteCommitment: voteCommitment!,
+      encryptedVoteCommitment: encryptedVoteCommitment!,
+      encryptedVoteRandomness: encryptedVoteRandomness!,
+      voteRandomness: voteRandomness!,
+      optionId: optionId!,
+      optionIndex: optionIndex!,
+      acceptedAt: input.vote.accepted_at,
+    },
   };
 };
 
@@ -415,19 +464,19 @@ export const createPollEncryptedTallyService = (
           vote,
           privateKeyJwk: keyRow.private_key_jwk,
         });
-        if (!decrypted) {
+        if (!decrypted.success) {
           return {
             success: false,
             errorCode: "UNDECRYPTABLE_VOTE_OPENING",
             message:
-              "At least one accepted encrypted vote cannot be decrypted into the final tally witness.",
+              `At least one accepted encrypted vote cannot be decrypted into the final tally witness: ${decrypted.reason}.`,
           };
         }
 
-        decryptedVotes.push(decrypted);
-        countsByOptionId[decrypted.optionId] =
-          (countsByOptionId[decrypted.optionId] || 0) + 1;
-        updatedAt = decrypted.acceptedAt;
+        decryptedVotes.push(decrypted.vote);
+        countsByOptionId[decrypted.vote.optionId] =
+          (countsByOptionId[decrypted.vote.optionId] || 0) + 1;
+        updatedAt = decrypted.vote.acceptedAt;
       }
 
       return {
