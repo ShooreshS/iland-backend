@@ -56,6 +56,55 @@ cargo test
 
 Deployment and root-publisher signing are intentionally not automated here. Do not use a mainnet program authority or fee payer until the deployment plan and key custody are reviewed.
 
+## Phase 7 Devnet Acceptance
+
+After a real app build creates a production `zk_secret_ballot_v1` poll and at
+least one phone-generated proof-backed vote is accepted, run the strict Phase 7
+publication acceptance from the backend repo:
+
+```bash
+cd /Users/shooresh/Documents/hello1/iland24/back
+
+CIVICOS_PHASE7_CONFIRM_SEND=true \
+CIVICOS_PHASE7_BACKEND_URL="https://iland-backend-production.up.railway.app" \
+CIVICOS_PHASE7_BEARER_TOKEN="<poll-owner bearer access token>" \
+CIVICOS_PHASE7_POLL_ID="<poll id>" \
+CIVICOS_PHASE7_RECEIPT_VOTE_COMMITMENT="<vote commitment from the app receipt>" \
+bun run phase7:acceptance
+```
+
+The strict runner requires:
+
+- `/health/zkp` reports configured vote and tally verifiers;
+- the poll has accepted proof-backed encrypted votes;
+- the poll has a verified tally proof;
+- audit publication writes at least one root transaction and a final result
+  transaction on devnet;
+- the receipt inclusion proof verifies against the public audit JSON.
+
+It writes evidence under `tmp/phase7/<poll-id>-<timestamp>/`, including:
+
+- `PHASE7-TRANSCRIPT.md`;
+- `health-zkp.json`;
+- `audit-before.json` and `audit-after.json`;
+- `publication.json`;
+- `receipt.json`;
+- `public-audit-verifier.txt`.
+
+Optional duplicate-nullifier drill:
+
+```bash
+CIVICOS_PHASE7_DUPLICATE_VOTE_PAYLOAD_FILE="tmp/phase7/vote-payload.json" \
+  ...same command...
+```
+
+That file must be the exact phone-generated production vote request body that
+was already accepted. The script replays it and requires HTTP 409
+`ALREADY_VOTED`, proving the duplicate nullifier path fails closed.
+
+For a diagnostic publication-only run against an unfinished poll, set
+`CIVICOS_PHASE7_ALLOW_PARTIAL=true`. A partial run is not Phase 7 acceptance.
+
 ## Phase 12 Security
 
 - Root publishing must use a dedicated `root_publisher_key` controlled through external KMS/HSM or multisig signing-service custody. It must not be the registry authority or program upgrade authority.
