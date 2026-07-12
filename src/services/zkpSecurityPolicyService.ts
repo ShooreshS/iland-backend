@@ -5,6 +5,7 @@ import {
   BACKEND_AUDIT_LOG_VERSION,
   GENESIS_BACKEND_AUDIT_EVENT_HASH,
 } from "./backendAuditHashChainService";
+import { getBallotCustodyPolicy } from "./ballotCustodyPolicyService";
 import { getProofSystemPolicy } from "./proofSystemPolicyService";
 import { getSolanaAuditFeePolicy } from "./solanaAuditFeePolicyService";
 
@@ -54,6 +55,21 @@ export type ZkpSecurityPolicy = Readonly<{
     publicUpgradeAnnouncementsRequired: true;
     versionedProgramIdsRequired: true;
   }>;
+  ballotCustody: Readonly<{
+    version: "civicos-ballot-custody-policy-v1";
+    mode: "operator_trusted_private_beta" | "threshold_trustee_v1";
+    releaseMode: "private_beta" | "public_production";
+    decryptor: "backend_service" | "threshold_trustees";
+    operatorTrusted: boolean;
+    threshold: boolean;
+    backendCanDecryptBallots: boolean;
+    liveProvisionalPerOptionResults: boolean;
+    acceptedVoteCountPublicDuringVoting: true;
+    publicSecretBallotClaimAllowed: boolean;
+    privateKeyMaterialExposedByApi: false;
+    claim: string;
+    productionGaps: readonly string[];
+  }>;
   antiSpam: Readonly<{
     proofVerificationBeforeAcceptingVote: true;
     rateLimitsRequired: true;
@@ -82,6 +98,7 @@ export type ZkpSecurityPolicy = Readonly<{
 export const getZkpSecurityPolicy = (): ZkpSecurityPolicy => {
   const feePolicy = getSolanaAuditFeePolicy();
   const proofSystemPolicy = getProofSystemPolicy();
+  const ballotCustody = getBallotCustodyPolicy();
   const backendEnvFeePayerSecretConfigured =
     typeof env.solanaAudit.feePayerSecretKey === "string" &&
     env.solanaAudit.feePayerSecretKey.trim().length > 0;
@@ -125,6 +142,25 @@ export const getZkpSecurityPolicy = (): ZkpSecurityPolicy => {
       timelockRecommended: true,
       publicUpgradeAnnouncementsRequired: true,
       versionedProgramIdsRequired: true,
+    }),
+    ballotCustody: Object.freeze({
+      version: ballotCustody.version,
+      mode: ballotCustody.mode,
+      releaseMode: ballotCustody.releaseMode,
+      decryptor: ballotCustody.decryptor,
+      operatorTrusted: ballotCustody.operatorTrusted,
+      threshold: ballotCustody.threshold,
+      backendCanDecryptBallots: ballotCustody.backendCanDecryptBallots,
+      liveProvisionalPerOptionResults:
+        ballotCustody.liveProvisionalPerOptionResults,
+      acceptedVoteCountPublicDuringVoting:
+        ballotCustody.acceptedVoteCountPublicDuringVoting,
+      publicSecretBallotClaimAllowed:
+        ballotCustody.publicSecretBallotClaimAllowed,
+      privateKeyMaterialExposedByApi:
+        ballotCustody.privateKeyMaterialExposedByApi,
+      claim: ballotCustody.claim,
+      productionGaps: ballotCustody.productionGaps,
     }),
     antiSpam: Object.freeze({
       proofVerificationBeforeAcceptingVote: true,

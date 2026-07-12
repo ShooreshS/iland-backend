@@ -10,6 +10,11 @@ import pollEncryptionKeyRepository from "../repositories/pollEncryptionKeyReposi
 import pollZkVoteRepository from "../repositories/pollZkVoteRepository";
 import type { PollOptionRow, PollRow, PollZkVoteRow } from "../types/db";
 import type { JsonValue } from "../types/json";
+import {
+  type BallotCustodyPolicy,
+  canBackendDecryptPollEncryptionCustodyModel,
+  getBallotCustodyPolicy,
+} from "./ballotCustodyPolicyService";
 import { canonicalizeJson } from "./pollPolicyService";
 
 const ENCRYPTED_VOTE_AAD_VERSION = "civicos-encrypted-vote-aad-v1";
@@ -22,6 +27,7 @@ const ENCRYPTED_VOTE_CIPHER = "aes-256-gcm";
 type PollEncryptedTallyRepositoryDeps = Readonly<{
   pollEncryptionKeys?: Pick<typeof pollEncryptionKeyRepository, "getByPollId">;
   pollZkVotes?: Pick<typeof pollZkVoteRepository, "getAcceptedByPollId">;
+  ballotCustodyPolicy?: BallotCustodyPolicy;
 }>;
 
 export type ProvisionalEncryptedTally = Readonly<{
@@ -191,6 +197,8 @@ export const createPollEncryptedTallyService = (
   const pollEncryptionKeys =
     dependencies.pollEncryptionKeys ?? pollEncryptionKeyRepository;
   const pollZkVotes = dependencies.pollZkVotes ?? pollZkVoteRepository;
+  const getCustodyPolicy = () =>
+    dependencies.ballotCustodyPolicy ?? getBallotCustodyPolicy();
 
   return {
     async getProvisionalTally(input: {
@@ -210,6 +218,17 @@ export const createPollEncryptedTallyService = (
         pollZkVotes.getAcceptedByPollId(input.poll.id),
       ]);
       if (!keyRow || keyRow.key_id !== input.poll.poll_encryption_key_id) {
+        return { countsByOptionId, totalVotes: 0, updatedAt: null };
+      }
+
+      const custodyPolicy = getCustodyPolicy();
+      if (
+        !custodyPolicy.liveProvisionalPerOptionResults ||
+        !canBackendDecryptPollEncryptionCustodyModel(
+          keyRow.custody_model,
+          custodyPolicy,
+        )
+      ) {
         return { countsByOptionId, totalVotes: 0, updatedAt: null };
       }
 

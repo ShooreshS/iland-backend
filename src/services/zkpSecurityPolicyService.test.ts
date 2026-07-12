@@ -60,6 +60,27 @@ describe("zkpSecurityPolicyService", () => {
     });
   });
 
+  it("states the ballot custody trust boundary", () => {
+    const policy = getZkpSecurityPolicy();
+
+    expect(policy.ballotCustody).toMatchObject({
+      version: "civicos-ballot-custody-policy-v1",
+      mode: "operator_trusted_private_beta",
+      releaseMode: "private_beta",
+      decryptor: "backend_service",
+      operatorTrusted: true,
+      threshold: false,
+      backendCanDecryptBallots: true,
+      liveProvisionalPerOptionResults: true,
+      acceptedVoteCountPublicDuringVoting: true,
+      publicSecretBallotClaimAllowed: false,
+      privateKeyMaterialExposedByApi: false,
+    });
+    expect(policy.ballotCustody.productionGaps).toContain(
+      "Do not market operator-secret ballots while backend-held keys can decrypt openings.",
+    );
+  });
+
   it("records anti-spam requirements and current controls", () => {
     const policy = getZkpSecurityPolicy();
 

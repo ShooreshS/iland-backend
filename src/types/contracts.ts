@@ -64,8 +64,16 @@ export type PollEncryptionKeyDto = {
   encryptedVoteCommitmentScheme: "poseidon-encrypted-vote-opening-v1";
   custody: {
     model: string;
+    mode: string;
+    releaseMode: "private_beta" | "public_production";
     threshold: boolean;
+    decryptor: "backend_service" | "threshold_trustees";
+    operatorTrusted: boolean;
+    liveProvisionalPerOptionResults: boolean;
+    acceptedVoteCountPublicDuringVoting: true;
+    publicSecretBallotClaimAllowed: boolean;
     privateKeyMaterialExposedByApi: false;
+    claim: string;
   };
   createdAt: string;
 };
@@ -82,6 +90,7 @@ export type PollEncryptionKeyResultDto =
         | "POLL_NOT_FOUND"
         | "ENCRYPTION_KEY_NOT_REQUIRED"
         | "ENCRYPTION_KEY_NOT_CONFIGURED"
+        | "ENCRYPTION_CUSTODY_NOT_SUPPORTED"
         | "ENCRYPTION_KEY_CONFLICT";
       message: string;
     };

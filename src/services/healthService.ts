@@ -8,6 +8,7 @@ import {
   getGroth16TallyVerifierConfig,
   isGroth16TallyVerifierConfigured,
 } from "./groth16TallyProofVerifierService";
+import { getBallotCustodyPolicy } from "./ballotCustodyPolicyService";
 
 const startedAt = Date.now();
 
@@ -60,6 +61,7 @@ export const getSupabaseHealthStatus = async () => {
 export const getZkpHealthStatus = () => {
   const vote = getGroth16VerifierConfig();
   const tally = getGroth16TallyVerifierConfig();
+  const ballotCustody = getBallotCustodyPolicy();
   const voteConfigured = isGroth16VoteVerifierConfigured(vote);
   const tallyConfigured = isGroth16TallyVerifierConfigured(tally);
 
@@ -91,6 +93,24 @@ export const getZkpHealthStatus = () => {
         artifactManifestHash: tally.tallyArtifactManifestHash,
         artifactManifestStatus: tally.tallyArtifactManifestStatus,
         artifactManifestError: tally.tallyArtifactManifestError,
+      },
+      ballotCustody: {
+        version: ballotCustody.version,
+        mode: ballotCustody.mode,
+        releaseMode: ballotCustody.releaseMode,
+        decryptor: ballotCustody.decryptor,
+        operatorTrusted: ballotCustody.operatorTrusted,
+        threshold: ballotCustody.threshold,
+        backendCanDecryptBallots: ballotCustody.backendCanDecryptBallots,
+        liveProvisionalPerOptionResults:
+          ballotCustody.liveProvisionalPerOptionResults,
+        acceptedVoteCountPublicDuringVoting:
+          ballotCustody.acceptedVoteCountPublicDuringVoting,
+        publicSecretBallotClaimAllowed:
+          ballotCustody.publicSecretBallotClaimAllowed,
+        privateKeyMaterialExposedByApi:
+          ballotCustody.privateKeyMaterialExposedByApi,
+        productionGaps: ballotCustody.productionGaps,
       },
     },
   };

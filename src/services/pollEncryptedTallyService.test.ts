@@ -7,6 +7,7 @@ import {
   hkdfSync,
 } from "node:crypto";
 import { createPollEncryptedTallyService } from "./pollEncryptedTallyService";
+import { buildBallotCustodyPolicy } from "./ballotCustodyPolicyService";
 import {
   CIVIC_ENCRYPTED_VOTE_ALGORITHM,
   CIVIC_ENCRYPTED_VOTE_CIPHER,
@@ -113,7 +114,7 @@ const createPollKeyRow = (
       public_key_jwk: publicKeyJwk,
       public_key_hash: "8".repeat(64),
       private_key_jwk: privateKeyJwk,
-      custody_model: "backend-db-service-role-v1",
+      custody_model: "operator-trusted-backend-db-v1",
       created_at: FIXED_TIME,
       revoked_at: null,
       revocation_reason: null,
@@ -235,5 +236,48 @@ describe("pollEncryptedTallyService", () => {
     expect(tally.countsByOptionId[optionA.id]).toBe(0);
     expect(tally.countsByOptionId[optionB.id]).toBe(1);
     expect(tally.updatedAt).toBe("2026-07-11T10:01:00.000Z");
+  });
+
+  it("does not decrypt provisional per-option counts under threshold trustee custody", async () => {
+    const poll = createPoll();
+    const optionA = createOption({ id: "option-a", label: "Yes", display_order: 0 });
+    const optionB = createOption({ id: "option-b", label: "No", display_order: 1 });
+    const { keyRow, publicKeyJwk } = createPollKeyRow(poll);
+    keyRow.custody_model = "threshold-trustee-v1";
+    const encryptedVoteCommitment = "b".repeat(64);
+    const encryptedVote = encryptOpening({
+      poll,
+      publicKeyJwk,
+      encryptedVoteCommitment,
+      optionIndex: 1,
+    });
+    const service = createPollEncryptedTallyService({
+      ballotCustodyPolicy: buildBallotCustodyPolicy({
+        mode: "threshold_trustee_v1",
+        liveProvisionalResultsEnabled: false,
+      }),
+      pollEncryptionKeys: {
+        getByPollId: async () => keyRow,
+      },
+      pollZkVotes: {
+        getAcceptedByPollId: async () => [
+          createVote({
+            encrypted_vote: encryptedVote,
+            encrypted_vote_commitment: encryptedVoteCommitment,
+            accepted_at: "2026-07-11T10:01:00.000Z",
+          }),
+        ],
+      },
+    });
+
+    const tally = await service.getProvisionalTally({
+      poll,
+      options: [optionB, optionA],
+    });
+
+    expect(tally.totalVotes).toBe(0);
+    expect(tally.countsByOptionId[optionA.id]).toBe(0);
+    expect(tally.countsByOptionId[optionB.id]).toBe(0);
+    expect(tally.updatedAt).toBeNull();
   });
 });

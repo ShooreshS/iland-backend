@@ -10,6 +10,8 @@ import {
   CIVIC_ENCRYPTED_VOTE_CIPHER,
   CIVIC_ENCRYPTED_VOTE_KEY_AGREEMENT,
   CIVIC_ENCRYPTED_VOTE_KDF,
+  CIVIC_POLL_ENCRYPTION_CUSTODY_MODEL,
+  buildBallotCustodyPolicy,
   createPollEncryptionKeyService,
   hashPollEncryptionPublicKey,
 } from "./pollEncryptionKeyService";
@@ -78,7 +80,7 @@ const createMockRepository = () => {
         public_key_jwk: input.public_key_jwk,
         public_key_hash: input.public_key_hash,
         private_key_jwk: input.private_key_jwk,
-        custody_model: input.custody_model ?? "backend-db-service-role-v1",
+        custody_model: input.custody_model ?? CIVIC_POLL_ENCRYPTION_CUSTODY_MODEL,
         created_at: FIXED_TIME,
         revoked_at: null,
         revocation_reason: null,
@@ -115,8 +117,15 @@ describe("pollEncryptionKeyService", () => {
       kdf: CIVIC_ENCRYPTED_VOTE_KDF,
       cipher: CIVIC_ENCRYPTED_VOTE_CIPHER,
       custody: {
+        mode: "operator_trusted_private_beta",
+        releaseMode: "private_beta",
+        decryptor: "backend_service",
+        operatorTrusted: true,
         privateKeyMaterialExposedByApi: false,
         threshold: false,
+        liveProvisionalPerOptionResults: true,
+        acceptedVoteCountPublicDuringVoting: true,
+        publicSecretBallotClaimAllowed: false,
       },
     });
     expect(result.key.publicKeyJwk).toMatchObject({
@@ -138,6 +147,53 @@ describe("pollEncryptionKeyService", () => {
       kty: "OKP",
       crv: "X25519",
     });
+    expect(repository.rows[0].custody_model).toBe(
+      CIVIC_POLL_ENCRYPTION_CUSTODY_MODEL,
+    );
+  });
+
+  it("accepts legacy backend-db custody rows under the private beta policy", async () => {
+    const repository = createMockRepository();
+    const service = createPollEncryptionKeyService({
+      pollEncryptionKeyRepository: repository,
+      pollRepository: {
+        getById: async () => createPoll(),
+      },
+    });
+
+    const first = await service.getOrCreatePublicKeyForPoll("poll-1");
+    expect(first.success).toBe(true);
+    repository.rows[0].custody_model = "backend-db-service-role-v1";
+
+    const second = await service.getOrCreatePublicKeyForPoll("poll-1");
+
+    expect(second.success).toBe(true);
+    if (second.success) {
+      expect(second.key.custody.model).toBe("backend-db-service-role-v1");
+      expect(second.key.custody.mode).toBe("operator_trusted_private_beta");
+    }
+  });
+
+  it("fails closed when threshold custody is selected before trustee key generation exists", async () => {
+    const repository = createMockRepository();
+    const service = createPollEncryptionKeyService({
+      pollEncryptionKeyRepository: repository,
+      pollRepository: {
+        getById: async () => createPoll(),
+      },
+      ballotCustodyPolicy: buildBallotCustodyPolicy({
+        mode: "threshold_trustee_v1",
+        liveProvisionalResultsEnabled: false,
+      }),
+    });
+
+    const result = await service.getOrCreatePublicKeyForPoll("poll-1");
+
+    expect(result).toMatchObject({
+      success: false,
+      errorCode: "ENCRYPTION_CUSTODY_NOT_SUPPORTED",
+    });
+    expect(repository.rows).toHaveLength(0);
   });
 
   it("is idempotent for an existing poll key", async () => {

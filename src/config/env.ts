@@ -1,6 +1,11 @@
 import { z } from "zod";
 
 import {
+  BALLOT_CUSTODY_MODES,
+  OPERATOR_TRUSTED_PRIVATE_BETA_CUSTODY_MODE,
+  THRESHOLD_TRUSTEE_CUSTODY_MODE,
+} from "./ballotCustodyDefaults";
+import {
   CIVICOS_AUDIT_PROGRAM_ID,
   DEFAULT_SOLANA_AUDIT_FEE_MODE,
   SHOLAN_TOKEN_DEFAULTS,
@@ -143,6 +148,9 @@ const parsed = z
     ZKP_GROTH16_TALLY_TRUSTED_SETUP_TRANSCRIPT_HASH: hex64Schema.optional(),
     ZKP_GROTH16_TALLY_ARTIFACT_MANIFEST_PATH: z.string().min(1).optional(),
     ZKP_GROTH16_TALLY_ARTIFACT_MANIFEST_HASH: hex64Schema.optional(),
+    ZKP_BALLOT_CUSTODY_MODE: z.enum(BALLOT_CUSTODY_MODES).optional(),
+    ZKP_PUBLIC_SECRET_BALLOT_CLAIMS_ENABLED: z.string().optional(),
+    ZKP_LIVE_PROVISIONAL_RESULTS_ENABLED: z.string().optional(),
   })
   .superRefine((input, context) => {
     const hasUrl = Boolean(input.SUPABASE_URL);
@@ -329,6 +337,42 @@ const parsed = z
       input.ZKP_GROTH16_VOTE_VERIFIER_ENABLED !== undefined
         ? toBoolean(input.ZKP_GROTH16_VOTE_VERIFIER_ENABLED)
         : false;
+
+    const ballotCustodyMode =
+      input.ZKP_BALLOT_CUSTODY_MODE ??
+      OPERATOR_TRUSTED_PRIVATE_BETA_CUSTODY_MODE;
+    const publicSecretBallotClaimsEnabled =
+      input.ZKP_PUBLIC_SECRET_BALLOT_CLAIMS_ENABLED !== undefined
+        ? toBoolean(input.ZKP_PUBLIC_SECRET_BALLOT_CLAIMS_ENABLED)
+        : false;
+    const liveProvisionalResultsEnabled =
+      input.ZKP_LIVE_PROVISIONAL_RESULTS_ENABLED !== undefined
+        ? toBoolean(input.ZKP_LIVE_PROVISIONAL_RESULTS_ENABLED)
+        : ballotCustodyMode !== THRESHOLD_TRUSTEE_CUSTODY_MODE;
+
+    if (
+      publicSecretBallotClaimsEnabled &&
+      ballotCustodyMode !== THRESHOLD_TRUSTEE_CUSTODY_MODE
+    ) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        message:
+          "ZKP_PUBLIC_SECRET_BALLOT_CLAIMS_ENABLED requires ZKP_BALLOT_CUSTODY_MODE=threshold_trustee_v1.",
+        path: ["ZKP_PUBLIC_SECRET_BALLOT_CLAIMS_ENABLED"],
+      });
+    }
+
+    if (
+      ballotCustodyMode === THRESHOLD_TRUSTEE_CUSTODY_MODE &&
+      liveProvisionalResultsEnabled
+    ) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        message:
+          "ZKP_LIVE_PROVISIONAL_RESULTS_ENABLED must be false for threshold trustee custody.",
+        path: ["ZKP_LIVE_PROVISIONAL_RESULTS_ENABLED"],
+      });
+    }
 
     if (groth16VoteVerifierEnabled) {
       const votePublicInputSchemaVersion =
@@ -621,6 +665,15 @@ const parsed = z
     ZKP_GROTH16_TALLY_ARTIFACT_MANIFEST_HASH: emptyToUndefined(
       process.env.ZKP_GROTH16_TALLY_ARTIFACT_MANIFEST_HASH,
     ) ?? DEFAULT_GROTH16_TALLY_ARTIFACT_MANIFEST_HASH,
+    ZKP_BALLOT_CUSTODY_MODE: emptyToUndefined(
+      process.env.ZKP_BALLOT_CUSTODY_MODE,
+    ) as (typeof BALLOT_CUSTODY_MODES)[number] | undefined,
+    ZKP_PUBLIC_SECRET_BALLOT_CLAIMS_ENABLED: emptyToUndefined(
+      process.env.ZKP_PUBLIC_SECRET_BALLOT_CLAIMS_ENABLED,
+    ),
+    ZKP_LIVE_PROVISIONAL_RESULTS_ENABLED: emptyToUndefined(
+      process.env.ZKP_LIVE_PROVISIONAL_RESULTS_ENABLED,
+    ),
   });
 
 const authIssuer =
@@ -721,6 +774,16 @@ const zkpGroth16TallyVerifierEnabled =
   parsed.ZKP_GROTH16_TALLY_VERIFIER_ENABLED !== undefined
     ? toBoolean(parsed.ZKP_GROTH16_TALLY_VERIFIER_ENABLED)
     : false;
+const zkpBallotCustodyMode =
+  parsed.ZKP_BALLOT_CUSTODY_MODE ?? OPERATOR_TRUSTED_PRIVATE_BETA_CUSTODY_MODE;
+const zkpPublicSecretBallotClaimsEnabled =
+  parsed.ZKP_PUBLIC_SECRET_BALLOT_CLAIMS_ENABLED !== undefined
+    ? toBoolean(parsed.ZKP_PUBLIC_SECRET_BALLOT_CLAIMS_ENABLED)
+    : false;
+const zkpLiveProvisionalResultsEnabled =
+  parsed.ZKP_LIVE_PROVISIONAL_RESULTS_ENABLED !== undefined
+    ? toBoolean(parsed.ZKP_LIVE_PROVISIONAL_RESULTS_ENABLED)
+    : zkpBallotCustodyMode !== THRESHOLD_TRUSTEE_CUSTODY_MODE;
 const normalizeHex64Env = (value: string | undefined): string | null =>
   value ? value.trim().toLowerCase() : null;
 
@@ -799,6 +862,11 @@ export const env = Object.freeze({
     transactionsEnabled: solanaAuditTransactionsEnabled,
   }),
   zkp: Object.freeze({
+    ballotCustody: Object.freeze({
+      mode: zkpBallotCustodyMode,
+      publicSecretBallotClaimsEnabled: zkpPublicSecretBallotClaimsEnabled,
+      liveProvisionalResultsEnabled: zkpLiveProvisionalResultsEnabled,
+    }),
     groth16: Object.freeze({
       voteVerifierEnabled: zkpGroth16VoteVerifierEnabled,
       voteCircuitId: parsed.ZKP_GROTH16_VOTE_CIRCUIT_ID ?? null,

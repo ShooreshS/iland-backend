@@ -66,7 +66,8 @@ export const createPollEncryptionKeyRepository = (
           public_key_jwk: input.public_key_jwk,
           public_key_hash: input.public_key_hash,
           private_key_jwk: input.private_key_jwk,
-          custody_model: input.custody_model ?? "backend-db-service-role-v1",
+          custody_model:
+            input.custody_model ?? "operator-trusted-backend-db-v1",
         })
         .select(POLL_ENCRYPTION_KEY_COLUMNS)
         .single<PollEncryptionKeyRow>();

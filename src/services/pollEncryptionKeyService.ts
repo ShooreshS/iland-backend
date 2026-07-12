@@ -12,6 +12,13 @@ import type {
   PollRow,
 } from "../types/db";
 import type { JsonValue } from "../types/json";
+import {
+  type BallotCustodyPolicy,
+  OPERATOR_TRUSTED_BACKEND_DB_CUSTODY_MODEL,
+  buildBallotCustodyPolicy,
+  getBallotCustodyPolicy,
+  isAcceptedPollEncryptionCustodyModel,
+} from "./ballotCustodyPolicyService";
 import { canonicalizeJson } from "./pollPolicyService";
 
 export const CIVIC_POLL_ENCRYPTION_KEY_VERSION =
@@ -26,7 +33,7 @@ export const CIVIC_ENCRYPTED_VOTE_CIPHER = "aes-256-gcm" as const;
 export const CIVIC_ENCRYPTED_VOTE_COMMITMENT_SCHEME =
   "poseidon-encrypted-vote-opening-v1" as const;
 export const CIVIC_POLL_ENCRYPTION_CUSTODY_MODEL =
-  "backend-db-service-role-v1" as const;
+  OPERATOR_TRUSTED_BACKEND_DB_CUSTODY_MODEL;
 
 type PollEncryptionKeyRepositoryPort = Pick<
   typeof pollEncryptionKeyRepository,
@@ -134,6 +141,7 @@ export const hashPollEncryptionPublicKey = (input: {
 const generatePollEncryptionKey = (input: {
   keyId: string;
   pollId: string;
+  custodyModel: string;
 }): NewPollEncryptionKeyRow => {
   const { publicKey, privateKey } = generateKeyPairSync("x25519");
   const publicKeyJwk = normalizeX25519PublicJwk(
@@ -162,13 +170,14 @@ const generatePollEncryptionKey = (input: {
     public_key_jwk: publicKeyJwk,
     public_key_hash: publicKeyHash,
     private_key_jwk: privateKeyJwk,
-    custody_model: CIVIC_POLL_ENCRYPTION_CUSTODY_MODEL,
+    custody_model: input.custodyModel,
   };
 };
 
 const mapRowToDto = (
   row: PollEncryptionKeyRow,
   pollId: string,
+  custodyPolicy: BallotCustodyPolicy,
 ): PollEncryptionKeyDto => ({
   version: CIVIC_POLL_ENCRYPTION_KEY_VERSION,
   pollId,
@@ -185,14 +194,29 @@ const mapRowToDto = (
   encryptedVoteCommitmentScheme: CIVIC_ENCRYPTED_VOTE_COMMITMENT_SCHEME,
   custody: {
     model: row.custody_model,
-    threshold: false,
+    mode: custodyPolicy.mode,
+    releaseMode: custodyPolicy.releaseMode,
+    threshold: custodyPolicy.threshold,
+    decryptor: custodyPolicy.decryptor,
+    operatorTrusted: custodyPolicy.operatorTrusted,
+    liveProvisionalPerOptionResults:
+      custodyPolicy.liveProvisionalPerOptionResults,
+    acceptedVoteCountPublicDuringVoting:
+      custodyPolicy.acceptedVoteCountPublicDuringVoting,
+    publicSecretBallotClaimAllowed:
+      custodyPolicy.publicSecretBallotClaimAllowed,
     privateKeyMaterialExposedByApi: false,
+    claim: custodyPolicy.claim,
   },
   createdAt: row.created_at,
 });
 
-const rowMatchesContract = (row: PollEncryptionKeyRow): boolean =>
+const rowMatchesContract = (
+  row: PollEncryptionKeyRow,
+  custodyPolicy: BallotCustodyPolicy,
+): boolean =>
   row.status === "active" &&
+  isAcceptedPollEncryptionCustodyModel(row.custody_model, custodyPolicy) &&
   row.algorithm === CIVIC_ENCRYPTED_VOTE_ALGORITHM &&
   row.key_agreement === CIVIC_ENCRYPTED_VOTE_KEY_AGREEMENT &&
   row.kdf === CIVIC_ENCRYPTED_VOTE_KDF &&
@@ -211,11 +235,14 @@ export const createPollEncryptionKeyService = (
   overrides: Partial<{
     pollEncryptionKeyRepository: PollEncryptionKeyRepositoryPort;
     pollRepository: PollRepositoryPort;
+    ballotCustodyPolicy: BallotCustodyPolicy;
   }> = {},
 ) => {
   const keyRepository =
     overrides.pollEncryptionKeyRepository ?? pollEncryptionKeyRepository;
   const polls = overrides.pollRepository ?? pollRepository;
+  const getCustodyPolicy = () =>
+    overrides.ballotCustodyPolicy ?? getBallotCustodyPolicy();
 
   return {
     async getOrCreatePublicKeyForPoll(
@@ -248,6 +275,14 @@ export const createPollEncryptionKeyService = (
         );
       }
 
+      const custodyPolicy = getCustodyPolicy();
+      if (!custodyPolicy.backendKeyGenerationSupported) {
+        return failure(
+          "ENCRYPTION_CUSTODY_NOT_SUPPORTED",
+          "This ballot custody mode requires an external trustee key service before poll encryption keys can be created.",
+        );
+      }
+
       const existingByPoll = await keyRepository.getByPollId(pollId);
       if (
         existingByPoll &&
@@ -268,7 +303,7 @@ export const createPollEncryptionKeyService = (
           );
         }
 
-        if (!rowMatchesContract(existingByKey)) {
+        if (!rowMatchesContract(existingByKey, custodyPolicy)) {
           return failure(
             "ENCRYPTION_KEY_CONFLICT",
             "This poll encryption key does not match the production encryption contract.",
@@ -277,7 +312,7 @@ export const createPollEncryptionKeyService = (
 
         return {
           success: true,
-          key: mapRowToDto(existingByKey, pollId),
+          key: mapRowToDto(existingByKey, pollId, custodyPolicy),
         };
       }
 
@@ -286,11 +321,12 @@ export const createPollEncryptionKeyService = (
           generatePollEncryptionKey({
             keyId: pollEncryptionKeyId,
             pollId,
+            custodyModel: custodyPolicy.pollEncryptionKeyCustodyModel,
           }),
         );
         return {
           success: true,
-          key: mapRowToDto(inserted, pollId),
+          key: mapRowToDto(inserted, pollId, custodyPolicy),
         };
       } catch (error) {
         if (!isUniqueViolation(error)) {
@@ -298,7 +334,7 @@ export const createPollEncryptionKeyService = (
         }
 
         const raced = await keyRepository.getByKeyId(pollEncryptionKeyId);
-        if (!raced || !rowMatchesContract(raced)) {
+        if (!raced || !rowMatchesContract(raced, custodyPolicy)) {
           return failure(
             "ENCRYPTION_KEY_CONFLICT",
             "The poll encryption key could not be safely created.",
@@ -307,12 +343,14 @@ export const createPollEncryptionKeyService = (
 
         return {
           success: true,
-          key: mapRowToDto(raced, pollId),
+          key: mapRowToDto(raced, pollId, custodyPolicy),
         };
       }
     },
   };
 };
+
+export { buildBallotCustodyPolicy };
 
 export const pollEncryptionKeyService = createPollEncryptionKeyService();
 
