@@ -27,6 +27,9 @@ const createPoll = (overrides: Partial<PollRow> = {}): PollRow => ({
   minimum_age: null,
   starts_at: null,
   ends_at: null,
+  vote_privacy_mode: "legacy_identity_linked",
+  option_set_hash: null,
+  poll_encryption_key_id: null,
   created_at: FIXED_TIME,
   updated_at: FIXED_TIME,
   ...overrides,
@@ -88,6 +91,30 @@ const patchMethod = <T extends object, K extends keyof T>(
 };
 
 describe("pollVotingService read paths", () => {
+  it("reports an active poll as closed after its voting window ends", async () => {
+    const poll = createPoll({
+      status: "active",
+      ends_at: "2000-01-01T00:00:00.000Z",
+    });
+    const option = createOption();
+    const restoreFns = [
+      patchMethod(pollRepository, "getById", async () => poll),
+      patchMethod(pollRepository, "getOptionsByPollId", async () => [option]),
+      patchMethod(voteRepository, "getByUserIdAndPollId", async () => null),
+      patchMethod(voteRepository, "countValidByPollId", async () => 0),
+      patchMethod(voteRepository, "countValidByPollIdAndOptionId", async () => 0),
+      patchMethod(voteRepository, "getLatestValidSubmittedAtByPollId", async () => null),
+    ];
+
+    try {
+      const details = await pollVotingService.getPollDetails(poll.id, "viewer-user-1");
+
+      expect(details?.poll.status).toBe("closed");
+    } finally {
+      restoreFns.reverse().forEach((restore) => restore());
+    }
+  });
+
   it("uses exact valid vote count for poll details totalVotes", async () => {
     const poll = createPoll();
     const optionA = createOption({ id: "option-a", label: "Option A", display_order: 0 });

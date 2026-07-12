@@ -18,6 +18,7 @@ import {
   resolveCivicPollPolicy,
   type CivicPollPolicy,
 } from "./pollPolicyService";
+import { resolveEffectivePollStatus } from "./pollStatusService";
 import pollEncryptionKeyService, {
   CIVIC_ENCRYPTED_VOTE_ALGORITHM,
   CIVIC_ENCRYPTED_VOTE_CIPHER,
@@ -90,7 +91,7 @@ const mapPoll = (row: PollRow): PollDto => {
     createdByUserId: row.created_by_user_id,
     title: row.title,
     description: row.description,
-    status: row.status,
+    status: resolveEffectivePollStatus(row),
     jurisdictionType: row.jurisdiction_type,
     jurisdictionCountryCode: row.jurisdiction_country_code,
     jurisdictionAreaIds: toArray(row.jurisdiction_area_ids),
@@ -963,7 +964,7 @@ export const createPollVotingService = (
       );
     }
 
-    if (poll.status !== "active") {
+    if (resolveEffectivePollStatus(poll, submittedAt) !== "active") {
       return rejectProductionVote(
         ZKP_AUDIT_REJECTION_REASON_CODES.pollNotActive,
         "POLL_NOT_ACTIVE",

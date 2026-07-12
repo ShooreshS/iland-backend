@@ -479,6 +479,22 @@ describe("Phase 5 audit batch segmentation", () => {
     ),
   ];
 
+  it("reports an expired active poll as closed in public audit material", async () => {
+    const poll = createProductionPoll({
+      status: "active",
+      ends_at: "2000-01-01T00:00:00.000Z",
+    });
+    const restoreFns = patchProductionRepositories(poll, createProductionRecords(1));
+
+    try {
+      const audit = await pollPublicAuditService.getPublicPollAudit(poll.id);
+
+      expect(audit?.pollStatus).toBe("closed");
+    } finally {
+      restoreFns.reverse().forEach((restore) => restore());
+    }
+  });
+
   it("segments 65 production votes into two batches with verifiable batch proofs", async () => {
     const poll = createProductionPoll();
     const records = createProductionRecords(65);

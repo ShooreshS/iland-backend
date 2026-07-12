@@ -43,6 +43,7 @@ import {
   type PoseidonAuditTree,
 } from "./poseidonAuditTreeService";
 import { hashCanonicalJson } from "./pollPolicyService";
+import { resolveEffectivePollStatus } from "./pollStatusService";
 import solanaAuditPublisherService, {
   type SolanaAuditPublicationResult,
 } from "./solanaAuditPublisherService";
@@ -840,7 +841,7 @@ export const pollPublicAuditService = {
     return {
       version: PUBLIC_AUDIT_VERSION,
       pollId: poll.id,
-      pollStatus: poll.status,
+      pollStatus: resolveEffectivePollStatus(poll, generatedAt),
       pollPolicyHash: poll.poll_policy_hash ?? null,
       credentialSchemaHash: poll.credential_schema_hash ?? null,
       optionSetHash: poll.option_set_hash ?? null,
