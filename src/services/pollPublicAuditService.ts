@@ -302,7 +302,7 @@ const buildResultHash = (input: {
   hashCanonicalJson({
     version: PUBLIC_AUDIT_RESULT_HASH_VERSION,
     pollId: input.poll.id,
-    pollStatus: input.poll.status,
+    pollStatus: resolveEffectivePollStatus(input.poll),
     pollPolicyHash: input.poll.poll_policy_hash ?? null,
     credentialSchemaHash: input.poll.credential_schema_hash ?? null,
     optionSetHash: input.poll.option_set_hash ?? null,

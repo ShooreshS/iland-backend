@@ -22,9 +22,11 @@ import {
   buildPublicAuditMerkleTree,
   hashPublicAuditLeaf,
   pollPublicAuditService,
+  PUBLIC_AUDIT_RESULT_HASH_VERSION,
   PUBLIC_AUDIT_ZERO_ROOT,
   verifyPublicAuditMerkleProof,
 } from "./pollPublicAuditService";
+import { hashCanonicalJson } from "./pollPolicyService";
 import zkpAuditEventService from "./zkpAuditEventService";
 
 const FIXED_TIME = "2026-07-05T12:00:00.000Z";
@@ -489,7 +491,39 @@ describe("Phase 5 audit batch segmentation", () => {
     try {
       const audit = await pollPublicAuditService.getPublicPollAudit(poll.id);
 
+      expect(audit).not.toBeNull();
+      if (!audit) {
+        throw new Error("Expected public audit material.");
+      }
       expect(audit?.pollStatus).toBe("closed");
+      expect(audit?.resultHash).toBe(
+        hashCanonicalJson({
+          version: PUBLIC_AUDIT_RESULT_HASH_VERSION,
+          pollId: audit.pollId,
+          pollStatus: "closed",
+          pollPolicyHash: audit.pollPolicyHash ?? null,
+          credentialSchemaHash: audit.credentialSchemaHash ?? null,
+          optionSetHash: audit.optionSetHash ?? null,
+          acceptedVoteCount: audit.acceptedVoteCount,
+          totalValidVoteCount: audit.totalValidVoteCount,
+          optionCount: audit.finalResult.optionResults.length,
+          finalNullifierRoot: audit.trees.nullifier.root,
+          finalVoteCommitmentRoot: audit.trees.voteCommitment.root,
+          finalEncryptedVoteRoot: audit.trees.encryptedVote.root,
+          tallyProofHash: audit.tallyProofHash ?? null,
+          tallyPublicInputsHash: audit.tallyPublicInputsHash ?? null,
+          tallyVerifierKeyHash: audit.tallyProof?.tallyVerifierKeyHash ?? null,
+          tallyCircuitId: audit.tallyProof?.tallyCircuitId ?? null,
+          result: {
+            totalVotes: audit.finalResult.totalVotes,
+            optionResults: audit.finalResult.optionResults.map((entry) => ({
+              optionId: entry.optionId,
+              label: entry.label,
+              count: entry.count,
+            })),
+          },
+        }),
+      );
     } finally {
       restoreFns.reverse().forEach((restore) => restore());
     }

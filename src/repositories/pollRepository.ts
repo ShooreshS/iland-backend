@@ -122,8 +122,30 @@ const buildPollUpdatePayload = (input: NewPollRow) => {
   return payload;
 };
 
+const closeExpiredPolls = async (nowIso = new Date().toISOString()): Promise<void> => {
+  const supabase = requireSupabaseAdminClient();
+
+  const { error } = await supabase
+    .from("polls")
+    .update({
+      status: "closed",
+      updated_at: nowIso,
+    })
+    .in("status", ["active", "scheduled"])
+    .not("ends_at", "is", null)
+    .lte("ends_at", nowIso);
+
+  if (error) {
+    throw error;
+  }
+};
+
 export const pollRepository = {
+  closeExpiredPolls,
+
   async listAll(): Promise<PollRow[]> {
+    await closeExpiredPolls();
+
     const supabase = requireSupabaseAdminClient();
 
     const { data, error } = await supabase
@@ -154,6 +176,8 @@ export const pollRepository = {
   },
 
   async getById(pollId: string): Promise<PollRow | null> {
+    await closeExpiredPolls();
+
     const supabase = requireSupabaseAdminClient();
 
     const { data, error } = await supabase
