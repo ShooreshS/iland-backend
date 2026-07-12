@@ -1,4 +1,10 @@
-build/
+build/*
+!build/
+!build/encrypted_choice_tally_js/
+build/encrypted_choice_tally_js/*
+!build/encrypted_choice_tally_js/generate_witness.js
+!build/encrypted_choice_tally_js/witness_calculator.js
+!build/encrypted_choice_tally_js/package.json
 node_modules/
 *.log
 test-vectors/*.proof.json
