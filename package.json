@@ -11,6 +11,7 @@
     "phase7:acceptance": "node scripts/phase7-devnet-acceptance.mjs",
     "zkp:env": "node scripts/print-zkp-artifact-env.mjs",
     "zkp:prepare-prover-artifacts": "node scripts/prepare-zkp-prover-artifacts.mjs",
+    "zkp:tally-proof": "bun scripts/generate-submit-tally-proof.ts",
     "zkp:replace-example-polls": "bun scripts/replace-example-polls-with-production-zkp.ts",
     "oidc:signing-keys": "bun scripts/oidc-signing-keys.ts",
     "oidc:clients": "bun scripts/oidc-clients.ts"
