@@ -167,6 +167,11 @@ describe("Phase 8 public poll audit service", () => {
         optionId === optionA.id ? 1 : 1,
       ),
       patchMethod(pollAuditRepository, "listRootsByPollId", async () => []),
+      patchMethod(
+        pollAuditRepository,
+        "getLatestAuditEventByPollIdAndType",
+        async () => null,
+      ),
     ];
 
     try {
@@ -316,6 +321,11 @@ describe("Phase 8 public poll audit service", () => {
       patchMethod(pollZkVoteRepository, "countAcceptedByPollId", async () => 2),
       patchMethod(pollTallyProofRepository, "getLatestByPollId", async () => null),
       patchMethod(pollAuditRepository, "listRootsByPollId", async () => []),
+      patchMethod(
+        pollAuditRepository,
+        "getLatestAuditEventByPollIdAndType",
+        async () => null,
+      ),
     ];
 
     try {
@@ -474,6 +484,11 @@ describe("Phase 5 audit batch segmentation", () => {
     ),
     patchMethod(pollTallyProofRepository, "getLatestByPollId", async () => null),
     patchMethod(pollAuditRepository, "listRootsByPollId", async () => []),
+    patchMethod(
+      pollAuditRepository,
+      "getLatestAuditEventByPollIdAndType",
+      async () => null,
+    ),
     patchMethod(
       pollAuditRepository,
       "getRootByPollIdAndBatchId",

@@ -198,6 +198,14 @@ export type PublicAuditTallyProofSummaryDto = {
   verifiedAt: string;
 };
 
+export type PublicAuditFinalResultPublicationDto = {
+  status: "published_on_chain";
+  finalResultAddress: string | null;
+  transactionSignature: string;
+  explorerUrl: string;
+  submittedAt: string;
+};
+
 export type PublicPollAuditDto = {
   version: "civicos-public-audit-v1";
   pollId: string;
@@ -224,6 +232,7 @@ export type PublicPollAuditDto = {
   tallyProofHash: string | null;
   tallyPublicInputsHash: string | null;
   tallyProof: PublicAuditTallyProofSummaryDto | null;
+  finalResultPublication: PublicAuditFinalResultPublicationDto | null;
   finalResult: PollResultsSummaryDto;
   solana: {
     cluster: string;

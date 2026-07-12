@@ -161,6 +161,7 @@ const encryptOpening = (input: {
     optionIndex: input.optionIndex,
     optionSetHash,
     encryptedVoteRandomness: "9".repeat(64),
+    voteRandomness: "a".repeat(64),
     encryptedVoteCommitment: input.encryptedVoteCommitment,
   });
   const cipher = createCipheriv("aes-256-gcm", key, nonce);
@@ -279,5 +280,55 @@ describe("pollEncryptedTallyService", () => {
     expect(tally.countsByOptionId[optionA.id]).toBe(0);
     expect(tally.countsByOptionId[optionB.id]).toBe(0);
     expect(tally.updatedAt).toBeNull();
+  });
+
+  it("decrypts accepted encrypted votes into final tally witness material", async () => {
+    const poll = createPoll();
+    const optionA = createOption({ id: "option-a", label: "Yes", display_order: 0 });
+    const optionB = createOption({ id: "option-b", label: "No", display_order: 1 });
+    const { keyRow, publicKeyJwk } = createPollKeyRow(poll);
+    const encryptedVoteCommitment = "b".repeat(64);
+    const encryptedVote = encryptOpening({
+      poll,
+      publicKeyJwk,
+      encryptedVoteCommitment,
+      optionIndex: 1,
+    });
+    const vote = createVote({
+      encrypted_vote: encryptedVote,
+      encrypted_vote_commitment: encryptedVoteCommitment,
+      accepted_at: "2026-07-11T10:01:00.000Z",
+    });
+    const service = createPollEncryptedTallyService({
+      pollEncryptionKeys: {
+        getByPollId: async () => keyRow,
+      },
+      pollZkVotes: {
+        getAcceptedByPollId: async () => [vote],
+      },
+    });
+
+    const batch = await service.getFinalizationBatch({
+      poll,
+      options: [optionB, optionA],
+    });
+
+    expect(batch.success).toBe(true);
+    if (!batch.success) {
+      throw new Error("Expected finalization batch.");
+    }
+    expect(batch.totalVotes).toBe(1);
+    expect(batch.countsByOptionId[optionA.id]).toBe(0);
+    expect(batch.countsByOptionId[optionB.id]).toBe(1);
+    expect(batch.votes[0]).toMatchObject({
+      id: vote.id,
+      optionId: optionB.id,
+      optionIndex: 1,
+      nullifier: vote.nullifier,
+      voteCommitment: vote.vote_commitment,
+      encryptedVoteCommitment,
+      encryptedVoteRandomness: "9".repeat(64),
+      voteRandomness: "a".repeat(64),
+    });
   });
 });

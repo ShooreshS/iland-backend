@@ -78,6 +78,7 @@ const sampleAudit: PublicPollAuditDto = {
   tallyProofHash: null,
   tallyPublicInputsHash: null,
   tallyProof: null,
+  finalResultPublication: null,
   finalResult: {
     pollId: VALID_POLL_ID,
     totalVotes: 1,

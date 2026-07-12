@@ -11,6 +11,7 @@ import type {
   PollResultsSummaryDto,
   PublicAuditRootCommitDto,
   PublicAuditInclusionProofResultDto,
+  PublicAuditFinalResultPublicationDto,
   PublicAuditMerkleProofStepDto,
   PublicAuditTallyProofSummaryDto,
   PublicAuditTreeKind,
@@ -19,12 +20,14 @@ import type {
   PublicPollAuditDto,
 } from "../types/contracts";
 import type {
+  PollAuditEventRow,
   PollOptionRow,
   PollRootRow,
   PollRow,
   PollTallyProofRow,
 } from "../types/db";
 import type { JsonValue } from "../types/json";
+import groth16TallyProverService from "./groth16TallyProverService";
 import { CIVIC_PRODUCTION_VOTE_PRIVACY_MODE } from "./groth16ProofVerifierService";
 import {
   hashGroth16TallyProofEnvelope,
@@ -593,6 +596,28 @@ const mapRootCommit = (root: PollRootRow): PublicAuditRootCommitDto | null => {
   };
 };
 
+const mapFinalResultPublication = (
+  event: PollAuditEventRow | null,
+): PublicAuditFinalResultPublicationDto | null => {
+  if (!event?.solana_tx_signature) {
+    return null;
+  }
+
+  const payload = isRecord(event.payload_json) ? event.payload_json : null;
+  const finalResultAddress =
+    typeof payload?.finalResultAddress === "string"
+      ? payload.finalResultAddress
+      : null;
+
+  return {
+    status: "published_on_chain",
+    finalResultAddress,
+    transactionSignature: event.solana_tx_signature,
+    explorerUrl: buildSolanaExplorerUrl(event.solana_tx_signature) || "",
+    submittedAt: event.created_at,
+  };
+};
+
 const isPollFinalResultPublishable = (poll: PollRow): boolean => {
   if (poll.status === "closed" || poll.status === "archived") {
     return true;
@@ -808,13 +833,19 @@ export const pollPublicAuditService = {
       return null;
     }
 
-    const [material, publishedRoots] = await Promise.all([
+    const [material, publishedRoots, finalResultEvent] = await Promise.all([
       loadPollAuditMaterial(poll),
       pollAuditRepository.listRootsByPollId(poll.id),
+      pollAuditRepository.getLatestAuditEventByPollIdAndType(
+        poll.id,
+        "poll_final_result_published_on_chain",
+      ),
     ]);
     const rootCommits = publishedRoots
       .map((root) => mapRootCommit(root))
       .filter((entry): entry is PublicAuditRootCommitDto => Boolean(entry));
+    const finalResultPublication =
+      mapFinalResultPublication(finalResultEvent);
     const rootCommitsByBatchIndex = new Map(
       rootCommits.map((commit) => [commit.batchIndex, commit]),
     );
@@ -831,8 +862,13 @@ export const pollPublicAuditService = {
       }));
     const currentBatch = material.batches[material.batches.length - 1];
     const generatedAt = new Date().toISOString();
+    const finalResultPublicationRequired =
+      isProductionZkpPoll(poll) &&
+      isPollFinalResultPublishable(poll) &&
+      material.acceptedVoteCount > 0;
     const publicationStatus =
-      rootCommits.length > 0
+      finalResultPublication ||
+      (rootCommits.length > 0 && !finalResultPublicationRequired)
         ? "published_on_chain"
         : material.acceptedVoteCount > 0
         ? "pending_on_chain_publication"
@@ -882,6 +918,7 @@ export const pollPublicAuditService = {
       tallyPublicInputsHash:
         material.tallyProof?.tally_public_inputs_hash ?? null,
       tallyProof: mapTallyProofSummary(material.tallyProof),
+      finalResultPublication,
       finalResult: material.finalResult,
       solana: {
         cluster: env.solanaAudit.cluster,
@@ -963,7 +1000,7 @@ export const pollPublicAuditService = {
       };
     }
 
-    const material = await loadPollAuditMaterial(poll);
+    let material = await loadPollAuditMaterial(poll);
     if (material.acceptedVoteCount <= 0) {
       if (isProductionZkpPoll(poll)) {
         await zkpAuditEventService.appendPublicationRejected({
@@ -979,6 +1016,56 @@ export const pollPublicAuditService = {
         errorCode: "NO_ACCEPTED_AUDIT_VOTES",
         message: "This poll has no accepted proof-backed votes to publish.",
       };
+    }
+
+    if (
+      isProductionZkpPoll(poll) &&
+      isPollFinalResultPublishable(poll) &&
+      !material.tallyProof
+    ) {
+      const generatedTallyProof =
+        await groth16TallyProverService.generateProofForPoll({
+          poll,
+          options: material.options,
+        });
+      if (!generatedTallyProof.success) {
+        await zkpAuditEventService.appendPublicationRejected({
+          pollId: poll.id,
+          reasonCode: ZKP_AUDIT_REJECTION_REASON_CODES.tallyProofInvalid,
+          errorCode: generatedTallyProof.errorCode,
+          acceptedVoteCount: material.acceptedVoteCount,
+          resultHash: material.resultHash,
+        });
+        return {
+          success: false,
+          errorCode: "PUBLICATION_FAILED",
+          message: generatedTallyProof.message,
+        };
+      }
+
+      const tallySubmission = await pollPublicAuditService.submitTallyProof({
+        pollId: poll.id,
+        viewerUserId: input.viewerUserId,
+        proof: generatedTallyProof.proof,
+      });
+      if (!tallySubmission.success) {
+        await zkpAuditEventService.appendPublicationRejected({
+          pollId: poll.id,
+          reasonCode:
+            tallySubmission.reasonCode ??
+            ZKP_AUDIT_REJECTION_REASON_CODES.tallyProofInvalid,
+          errorCode: tallySubmission.errorCode,
+          acceptedVoteCount: material.acceptedVoteCount,
+          resultHash: material.resultHash,
+        });
+        return {
+          success: false,
+          errorCode: "PUBLICATION_FAILED",
+          message: tallySubmission.message,
+        };
+      }
+
+      material = await loadPollAuditMaterial(poll);
     }
 
     const existingRoots = await pollAuditRepository.listRootsByPollId(poll.id);

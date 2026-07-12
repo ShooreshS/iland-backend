@@ -8,6 +8,7 @@ import {
   getGroth16TallyVerifierConfig,
   isGroth16TallyVerifierConfigured,
 } from "./groth16TallyProofVerifierService";
+import { getGroth16TallyProverArtifactStatus } from "./groth16TallyProverService";
 import { getBallotCustodyPolicy } from "./ballotCustodyPolicyService";
 
 const startedAt = Date.now();
@@ -64,10 +65,12 @@ export const getZkpHealthStatus = () => {
   const ballotCustody = getBallotCustodyPolicy();
   const voteConfigured = isGroth16VoteVerifierConfigured(vote);
   const tallyConfigured = isGroth16TallyVerifierConfigured(tally);
+  const tallyProver = getGroth16TallyProverArtifactStatus(tally);
+  const ok = voteConfigured && tallyConfigured && tallyProver.configured;
 
   return {
-    ok: voteConfigured && tallyConfigured,
-    status: voteConfigured && tallyConfigured ? "ok" as const : "degraded" as const,
+    ok,
+    status: ok ? "ok" as const : "degraded" as const,
     provider: "zkp" as const,
     checks: {
       voteGroth16Verifier: {
@@ -94,6 +97,7 @@ export const getZkpHealthStatus = () => {
         artifactManifestStatus: tally.tallyArtifactManifestStatus,
         artifactManifestError: tally.tallyArtifactManifestError,
       },
+      tallyGroth16Prover: tallyProver,
       ballotCustody: {
         version: ballotCustody.version,
         mode: ballotCustody.mode,

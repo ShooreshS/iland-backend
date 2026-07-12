@@ -98,6 +98,29 @@ export const pollAuditRepository = {
 
     return data;
   },
+
+  async getLatestAuditEventByPollIdAndType(
+    pollId: string,
+    eventType: string,
+  ): Promise<PollAuditEventRow | null> {
+    const supabase = requireSupabaseAdminClient();
+
+    const { data, error } = await supabase
+      .from("poll_audit_events")
+      .select(POLL_AUDIT_EVENT_COLUMNS)
+      .eq("poll_id", pollId)
+      .eq("event_type", eventType)
+      .order("created_at", { ascending: false })
+      .order("id", { ascending: false })
+      .limit(1)
+      .maybeSingle<PollAuditEventRow>();
+
+    if (error) {
+      throw error;
+    }
+
+    return data || null;
+  },
 };
 
 export default pollAuditRepository;

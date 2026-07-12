@@ -383,7 +383,11 @@ if (!allowPartial) {
   if (!afterAudit.tallyProofHash) {
     throw new Error("Strict Phase 7 acceptance requires a verified tally proof hash.");
   }
-  if (!verifyOnly && !publication?.publication?.finalResultSignature) {
+  const finalResultSignature =
+    afterAudit.finalResultPublication?.transactionSignature ||
+    publication?.publication?.finalResultSignature ||
+    null;
+  if (!finalResultSignature) {
     throw new Error("Strict Phase 7 acceptance requires a final result Solana transaction.");
   }
   if (!receiptLookup?.ok || !receipt?.included) {

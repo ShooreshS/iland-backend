@@ -769,6 +769,11 @@ export const createSolanaAuditPublisherService = (
             programId,
             label: "final result",
           });
+          finalResultSignature = await recoverExistingAccountSignature({
+            connection,
+            address: finalResultAddress,
+            label: "final result",
+          });
         } else {
           finalResultSignature = await sendTransaction({
             connection,

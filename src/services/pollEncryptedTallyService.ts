@@ -36,11 +36,47 @@ export type ProvisionalEncryptedTally = Readonly<{
   updatedAt: string | null;
 }>;
 
+export type DecryptedAcceptedEncryptedVote = Readonly<{
+  id: string;
+  nullifier: string;
+  voteCommitment: string;
+  encryptedVoteCommitment: string;
+  encryptedVoteRandomness: string;
+  voteRandomness: string;
+  optionId: string;
+  optionIndex: number;
+  acceptedAt: string;
+}>;
+
+export type FinalEncryptedTallyBatchResult =
+  | Readonly<{
+      success: true;
+      votes: DecryptedAcceptedEncryptedVote[];
+      countsByOptionId: Record<string, number>;
+      totalVotes: number;
+      updatedAt: string | null;
+    }>
+  | Readonly<{
+      success: false;
+      errorCode:
+        | "ENCRYPTION_KEY_NOT_CONFIGURED"
+        | "ENCRYPTION_KEY_CUSTODY_UNSUPPORTED"
+        | "UNDECRYPTABLE_VOTE_OPENING";
+      message: string;
+    }>;
+
+const HEX_64_PATTERN = /^[0-9a-f]{64}$/;
+
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   value !== null && typeof value === "object" && !Array.isArray(value);
 
 const asString = (value: unknown): string =>
   typeof value === "string" ? value.trim() : "";
+
+const normalizeHex64 = (value: unknown): string | null => {
+  const normalized = asString(value).toLowerCase();
+  return HEX_64_PATTERN.test(normalized) ? normalized : null;
+};
 
 const base64UrlToBuffer = (value: string): Buffer => {
   const normalized = value.trim().replace(/-/g, "+").replace(/_/g, "/");
@@ -145,6 +181,12 @@ const optionIdsByIndex = (options: readonly PollOptionRow[]): string[] =>
     .sort((left, right) => left.display_order - right.display_order)
     .map((option) => option.id);
 
+const parseOptionIndex = (value: unknown): number | null => {
+  const numeric =
+    typeof value === "number" ? Math.trunc(value) : Number(asString(value));
+  return Number.isInteger(numeric) && numeric >= 0 ? numeric : null;
+};
+
 const countDecryptedVote = (input: {
   poll: PollRow;
   options: readonly PollOptionRow[];
@@ -189,6 +231,72 @@ const countDecryptedVote = (input: {
   input.countsByOptionId[optionId] =
     (input.countsByOptionId[optionId] || 0) + 1;
   return true;
+};
+
+const decryptAcceptedVoteForFinalization = (input: {
+  poll: PollRow;
+  options: readonly PollOptionRow[];
+  vote: PollZkVoteRow;
+  privateKeyJwk: JsonValue;
+}): DecryptedAcceptedEncryptedVote | null => {
+  let opening: Record<string, unknown> | null = null;
+  try {
+    opening = decryptVoteOpening({
+      encryptedVote: input.vote.encrypted_vote,
+      privateKeyJwk: input.privateKeyJwk,
+      poll: input.poll,
+    });
+  } catch {
+    return null;
+  }
+
+  const optionIds = optionIdsByIndex(input.options);
+  const optionIndex = parseOptionIndex(opening?.optionIndex);
+  const optionId =
+    optionIndex !== null && optionIndex < optionIds.length
+      ? optionIds[optionIndex]
+      : null;
+  const openingOptionId = asString(opening?.optionId);
+  const nullifier = normalizeHex64(input.vote.nullifier);
+  const voteCommitment = normalizeHex64(input.vote.vote_commitment);
+  const encryptedVoteCommitment = normalizeHex64(
+    input.vote.encrypted_vote_commitment,
+  );
+  const encryptedVoteRandomness = normalizeHex64(
+    opening?.encryptedVoteRandomness,
+  );
+  const voteRandomness = normalizeHex64(opening?.voteRandomness);
+
+  if (
+    !opening ||
+    asString(opening.version) !== ENCRYPTED_VOTE_OPENING_VERSION ||
+    asString(opening.pollId) !== input.poll.id ||
+    asString(opening.optionSetHash) !== asString(input.poll.option_set_hash) ||
+    asString(opening.encryptedVoteCommitment) !==
+      input.vote.encrypted_vote_commitment ||
+    (openingOptionId && openingOptionId !== optionId) ||
+    optionIndex === null ||
+    !optionId ||
+    !nullifier ||
+    !voteCommitment ||
+    !encryptedVoteCommitment ||
+    !encryptedVoteRandomness ||
+    !voteRandomness
+  ) {
+    return null;
+  }
+
+  return {
+    id: input.vote.id,
+    nullifier,
+    voteCommitment,
+    encryptedVoteCommitment,
+    encryptedVoteRandomness,
+    voteRandomness,
+    optionId,
+    optionIndex,
+    acceptedAt: input.vote.accepted_at,
+  };
 };
 
 export const createPollEncryptedTallyService = (
@@ -252,6 +360,81 @@ export const createPollEncryptedTallyService = (
       return {
         countsByOptionId,
         totalVotes: countedVotes,
+        updatedAt,
+      };
+    },
+
+    async getFinalizationBatch(input: {
+      poll: PollRow;
+      options: readonly PollOptionRow[];
+    }): Promise<FinalEncryptedTallyBatchResult> {
+      if (!input.poll.poll_encryption_key_id || !input.poll.option_set_hash) {
+        return {
+          success: false,
+          errorCode: "ENCRYPTION_KEY_NOT_CONFIGURED",
+          message: "Poll encryption key material is not configured.",
+        };
+      }
+
+      const [keyRow, votes] = await Promise.all([
+        pollEncryptionKeys.getByPollId(input.poll.id),
+        pollZkVotes.getAcceptedByPollId(input.poll.id),
+      ]);
+      if (!keyRow || keyRow.key_id !== input.poll.poll_encryption_key_id) {
+        return {
+          success: false,
+          errorCode: "ENCRYPTION_KEY_NOT_CONFIGURED",
+          message: "Poll encryption private key is unavailable.",
+        };
+      }
+
+      const custodyPolicy = getCustodyPolicy();
+      if (
+        !canBackendDecryptPollEncryptionCustodyModel(
+          keyRow.custody_model,
+          custodyPolicy,
+        )
+      ) {
+        return {
+          success: false,
+          errorCode: "ENCRYPTION_KEY_CUSTODY_UNSUPPORTED",
+          message:
+            "This poll's ballot custody model does not allow backend tally finalization.",
+        };
+      }
+
+      const countsByOptionId = Object.fromEntries(
+        input.options.map((option) => [option.id, 0]),
+      ) as Record<string, number>;
+      const decryptedVotes: DecryptedAcceptedEncryptedVote[] = [];
+      let updatedAt: string | null = null;
+      for (const vote of votes) {
+        const decrypted = decryptAcceptedVoteForFinalization({
+          poll: input.poll,
+          options: input.options,
+          vote,
+          privateKeyJwk: keyRow.private_key_jwk,
+        });
+        if (!decrypted) {
+          return {
+            success: false,
+            errorCode: "UNDECRYPTABLE_VOTE_OPENING",
+            message:
+              "At least one accepted encrypted vote cannot be decrypted into the final tally witness.",
+          };
+        }
+
+        decryptedVotes.push(decrypted);
+        countsByOptionId[decrypted.optionId] =
+          (countsByOptionId[decrypted.optionId] || 0) + 1;
+        updatedAt = decrypted.acceptedAt;
+      }
+
+      return {
+        success: true,
+        votes: decryptedVotes,
+        countsByOptionId,
+        totalVotes: decryptedVotes.length,
         updatedAt,
       };
     },
