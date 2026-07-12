@@ -49,15 +49,17 @@ import pollEncryptedTallyService, {
 import type { PollOptionRow, PollRow } from "../types/db";
 import type { JsonValue } from "../types/json";
 
-const SNARKJS_CLI_PATH = resolve(
+const SNARKJS_CLI_JS_PATH = resolve(
   dirname(fileURLToPath(import.meta.url)),
-  "../../node_modules/.bin/snarkjs",
+  "../../node_modules/snarkjs/cli.js",
 );
 const NULLIFIER_LEAF_TAG = 1101;
 const VOTE_COMMITMENT_LEAF_TAG = 1102;
 const ENCRYPTED_VOTE_LEAF_TAG = 1103;
 const ENCRYPTED_VOTE_TAG = 1001;
 const OPTION_COUNTS_TAG = 1201;
+const DEFAULT_PROVER_TIMEOUT_MS = 300_000;
+const DEFAULT_PROVER_NODE_MAX_OLD_SPACE_MB = 2048;
 
 type TallyWitnessInput = Record<string, string | string[] | string[][]>;
 
@@ -107,11 +109,134 @@ export type Groth16TallyProverArtifactStatus = Readonly<{
   witnessWasmBytes: number | null;
   witnessGeneratorPath: string | null;
   witnessGeneratorPresent: boolean;
+  snarkjsCliPath: string;
+  snarkjsCliPresent: boolean;
+  snarkjsCliVersion: string | null;
+  snarkjsCliReady: boolean;
+  commandTimeoutMs: number;
+  nodeMaxOldSpaceMb: number;
   message: string | null;
 }>;
 
 const sha256Hex = (value: Uint8Array): string =>
   createHash("sha256").update(value).digest("hex");
+
+const parsePositiveIntegerEnv = (
+  name: string,
+  fallback: number,
+): number => {
+  const raw = process.env[name];
+  if (!raw) {
+    return fallback;
+  }
+
+  const parsed = Number.parseInt(raw, 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+};
+
+const proverCommandTimeoutMs = (): number =>
+  parsePositiveIntegerEnv(
+    "ZKP_GROTH16_TALLY_PROVER_TIMEOUT_MS",
+    DEFAULT_PROVER_TIMEOUT_MS,
+  );
+
+const proverNodeMaxOldSpaceMb = (): number =>
+  parsePositiveIntegerEnv(
+    "ZKP_GROTH16_TALLY_PROVER_NODE_MAX_OLD_SPACE_MB",
+    DEFAULT_PROVER_NODE_MAX_OLD_SPACE_MB,
+  );
+
+const outputToString = (value: unknown): string => {
+  if (Buffer.isBuffer(value)) {
+    return value.toString("utf8").trim();
+  }
+  return typeof value === "string" ? value.trim() : "";
+};
+
+const truncateOutput = (value: string, maxLength = 1_500): string =>
+  value.length > maxLength ? `${value.slice(0, maxLength)}...` : value;
+
+const formatExecFailure = (label: string, error: unknown): string => {
+  const parts = [`${label} failed`];
+  if (typeof error === "object" && error !== null) {
+    const record = error as Record<string, unknown>;
+    const code = outputToString(record.code);
+    const status =
+      typeof record.status === "number" ? record.status.toString() : "";
+    const signal = outputToString(record.signal);
+    const stderr = truncateOutput(outputToString(record.stderr));
+    const stdout = truncateOutput(outputToString(record.stdout));
+    if (code) {
+      parts.push(`code=${code}`);
+    }
+    if (status) {
+      parts.push(`status=${status}`);
+    }
+    if (signal) {
+      parts.push(`signal=${signal}`);
+    }
+    if (stderr) {
+      parts.push(`stderr=${stderr}`);
+    }
+    if (stdout) {
+      parts.push(`stdout=${stdout}`);
+    }
+  }
+
+  if (error instanceof Error) {
+    parts.push(`message=${truncateOutput(error.message)}`);
+  }
+
+  return parts.join("; ");
+};
+
+const execNodeOrThrow = (
+  label: string,
+  args: string[],
+  timeoutMs = proverCommandTimeoutMs(),
+): string => {
+  try {
+    return execFileSync("node", args, {
+      encoding: "utf8",
+      stdio: "pipe",
+      timeout: timeoutMs,
+    });
+  } catch (error) {
+    throw new Error(formatExecFailure(label, error));
+  }
+};
+
+const getSnarkjsCliVersion = (): string | null => {
+  if (!existsSync(SNARKJS_CLI_JS_PATH)) {
+    return null;
+  }
+
+  const parseVersion = (output: string): string | null =>
+    output
+      .split("\n")
+      .map((line) => line.trim())
+      .find((line) => /^snarkjs@/u.test(line)) ?? null;
+
+  try {
+    return parseVersion(
+      execFileSync("node", [SNARKJS_CLI_JS_PATH], {
+        encoding: "utf8",
+        stdio: "pipe",
+        timeout: 10_000,
+      }),
+    );
+  } catch (error) {
+    if (typeof error === "object" && error !== null) {
+      const record = error as Record<string, unknown>;
+      return parseVersion(
+        [outputToString(record.stdout), outputToString(record.stderr)]
+          .filter(Boolean)
+          .join("\n"),
+      );
+    }
+    return null;
+  }
+};
 
 const orderedActiveOptions = (
   options: readonly PollOptionRow[],
@@ -249,17 +374,22 @@ const defaultRunProof: Groth16TallyProverRunProof = async (input) => {
 
   try {
     writeFileSync(inputPath, `${JSON.stringify(input.witnessInput)}\n`);
-    execFileSync("node", [witnessGeneratorPath, wasmPath, inputPath, witnessPath], {
-      stdio: "pipe",
-      timeout: 120_000,
-    });
-    execFileSync(
-      SNARKJS_CLI_PATH,
-      ["groth16", "prove", provingKeyPath, witnessPath, proofPath, publicPath],
-      {
-        stdio: "pipe",
-        timeout: 120_000,
-      },
+    execNodeOrThrow(
+      "Groth16 tally witness generation",
+      [witnessGeneratorPath, wasmPath, inputPath, witnessPath],
+    );
+    execNodeOrThrow(
+      "Groth16 tally proof generation",
+      [
+        `--max-old-space-size=${proverNodeMaxOldSpaceMb()}`,
+        SNARKJS_CLI_JS_PATH,
+        "groth16",
+        "prove",
+        provingKeyPath,
+        witnessPath,
+        proofPath,
+        publicPath,
+      ],
     );
 
     return {
@@ -603,6 +733,12 @@ export const groth16TallyProverService = createGroth16TallyProverService();
 export const getGroth16TallyProverArtifactStatus = (
   config: Groth16TallyVerifierConfig = getGroth16TallyVerifierConfig(),
 ): Groth16TallyProverArtifactStatus => {
+  const snarkjsCliPresent = existsSync(SNARKJS_CLI_JS_PATH);
+  const snarkjsCliVersion = getSnarkjsCliVersion();
+  const snarkjsCliReady = Boolean(snarkjsCliPresent && snarkjsCliVersion);
+  const commandTimeoutMs = proverCommandTimeoutMs();
+  const nodeMaxOldSpaceMb = proverNodeMaxOldSpaceMb();
+
   if (
     !isGroth16TallyVerifierConfigured(config) ||
     !config.tallyArtifactManifest ||
@@ -618,6 +754,12 @@ export const getGroth16TallyProverArtifactStatus = (
       witnessWasmBytes: null,
       witnessGeneratorPath: null,
       witnessGeneratorPresent: false,
+      snarkjsCliPath: SNARKJS_CLI_JS_PATH,
+      snarkjsCliPresent,
+      snarkjsCliVersion,
+      snarkjsCliReady,
+      commandTimeoutMs,
+      nodeMaxOldSpaceMb,
       message: "Groth16 tally verifier/artifact manifest is not configured.",
     };
   }
@@ -643,7 +785,8 @@ export const getGroth16TallyProverArtifactStatus = (
   const configured = Boolean(
     provingKeyBytes &&
       witnessWasmBytes &&
-      witnessGeneratorPresent,
+      witnessGeneratorPresent &&
+      snarkjsCliReady,
   );
 
   return {
@@ -656,9 +799,17 @@ export const getGroth16TallyProverArtifactStatus = (
     witnessWasmBytes,
     witnessGeneratorPath,
     witnessGeneratorPresent,
+    snarkjsCliPath: SNARKJS_CLI_JS_PATH,
+    snarkjsCliPresent,
+    snarkjsCliVersion,
+    snarkjsCliReady,
+    commandTimeoutMs,
+    nodeMaxOldSpaceMb,
     message: configured
       ? null
-      : "Groth16 tally prover zkey/WASM artifacts are not present in this runtime.",
+      : snarkjsCliReady
+        ? "Groth16 tally prover zkey/WASM artifacts are not present in this runtime."
+        : "Groth16 tally prover snarkjs runtime is not executable in this runtime.",
   };
 };
 
