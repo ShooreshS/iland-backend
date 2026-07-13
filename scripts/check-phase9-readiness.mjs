@@ -224,8 +224,8 @@ if (blockers.length === 0) {
           : "ready_for_human_ceremony"
         : "blocked",
     publicDevnetVersion: "0.1",
-    mainnetMigrationVersion: "0.1.1",
-    finalHumanCeremonyRequiredBeforeMainnet: true,
+    futureMainnetRequiresNewReleaseDecision: true,
+    finalHumanCeremonyRequiredBeforeAnyFutureMainnet: true,
     voteManifestHash,
     tallyManifestHash,
     voteTrustedSetup: voteManifest.trustedSetup,
@@ -244,8 +244,8 @@ console.log(
     {
       status: "blocked",
       publicDevnetVersion: "0.1",
-      mainnetMigrationVersion: "0.1.1",
-      finalHumanCeremonyRequiredBeforeMainnet: true,
+      futureMainnetRequiresNewReleaseDecision: true,
+      finalHumanCeremonyRequiredBeforeAnyFutureMainnet: true,
       checks,
       warnings,
       blockers,

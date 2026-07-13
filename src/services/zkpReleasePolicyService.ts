@@ -35,15 +35,15 @@ type ManifestSummary = Readonly<{
 
 export type ZkpReleasePolicy = Readonly<{
   version: typeof ZKP_RELEASE_POLICY_VERSION;
-  releaseChannel: "private_beta" | "public_devnet_v0_1" | "mainnet_v0_1_1";
+  releaseChannel: "private_beta" | "public_devnet_v0_1";
   artifactStage: "internal_rc" | "ceremony_pending" | "production_final";
   publicDevnetVersion: "0.1";
-  mainnetMigrationVersion: "0.1.1";
+  futureMainnetRequiresNewReleaseDecision: true;
   publicDevnetReleaseConfirmed: boolean;
   solanaCluster: string;
   mainnetConfirmed: boolean;
   humanCeremony: Readonly<{
-    requiredBeforeMainnet: true;
+    requiredBeforeAnyFutureMainnet: true;
     minimumIndependentContributors: typeof FINAL_CEREMONY_MIN_CONTRIBUTIONS;
     status: "pending_contributor_outputs" | "complete";
   }>;
@@ -54,7 +54,7 @@ export type ZkpReleasePolicy = Readonly<{
   gates: Readonly<{
     verifierConfigured: boolean;
     publicDevnetV01Allowed: boolean;
-    mainnetV011Allowed: boolean;
+    futureMainnetAllowed: false;
     finalArtifactsPinned: boolean;
     blockedReasons: readonly string[];
   }>;
@@ -132,28 +132,6 @@ export const getZkpReleasePolicy = (): ZkpReleasePolicy => {
     }
   }
 
-  if (env.zkp.release.channel === "mainnet_v0_1_1") {
-    if (env.solanaAudit.cluster !== "mainnet-beta") {
-      blockedReasons.push("Mainnet v0.1.1 release requires mainnet-beta.");
-    }
-
-    if (!env.solanaAudit.mainnetConfirmed) {
-      blockedReasons.push("Mainnet v0.1.1 release requires mainnet confirmation.");
-    }
-
-    if (env.zkp.release.artifactStage !== "production_final") {
-      blockedReasons.push(
-        "Mainnet v0.1.1 release requires production-final artifact stage.",
-      );
-    }
-
-    if (!finalArtifactsPinned) {
-      blockedReasons.push(
-        "Mainnet v0.1.1 release requires final multi-contributor ceremony artifacts.",
-      );
-    }
-  }
-
   const verifierConfigured = voteConfigured && tallyConfigured;
   const publicDevnetV01Allowed =
     env.zkp.release.channel === "public_devnet_v0_1" &&
@@ -161,25 +139,18 @@ export const getZkpReleasePolicy = (): ZkpReleasePolicy => {
     !env.solanaAudit.mainnetConfirmed &&
     env.zkp.release.publicDevnetV01Confirmed &&
     verifierConfigured;
-  const mainnetV011Allowed =
-    env.zkp.release.channel === "mainnet_v0_1_1" &&
-    env.solanaAudit.cluster === "mainnet-beta" &&
-    env.solanaAudit.mainnetConfirmed &&
-    env.zkp.release.artifactStage === "production_final" &&
-    verifierConfigured &&
-    finalArtifactsPinned;
 
   return Object.freeze({
     version: ZKP_RELEASE_POLICY_VERSION,
     releaseChannel: env.zkp.release.channel,
     artifactStage: env.zkp.release.artifactStage,
     publicDevnetVersion: "0.1",
-    mainnetMigrationVersion: "0.1.1",
+    futureMainnetRequiresNewReleaseDecision: true,
     publicDevnetReleaseConfirmed: env.zkp.release.publicDevnetV01Confirmed,
     solanaCluster: env.solanaAudit.cluster,
     mainnetConfirmed: env.solanaAudit.mainnetConfirmed,
     humanCeremony: Object.freeze({
-      requiredBeforeMainnet: true,
+      requiredBeforeAnyFutureMainnet: true,
       minimumIndependentContributors: FINAL_CEREMONY_MIN_CONTRIBUTIONS,
       status: finalArtifactsPinned ? "complete" : "pending_contributor_outputs",
     }),
@@ -208,7 +179,7 @@ export const getZkpReleasePolicy = (): ZkpReleasePolicy => {
     gates: Object.freeze({
       verifierConfigured,
       publicDevnetV01Allowed,
-      mainnetV011Allowed,
+      futureMainnetAllowed: false,
       finalArtifactsPinned,
       blockedReasons: Object.freeze(blockedReasons),
     }),

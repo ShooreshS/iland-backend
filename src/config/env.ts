@@ -67,7 +67,6 @@ const SOLANA_AUDIT_PROGRAM_UPGRADE_AUTHORITY_CUSTODY_MODES = [
 const ZKP_RELEASE_CHANNELS = [
   "private_beta",
   "public_devnet_v0_1",
-  "mainnet_v0_1_1",
 ] as const;
 
 const ZKP_ARTIFACT_RELEASE_STAGES = [
@@ -473,35 +472,6 @@ const parsed = z
           message:
             "ZKP_PUBLIC_DEVNET_V0_1_CONFIRMED=true is required to run the public v0.1 campaign on devnet.",
           path: ["ZKP_PUBLIC_DEVNET_V0_1_CONFIRMED"],
-        });
-      }
-    }
-
-    if (zkpReleaseChannel === "mainnet_v0_1_1") {
-      if (solanaAuditCluster !== "mainnet-beta") {
-        context.addIssue({
-          code: z.ZodIssueCode.custom,
-          message:
-            "ZKP_RELEASE_CHANNEL=mainnet_v0_1_1 requires SOLANA_AUDIT_CLUSTER=mainnet-beta.",
-          path: ["ZKP_RELEASE_CHANNEL"],
-        });
-      }
-
-      if (!solanaAuditMainnetConfirmed) {
-        context.addIssue({
-          code: z.ZodIssueCode.custom,
-          message:
-            "ZKP_RELEASE_CHANNEL=mainnet_v0_1_1 requires SOLANA_AUDIT_MAINNET_CONFIRMED=true.",
-          path: ["SOLANA_AUDIT_MAINNET_CONFIRMED"],
-        });
-      }
-
-      if (zkpArtifactReleaseStage !== "production_final") {
-        context.addIssue({
-          code: z.ZodIssueCode.custom,
-          message:
-            "ZKP_RELEASE_CHANNEL=mainnet_v0_1_1 requires ZKP_ARTIFACT_RELEASE_STAGE=production_final.",
-          path: ["ZKP_ARTIFACT_RELEASE_STAGE"],
         });
       }
     }
@@ -1083,7 +1053,7 @@ export const env = Object.freeze({
       artifactStage: zkpArtifactReleaseStage,
       publicDevnetV01Confirmed: zkpPublicDevnetV01Confirmed,
       publicDevnetVersion: "0.1",
-      mainnetMigrationVersion: "0.1.1",
+      futureMainnetRequiresNewReleaseDecision: true,
     }),
     ballotCustody: Object.freeze({
       mode: zkpBallotCustodyMode,

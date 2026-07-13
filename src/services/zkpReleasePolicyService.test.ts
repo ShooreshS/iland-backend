@@ -8,12 +8,12 @@ describe("zkpReleasePolicyService", () => {
 
     expect(policy.version).toBe("civicos-zkp-release-policy-v1");
     expect(policy.publicDevnetVersion).toBe("0.1");
-    expect(policy.mainnetMigrationVersion).toBe("0.1.1");
-    expect(policy.humanCeremony.requiredBeforeMainnet).toBe(true);
+    expect(policy.futureMainnetRequiresNewReleaseDecision).toBe(true);
+    expect(policy.humanCeremony.requiredBeforeAnyFutureMainnet).toBe(true);
     expect(policy.humanCeremony.minimumIndependentContributors).toBe(3);
     expect(policy.humanCeremony.status).toBe("pending_contributor_outputs");
     expect(policy.gates.finalArtifactsPinned).toBe(false);
-    expect(policy.gates.mainnetV011Allowed).toBe(false);
+    expect(policy.gates.futureMainnetAllowed).toBe(false);
     expect(policy.manifests.vote).toMatchObject({
       artifactKind: "vote",
       status: "loaded",

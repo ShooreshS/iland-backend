@@ -3,14 +3,15 @@
 Created: 2026-07-13.
 
 This file freezes the non-ceremony production contracts for the public devnet
-v0.1 release. The final multi-contributor Groth16 ceremony is still required
-before the mainnet v0.1.1 migration.
+v0.1 release. CivicOS is devnet-only for the current release assumption. Any
+future mainnet move requires a new explicit release decision.
 
 ## Release Direction
 
 - Public campaign release: CivicOS v0.1 on Solana `devnet`.
-- Mainnet migration: CivicOS v0.1.1 after funding, final ceremony artifacts,
-  and mainnet custody gates are complete.
+- Mainnet migration: not planned for the current release track. If this changes,
+  it requires final ceremony artifacts, mainnet custody gates, and a new release
+  decision before any mainnet env is accepted.
 - SHOLAN remains metadata/audit-only. It is not used for fees, rewards,
   staking, slashing, or governance in v0.1.
 
@@ -90,7 +91,8 @@ Release-channel env:
   outputs are finalized.
 - `ZKP_PUBLIC_DEVNET_V0_1_CONFIRMED=true` to acknowledge that v0.1 is public
   but still devnet-bound.
-- `ZKP_RELEASE_CHANNEL=mainnet_v0_1_1` only after final ceremony artifacts,
+- No mainnet release channel exists in the current env contract. Future mainnet
+  support must add a new explicit channel after final ceremony artifacts,
   mainnet program deployment/custody, and data cleanup are complete.
 
 ## Current Artifact State

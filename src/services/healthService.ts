@@ -70,8 +70,7 @@ export const getZkpHealthStatus = () => {
   const tallyProver = getGroth16TallyProverArtifactStatus(tally);
   const releaseGateOk =
     releasePolicy.releaseChannel === "private_beta" ||
-    releasePolicy.gates.publicDevnetV01Allowed ||
-    releasePolicy.gates.mainnetV011Allowed;
+    releasePolicy.gates.publicDevnetV01Allowed;
   const ok =
     voteConfigured && tallyConfigured && tallyProver.configured && releaseGateOk;
 
