@@ -2,6 +2,7 @@ import { z } from "zod";
 import requireViewer from "../auth/requireViewer";
 import { json } from "../middleware/json";
 import credentialIssuanceService from "../services/credentialIssuanceService";
+import credentialRootAuditService from "../services/credentialRootAuditService";
 import proofSystemPolicyService from "../services/proofSystemPolicyService";
 import verificationProofService from "../services/verificationProofService";
 import zkpSecurityPolicyService from "../services/zkpSecurityPolicyService";
@@ -61,6 +62,10 @@ type VerificationRouteDependencies = {
   proofSystemPolicyServiceLike?: Pick<
     typeof proofSystemPolicyService,
     "getPolicy"
+  >;
+  credentialRootAuditServiceLike?: Pick<
+    typeof credentialRootAuditService,
+    "getCredentialRootAudit"
   >;
   zkpSecurityPolicyServiceLike?: Pick<
     typeof zkpSecurityPolicyService,
@@ -151,6 +156,25 @@ export const createGetVerificationSecurityPolicyRoute = (
   };
 };
 
+export const createGetVerificationCredentialRootsRoute = (
+  dependencies: VerificationRouteDependencies = {},
+): RouteDefinition => {
+  const rootAuditService =
+    dependencies.credentialRootAuditServiceLike || credentialRootAuditService;
+
+  return {
+    method: "GET",
+    path: "/verification/credential-roots",
+    handler: async ({ url }) => {
+      const audit = await rootAuditService.getCredentialRootAudit({
+        limit: url.searchParams.get("limit"),
+      });
+
+      return json(audit);
+    },
+  };
+};
+
 export const createPostVerificationProofRoute = (
   dependencies: VerificationRouteDependencies = {},
 ): RouteDefinition => {
@@ -197,6 +221,7 @@ export const createPostVerificationProofRoute = (
 export const verificationRoutes: RouteDefinition[] = [
   createGetVerificationProofSystemRoute(),
   createGetVerificationSecurityPolicyRoute(),
+  createGetVerificationCredentialRootsRoute(),
   createPostVerificationCredentialRoute(),
   createPostVerificationProofRoute(),
 ];

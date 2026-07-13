@@ -86,6 +86,7 @@ export type SolanaAuditConnection = Pick<
 export type SendSolanaTransaction = (input: {
   connection: SolanaAuditConnection;
   signer: Keypair;
+  additionalSigners?: Keypair[];
   instructions: TransactionInstruction[];
   label: string;
 }) => Promise<string>;
@@ -94,6 +95,7 @@ export type SolanaAuditPublisherDeps = Readonly<{
   solanaAuditEnv?: SolanaAuditEnv;
   getConnection?: () => SolanaAuditConnection;
   getBackendFeePayer?: () => Keypair;
+  getRootPublisherSigner?: () => Keypair | null;
   sendTransaction?: SendSolanaTransaction;
 }>;
 
@@ -160,6 +162,18 @@ const getBackendFeePayer = (solanaAuditEnv: SolanaAuditEnv): Keypair => {
   }
 
   return keypair;
+};
+
+const assertSignerMatchesPublicKey = (
+  label: string,
+  signer: Keypair,
+  publicKey: PublicKey,
+): void => {
+  if (!signer.publicKey.equals(publicKey)) {
+    throw new Error(
+      `${label} signer public key ${signer.publicKey.toBase58()} does not match expected ${publicKey.toBase58()}.`,
+    );
+  }
 };
 
 const resolveRpcUrl = (solanaAuditEnv: SolanaAuditEnv): string => {
@@ -440,6 +454,7 @@ const buildCreatePollInstruction = (input: {
   registryAddress: PublicKey;
   pollAddress: PublicKey;
   rootPublisher: PublicKey;
+  payer: PublicKey;
   pollIdHash: Buffer;
   pollPolicyHash: Buffer;
   credentialSchemaHash: Buffer;
@@ -451,7 +466,8 @@ const buildCreatePollInstruction = (input: {
     keys: [
       { pubkey: input.registryAddress, isSigner: false, isWritable: false },
       { pubkey: input.pollAddress, isSigner: false, isWritable: true },
-      { pubkey: input.rootPublisher, isSigner: true, isWritable: true },
+      { pubkey: input.rootPublisher, isSigner: true, isWritable: false },
+      { pubkey: input.payer, isSigner: true, isWritable: true },
       { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
     ],
     data: Buffer.concat([
@@ -470,6 +486,7 @@ const buildCommitRootsInstruction = (input: {
   pollAddress: PublicKey;
   pollRootAddress: PublicKey;
   rootPublisher: PublicKey;
+  payer: PublicKey;
   batchIndex: number;
   previousNullifierRoot: Buffer;
   nullifierRoot: Buffer;
@@ -485,7 +502,8 @@ const buildCommitRootsInstruction = (input: {
       { pubkey: input.registryAddress, isSigner: false, isWritable: false },
       { pubkey: input.pollAddress, isSigner: false, isWritable: true },
       { pubkey: input.pollRootAddress, isSigner: false, isWritable: true },
-      { pubkey: input.rootPublisher, isSigner: true, isWritable: true },
+      { pubkey: input.rootPublisher, isSigner: true, isWritable: false },
+      { pubkey: input.payer, isSigner: true, isWritable: true },
       { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
     ],
     data: Buffer.concat([
@@ -507,6 +525,7 @@ const buildFinalizePollInstruction = (input: {
   pollAddress: PublicKey;
   finalResultAddress: PublicKey;
   rootPublisher: PublicKey;
+  payer: PublicKey;
   voteCommitmentRoot: Buffer;
   nullifierRoot: Buffer;
   encryptedVoteRoot: Buffer;
@@ -519,7 +538,8 @@ const buildFinalizePollInstruction = (input: {
       { pubkey: input.registryAddress, isSigner: false, isWritable: false },
       { pubkey: input.pollAddress, isSigner: false, isWritable: true },
       { pubkey: input.finalResultAddress, isSigner: false, isWritable: true },
-      { pubkey: input.rootPublisher, isSigner: true, isWritable: true },
+      { pubkey: input.rootPublisher, isSigner: true, isWritable: false },
+      { pubkey: input.payer, isSigner: true, isWritable: true },
       { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
     ],
     data: Buffer.concat([
@@ -541,7 +561,7 @@ const sendSimulatedTransaction: SendSolanaTransaction = async (input) => {
     lastValidBlockHeight: latestBlockhash.lastValidBlockHeight,
   }).add(...input.instructions);
 
-  transaction.sign(input.signer);
+  transaction.sign(input.signer, ...(input.additionalSigners ?? []));
 
   const simulation = await connection.simulateTransaction(transaction);
   if (simulation.value.err) {
@@ -589,17 +609,45 @@ export const createSolanaAuditPublisherService = (
         ? new PublicKey(solanaAuditEnv.registryAuthority)
         : signer.publicKey;
 
-      if (!rootPublisher.equals(signer.publicKey)) {
-        throw new Error(
-          "Configured Solana audit root publisher does not match the backend signing key.",
-        );
-      }
-
       if (registryAuthority.equals(rootPublisher)) {
         throw new Error(
           "Solana audit registry authority and root publisher must be different keys.",
         );
       }
+
+      if (solanaAuditEnv.feePayerPublicKey) {
+        assertSignerMatchesPublicKey(
+          "Solana audit fee payer",
+          signer,
+          new PublicKey(solanaAuditEnv.feePayerPublicKey),
+        );
+      }
+
+      const rootPublisherSigner = deps.getRootPublisherSigner
+        ? deps.getRootPublisherSigner()
+        : rootPublisher.equals(signer.publicKey)
+          ? signer
+          : null;
+      if (rootPublisherSigner) {
+        assertSignerMatchesPublicKey(
+          "Solana audit root publisher",
+          rootPublisherSigner,
+          rootPublisher,
+        );
+      }
+      const rootPublisherAdditionalSigners =
+        rootPublisherSigner && !rootPublisherSigner.publicKey.equals(signer.publicKey)
+          ? [rootPublisherSigner]
+          : [];
+      const requireRootPublisherAdditionalSigners = (): Keypair[] => {
+        if (!rootPublisherSigner) {
+          throw new Error(
+            "Solana audit root publisher signer is not configured. Provide an external root-publisher signing service or keep the root publisher equal to the devnet fee payer.",
+          );
+        }
+
+        return rootPublisherAdditionalSigners;
+      };
 
       const programAccount = await connection.getAccountInfo(programId);
       assertProgramAccount(programAccount, programId, solanaAuditEnv.cluster);
@@ -672,6 +720,7 @@ export const createSolanaAuditPublisherService = (
         pollRegistrationSignature = await sendTransaction({
           connection,
           signer,
+          additionalSigners: requireRootPublisherAdditionalSigners(),
           label: "create_poll",
           instructions: [
             buildCreatePollInstruction({
@@ -679,6 +728,7 @@ export const createSolanaAuditPublisherService = (
               registryAddress,
               pollAddress,
               rootPublisher,
+              payer: signer.publicKey,
               pollIdHash,
               pollPolicyHash: hex32(input.poll.poll_policy_hash ?? ZERO_ROOT),
               credentialSchemaHash: hex32(
@@ -722,6 +772,7 @@ export const createSolanaAuditPublisherService = (
         const signature = await sendTransaction({
           connection,
           signer,
+          additionalSigners: requireRootPublisherAdditionalSigners(),
           label: `commit_roots[batch ${batchCommit.batchIndex}]`,
           instructions: [
             buildCommitRootsInstruction({
@@ -730,6 +781,7 @@ export const createSolanaAuditPublisherService = (
               pollAddress,
               pollRootAddress: batchRootAddress,
               rootPublisher,
+              payer: signer.publicKey,
               batchIndex: batchCommit.batchIndex,
               previousNullifierRoot: hex32(batchCommit.previousNullifierRoot),
               nullifierRoot: hex32(batchCommit.nullifierRoot),
@@ -778,6 +830,7 @@ export const createSolanaAuditPublisherService = (
           finalResultSignature = await sendTransaction({
             connection,
             signer,
+            additionalSigners: requireRootPublisherAdditionalSigners(),
             label: "finalize_poll",
             instructions: [
               buildFinalizePollInstruction({
@@ -786,6 +839,7 @@ export const createSolanaAuditPublisherService = (
                 pollAddress,
                 finalResultAddress,
                 rootPublisher,
+                payer: signer.publicKey,
                 voteCommitmentRoot: hex32(input.finalVoteCommitmentRoot),
                 nullifierRoot: hex32(input.finalNullifierRoot),
                 encryptedVoteRoot: hex32(input.finalEncryptedVoteRoot),

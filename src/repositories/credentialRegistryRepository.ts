@@ -192,6 +192,27 @@ export const createCredentialRegistryRepository = (
       return data || null;
     },
 
+    async listAcceptedRoots(input: {
+      merkleDepth: number;
+      limit: number;
+    }): Promise<CredentialRootRow[]> {
+      const supabase = getSupabaseAdminClient();
+
+      const { data, error } = await supabase
+        .from("credential_roots")
+        .select(CREDENTIAL_ROOT_COLUMNS)
+        .eq("merkle_depth", input.merkleDepth)
+        .order("created_at", { ascending: false })
+        .order("leaf_count", { ascending: false })
+        .limit(input.limit);
+
+      if (error) {
+        throw error;
+      }
+
+      return (data || []) as CredentialRootRow[];
+    },
+
     async insertRoot(input: NewCredentialRootRow): Promise<CredentialRootRow> {
       const supabase = getSupabaseAdminClient();
 

@@ -23,13 +23,18 @@ export type ZkpSecurityPolicy = Readonly<{
   version: typeof ZKP_SECURITY_POLICY_VERSION;
   phase: 12;
   backendSigner: Readonly<{
-    role: "root_publisher_key";
+    role: "fee_payer_key";
     rootPublisherPublicKey: string | null;
     feePayerPublicKey: string | null;
+    feePayerIsRootPublisher: boolean;
     transactionsEnabled: boolean;
     privateKeyMaterialAcceptedByBackend: boolean;
     backendEnvFeePayerSecretConfigured: boolean;
     keypairFilesAllowedInRepository: false;
+    rootPublisherCustody:
+      | "backend_fee_payer_devnet"
+      | "external_kms_hsm_or_multisig_signing_service";
+    backendCanAuthorizeRootPublication: boolean;
     custodyModel:
       | "external_kms_hsm_or_multisig_signing_service"
       | "backend_env_test_fee_payer_key";
@@ -42,12 +47,22 @@ export type ZkpSecurityPolicy = Readonly<{
   registryGovernance: Readonly<{
     registryAuthorityPublicKey: string | null;
     rootPublisherPublicKey: string | null;
+    feePayerPublicKey: string | null;
     separateRootPublisherRequired: true;
     separationSatisfied: boolean;
+    feePayerSeparationRequiredBeforeMainnet: true;
+    allMainnetRolesSeparated: boolean;
     backendControlsRegistryAuthority: false;
   }>;
   programUpgradeAuthority: Readonly<{
     programId: string;
+    publicKey: string | null;
+    custodyModel:
+      | "developer_wallet"
+      | "multisig_timelock"
+      | "immutable"
+      | "external_governance";
+    custodySatisfiedBeforeMainnet: boolean;
     developerWalletAllowed: false;
     backendControlsUpgradeAuthority: false;
     multisigRequired: true;
@@ -102,18 +117,36 @@ export const getZkpSecurityPolicy = (): ZkpSecurityPolicy => {
   const backendEnvFeePayerSecretConfigured =
     typeof env.solanaAudit.feePayerSecretKey === "string" &&
     env.solanaAudit.feePayerSecretKey.trim().length > 0;
+  const feePayerIsRootPublisher = Boolean(
+    feePolicy.feePayerPublicKey &&
+      env.solanaAudit.rootPublisherPublicKey &&
+      feePolicy.feePayerPublicKey === env.solanaAudit.rootPublisherPublicKey,
+  );
+  const allMainnetRolesSeparated = Boolean(
+    env.solanaAudit.registryAuthority &&
+      env.solanaAudit.rootPublisherPublicKey &&
+      feePolicy.feePayerPublicKey &&
+      env.solanaAudit.registryAuthority !== env.solanaAudit.rootPublisherPublicKey &&
+      env.solanaAudit.registryAuthority !== feePolicy.feePayerPublicKey &&
+      env.solanaAudit.rootPublisherPublicKey !== feePolicy.feePayerPublicKey,
+  );
+  const programUpgradeCustodySatisfied =
+    env.solanaAudit.programUpgradeAuthorityCustody !== "developer_wallet";
 
   return Object.freeze({
     version: ZKP_SECURITY_POLICY_VERSION,
     phase: 12,
     backendSigner: Object.freeze({
-      role: "root_publisher_key",
+      role: "fee_payer_key",
       rootPublisherPublicKey: env.solanaAudit.rootPublisherPublicKey,
       feePayerPublicKey: feePolicy.feePayerPublicKey,
+      feePayerIsRootPublisher,
       transactionsEnabled: feePolicy.transactionsEnabled,
       privateKeyMaterialAcceptedByBackend: backendEnvFeePayerSecretConfigured,
       backendEnvFeePayerSecretConfigured,
       keypairFilesAllowedInRepository: false,
+      rootPublisherCustody: env.solanaAudit.rootPublisherCustody,
+      backendCanAuthorizeRootPublication: feePayerIsRootPublisher,
       custodyModel: backendEnvFeePayerSecretConfigured
         ? "backend_env_test_fee_payer_key"
         : "external_kms_hsm_or_multisig_signing_service",
@@ -126,16 +159,22 @@ export const getZkpSecurityPolicy = (): ZkpSecurityPolicy => {
     registryGovernance: Object.freeze({
       registryAuthorityPublicKey: env.solanaAudit.registryAuthority,
       rootPublisherPublicKey: env.solanaAudit.rootPublisherPublicKey,
+      feePayerPublicKey: feePolicy.feePayerPublicKey,
       separateRootPublisherRequired: true,
       separationSatisfied: Boolean(
         env.solanaAudit.registryAuthority &&
           env.solanaAudit.rootPublisherPublicKey &&
           env.solanaAudit.registryAuthority !== env.solanaAudit.rootPublisherPublicKey,
       ),
+      feePayerSeparationRequiredBeforeMainnet: true,
+      allMainnetRolesSeparated,
       backendControlsRegistryAuthority: false,
     }),
     programUpgradeAuthority: Object.freeze({
       programId: env.solanaAudit.programId,
+      publicKey: env.solanaAudit.programUpgradeAuthority,
+      custodyModel: env.solanaAudit.programUpgradeAuthorityCustody,
+      custodySatisfiedBeforeMainnet: programUpgradeCustodySatisfied,
       developerWalletAllowed: false,
       backendControlsUpgradeAuthority: false,
       multisigRequired: true,

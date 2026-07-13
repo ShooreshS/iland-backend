@@ -190,14 +190,15 @@ pub struct CreatePoll<'info> {
     pub registry: Account<'info, PollRegistry>,
     #[account(
         init,
-        payer = root_publisher,
+        payer = payer,
         space = 8 + PollAccount::LEN,
         seeds = [b"poll", poll_id_hash.as_ref()],
         bump
     )]
     pub poll: Account<'info, PollAccount>,
-    #[account(mut)]
     pub root_publisher: Signer<'info>,
+    #[account(mut)]
+    pub payer: Signer<'info>,
     pub system_program: Program<'info, System>,
 }
 
@@ -219,14 +220,15 @@ pub struct CommitRoots<'info> {
     pub poll: Account<'info, PollAccount>,
     #[account(
         init,
-        payer = root_publisher,
+        payer = payer,
         space = 8 + PollRootAccount::LEN,
         seeds = [b"poll-root", poll.key().as_ref(), &batch_index.to_le_bytes()],
         bump
     )]
     pub poll_root: Account<'info, PollRootAccount>,
-    #[account(mut)]
     pub root_publisher: Signer<'info>,
+    #[account(mut)]
+    pub payer: Signer<'info>,
     pub system_program: Program<'info, System>,
 }
 
@@ -247,14 +249,15 @@ pub struct FinalizePoll<'info> {
     pub poll: Account<'info, PollAccount>,
     #[account(
         init,
-        payer = root_publisher,
+        payer = payer,
         space = 8 + FinalResultAccount::LEN,
         seeds = [b"final-result", poll.key().as_ref()],
         bump
     )]
     pub final_result: Account<'info, FinalResultAccount>,
-    #[account(mut)]
     pub root_publisher: Signer<'info>,
+    #[account(mut)]
+    pub payer: Signer<'info>,
     pub system_program: Program<'info, System>,
 }
 

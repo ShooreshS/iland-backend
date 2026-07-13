@@ -12,7 +12,7 @@ describe("zkpSecurityPolicyService", () => {
     expect(policy.version).toBe("civicos-zkp-security-policy-v1");
     expect(policy.phase).toBe(12);
     expect(policy.backendSigner).toMatchObject({
-      role: "root_publisher_key",
+      role: "fee_payer_key",
       transactionsEnabled: false,
       keypairFilesAllowedInRepository: false,
       requiresSolFunding: true,
@@ -30,6 +30,14 @@ describe("zkpSecurityPolicyService", () => {
       "external_kms_hsm_or_multisig_signing_service",
       "backend_env_test_fee_payer_key",
     ]).toContain(policy.backendSigner.custodyModel);
+    expect([
+      "backend_fee_payer_devnet",
+      "external_kms_hsm_or_multisig_signing_service",
+    ]).toContain(policy.backendSigner.rootPublisherCustody);
+    expect(typeof policy.backendSigner.feePayerIsRootPublisher).toBe("boolean");
+    expect(typeof policy.backendSigner.backendCanAuthorizeRootPublication).toBe(
+      "boolean",
+    );
     expect(policy.backendSigner.signsOnly).toBe(ROOT_PUBLISHER_ACTIONS);
   });
 
@@ -40,6 +48,8 @@ describe("zkpSecurityPolicyService", () => {
       registryAuthorityPublicKey: null,
       separateRootPublisherRequired: true,
       separationSatisfied: false,
+      feePayerSeparationRequiredBeforeMainnet: true,
+      allMainnetRolesSeparated: false,
       backendControlsRegistryAuthority: false,
     });
     expect(policy.registryGovernance.rootPublisherPublicKey).toBe(
@@ -58,6 +68,15 @@ describe("zkpSecurityPolicyService", () => {
       publicUpgradeAnnouncementsRequired: true,
       versionedProgramIdsRequired: true,
     });
+    expect([
+      "developer_wallet",
+      "multisig_timelock",
+      "immutable",
+      "external_governance",
+    ]).toContain(policy.programUpgradeAuthority.custodyModel);
+    expect(typeof policy.programUpgradeAuthority.custodySatisfiedBeforeMainnet).toBe(
+      "boolean",
+    );
   });
 
   it("states the ballot custody trust boundary", () => {

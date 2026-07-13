@@ -20,9 +20,9 @@ The source-declared program id is the current local deployment key public key. B
 ## Instructions
 
 - `initialize_registry`: creates the global registry PDA and sets signer registry authority, dedicated root publisher, treasury, and token mint/token-program metadata. Registry authority and root publisher must be different keys.
-- `create_poll`: creates a poll PDA keyed by `poll_id_hash` and stores frozen `poll_policy_hash` / `credential_schema_hash`. This is signed by the registry's `root_publisher`.
-- `commit_roots`: appends a batch root account, verifies previous nullifier / vote-commitment / encrypted-vote roots and next batch index, and advances the poll latest roots. This is signed by the registry's `root_publisher`. Commits are allowed after the poll opens and before finalization, so CivicOS can delay publication until result release.
-- `finalize_poll`: stores final vote/nullifier/encrypted-vote roots and the final result hash after the poll closes. This is signed by the registry's `root_publisher`.
+- `create_poll`: creates a poll PDA keyed by `poll_id_hash` and stores frozen `poll_policy_hash` / `credential_schema_hash`. This is authorized by the registry's `root_publisher`; a separate `payer` account can fund rent and fees.
+- `commit_roots`: appends a batch root account, verifies previous nullifier / vote-commitment / encrypted-vote roots and next batch index, and advances the poll latest roots. This is authorized by the registry's `root_publisher`; a separate `payer` account can fund rent and fees. Commits are allowed after the poll opens and before finalization, so CivicOS can delay publication until result release.
+- `finalize_poll`: stores final vote/nullifier/encrypted-vote roots and the final result hash after the poll closes. This is authorized by the registry's `root_publisher`; a separate `payer` account can fund rent and fees.
 
 ## Minimal Mainnet Footprint
 
@@ -126,7 +126,8 @@ For a diagnostic publication-only run against an unfinished poll, set
 
 ## Phase 12 Security
 
-- Root publishing must use a dedicated `root_publisher_key` controlled through external KMS/HSM or multisig signing-service custody. It must not be the registry authority or program upgrade authority.
+- Root publishing must use a dedicated `root_publisher_key` controlled through external KMS/HSM or multisig signing-service custody. It must not be the registry authority, fee payer, or program upgrade authority before mainnet.
+- Backend-sponsored network fees use a separate fee-payer key. Devnet may keep the compatibility fee-payer-as-root-publisher setup for testing, but the backend config rejects that mode for mainnet transaction enablement.
 - Registry authority initializes and governs registry configuration. It is not the key used for recurring root publication.
 - Do not commit Solana keypair files or private-key material. The backend records only public signer metadata until transaction publication is explicitly enabled.
 - Program upgrade authority must not remain with a single developer wallet. Use multisig, a timelock where possible, public upgrade announcements, and versioned program IDs.

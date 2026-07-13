@@ -66,6 +66,7 @@ const createAuditEnv = (
   programId: PublicKey,
   feePayer: PublicKey,
   registryAuthority: PublicKey,
+  rootPublisher: PublicKey = feePayer,
 ) =>
   ({
     cluster: "devnet",
@@ -76,7 +77,12 @@ const createAuditEnv = (
     tokenSymbol: "SHOLAN",
     tokenDecimals: 9,
     registryAuthority: registryAuthority.toBase58(),
-    rootPublisherPublicKey: feePayer.toBase58(),
+    rootPublisherPublicKey: rootPublisher.toBase58(),
+    rootPublisherCustody: rootPublisher.equals(feePayer)
+      ? "backend_fee_payer_devnet"
+      : "external_kms_hsm_or_multisig_signing_service",
+    programUpgradeAuthority: null,
+    programUpgradeAuthorityCustody: "developer_wallet",
     treasury: null,
     feePayerPublicKey: feePayer.toBase58(),
     feePayerSecretKey: null,
@@ -260,6 +266,149 @@ describe("Phase 7 Solana audit publisher", () => {
     expect(result.explorerUrls.rootCommit).toBe(
       `https://explorer.solana.com/tx/${RECOVERED_ROOT_SIGNATURE}?cluster=devnet`,
     );
+  });
+
+  it("separates the root publisher signer from the fee payer account", async () => {
+    const feePayer = Keypair.generate();
+    const rootPublisher = Keypair.generate();
+    const registryAuthority = Keypair.generate().publicKey;
+    const programId = Keypair.generate().publicKey;
+    const poll = createPoll();
+    const pollIdHash = derivePollIdHash(poll.id);
+    const registryAddress = PublicKey.findProgramAddressSync(
+      [Buffer.from("registry")],
+      programId,
+    )[0];
+    const accounts = new Map<string, AccountInfo<Buffer>>([
+      [
+        programId.toBase58(),
+        createAccountInfo({
+          owner: SystemProgram.programId,
+          accountName: "Program",
+          executable: true,
+        }),
+      ],
+      [
+        registryAddress.toBase58(),
+        createAccountInfo({
+          owner: programId,
+          accountName: "PollRegistry",
+          registryAuthority,
+          rootPublisher: rootPublisher.publicKey,
+        }),
+      ],
+    ]);
+    const sent = [] as {
+      label: string;
+      signer: string;
+      additionalSigners: string[];
+      accountMetas: string[];
+    }[];
+    const service = createSolanaAuditPublisherService({
+      solanaAuditEnv: createAuditEnv(
+        programId,
+        feePayer.publicKey,
+        registryAuthority,
+        rootPublisher.publicKey,
+      ),
+      getBackendFeePayer: () => feePayer,
+      getRootPublisherSigner: () => rootPublisher,
+      getConnection: () =>
+        createConnection({
+          getAccountInfo: async (address: PublicKey) =>
+            accounts.get(address.toBase58()) ?? null,
+          getSignaturesForAddress: async () => [],
+        }),
+      sendTransaction: async ({ label, signer, additionalSigners, instructions }) => {
+        sent.push({
+          label,
+          signer: signer.publicKey.toBase58(),
+          additionalSigners: (additionalSigners ?? []).map((entry) =>
+            entry.publicKey.toBase58(),
+          ),
+          accountMetas: instructions[0].keys.map((meta) =>
+            [
+              meta.pubkey.toBase58(),
+              meta.isSigner ? "signer" : "readonly",
+              meta.isWritable ? "writable" : "not-writable",
+            ].join(":"),
+          ),
+        });
+        return `${label}-signature`;
+      },
+    });
+
+    await service.publishPollAudit(buildPublicationInput(poll));
+
+    expect(sent.map((entry) => entry.label)).toEqual([
+      "create_poll",
+      "commit_roots[batch 0]",
+    ]);
+    for (const entry of sent) {
+      expect(entry.signer).toBe(feePayer.publicKey.toBase58());
+      expect(entry.additionalSigners).toEqual([
+        rootPublisher.publicKey.toBase58(),
+      ]);
+    }
+    expect(sent[0].accountMetas.slice(2, 4)).toEqual([
+      `${rootPublisher.publicKey.toBase58()}:signer:not-writable`,
+      `${feePayer.publicKey.toBase58()}:signer:writable`,
+    ]);
+    expect(sent[1].accountMetas.slice(3, 5)).toEqual([
+      `${rootPublisher.publicKey.toBase58()}:signer:not-writable`,
+      `${feePayer.publicKey.toBase58()}:signer:writable`,
+    ]);
+  });
+
+  it("requires an external root publisher signer when root publisher and fee payer differ", async () => {
+    const feePayer = Keypair.generate();
+    const rootPublisher = Keypair.generate().publicKey;
+    const registryAuthority = Keypair.generate().publicKey;
+    const programId = Keypair.generate().publicKey;
+    const registryAddress = PublicKey.findProgramAddressSync(
+      [Buffer.from("registry")],
+      programId,
+    )[0];
+    const accounts = new Map<string, AccountInfo<Buffer>>([
+      [
+        programId.toBase58(),
+        createAccountInfo({
+          owner: SystemProgram.programId,
+          accountName: "Program",
+          executable: true,
+        }),
+      ],
+      [
+        registryAddress.toBase58(),
+        createAccountInfo({
+          owner: programId,
+          accountName: "PollRegistry",
+          registryAuthority,
+          rootPublisher,
+        }),
+      ],
+    ]);
+    const service = createSolanaAuditPublisherService({
+      solanaAuditEnv: createAuditEnv(
+        programId,
+        feePayer.publicKey,
+        registryAuthority,
+        rootPublisher,
+      ),
+      getBackendFeePayer: () => feePayer,
+      getRootPublisherSigner: () => null,
+      getConnection: () =>
+        createConnection({
+          getAccountInfo: async (address: PublicKey) =>
+            accounts.get(address.toBase58()) ?? null,
+          getSignaturesForAddress: async () => [],
+        }),
+      sendTransaction: async ({ label }) => `${label}-signature`,
+    });
+
+    await expect(
+      service.publishPollAudit(buildPublicationInput()),
+    ).rejects.toThrow("root publisher signer is not configured");
   });
 
   it("rejects an existing root PDA that is not owned by the audit program", async () => {

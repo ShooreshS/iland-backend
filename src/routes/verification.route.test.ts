@@ -1,6 +1,7 @@
 import { describe, expect, it } from "bun:test";
 
 import {
+  createGetVerificationCredentialRootsRoute,
   createGetVerificationProofSystemRoute,
   createGetVerificationSecurityPolicyRoute,
   createPostVerificationCredentialRoute,
@@ -226,7 +227,7 @@ describe("GET /verification/security-policy route", () => {
       version: "civicos-zkp-security-policy-v1",
       phase: 12,
       backendSigner: {
-        role: "root_publisher_key",
+        role: "fee_payer_key",
         privateKeyMaterialAcceptedByBackend: false,
         keypairFilesAllowedInRepository: false,
         transactionsEnabled: false,
@@ -262,5 +263,76 @@ describe("GET /verification/security-policy route", () => {
 
     expect(response.status).toBe(200);
     expect(await response.json()).toMatchObject(policy);
+  });
+});
+
+describe("GET /verification/credential-roots route", () => {
+  it("returns public accepted credential-root audit data", async () => {
+    const route = createGetVerificationCredentialRootsRoute({
+      credentialRootAuditServiceLike: {
+        getCredentialRootAudit: async (input) => ({
+          version: "civicos-credential-root-audit-v1",
+          commitmentScheme: "civicos-credential-commitment-v1",
+          merkleDepth: 32,
+          identityMaterialExposed: false,
+          latestRoot: {
+            root: "1".repeat(64),
+            previousRoot: null,
+            merkleDepth: 32,
+            leafCount: 1,
+            createdAt: "2026-07-13T00:00:00.000Z",
+            solanaTxSignature: null,
+          },
+          acceptedRoots:
+            input?.limit === "1"
+              ? [
+                  {
+                    root: "1".repeat(64),
+                    previousRoot: null,
+                    merkleDepth: 32,
+                    leafCount: 1,
+                    createdAt: "2026-07-13T00:00:00.000Z",
+                    solanaTxSignature: null,
+                  },
+                ]
+              : [],
+          anchoring: {
+            mode: "public-api-root-chain",
+            solanaTxSignatureField: "solanaTxSignature",
+            registryRowIdsExposed: false,
+            credentialCommitmentsExposed: false,
+          },
+        }),
+      },
+    });
+    const request = new Request(
+      "http://127.0.0.1:3001/verification/credential-roots?limit=1",
+      { method: "GET" },
+    );
+
+    const response = await route.handler({
+      request,
+      url: new URL(request.url),
+      params: {},
+    });
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({
+      version: "civicos-credential-root-audit-v1",
+      merkleDepth: 32,
+      identityMaterialExposed: false,
+      acceptedRoots: [
+        {
+          root: "1".repeat(64),
+          previousRoot: null,
+          leafCount: 1,
+          solanaTxSignature: null,
+        },
+      ],
+      anchoring: {
+        registryRowIdsExposed: false,
+        credentialCommitmentsExposed: false,
+      },
+    });
   });
 });

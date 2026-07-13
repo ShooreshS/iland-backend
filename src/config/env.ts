@@ -52,6 +52,18 @@ const hex64Schema = z
   .string()
   .regex(/^[0-9a-f]{64}$/iu, "Expected a 32-byte hex hash.");
 
+const SOLANA_AUDIT_ROOT_PUBLISHER_CUSTODY_MODES = [
+  "backend_fee_payer_devnet",
+  "external_kms_hsm_or_multisig_signing_service",
+] as const;
+
+const SOLANA_AUDIT_PROGRAM_UPGRADE_AUTHORITY_CUSTODY_MODES = [
+  "developer_wallet",
+  "multisig_timelock",
+  "immutable",
+  "external_governance",
+] as const;
+
 const normalizeAndroidCertDigest = (value: string): string => {
   const trimmed = value.trim();
   const hexCandidate = trimmed.replace(/:/g, "");
@@ -124,6 +136,13 @@ const parsed = z
     SOLANA_AUDIT_PROGRAM_ID: solanaPublicKeySchema.optional(),
     SOLANA_AUDIT_REGISTRY_AUTHORITY: solanaPublicKeySchema.optional(),
     SOLANA_AUDIT_ROOT_PUBLISHER_PUBLIC_KEY: solanaPublicKeySchema.optional(),
+    SOLANA_AUDIT_ROOT_PUBLISHER_CUSTODY: z
+      .enum(SOLANA_AUDIT_ROOT_PUBLISHER_CUSTODY_MODES)
+      .optional(),
+    SOLANA_AUDIT_PROGRAM_UPGRADE_AUTHORITY: solanaPublicKeySchema.optional(),
+    SOLANA_AUDIT_PROGRAM_UPGRADE_AUTHORITY_CUSTODY: z
+      .enum(SOLANA_AUDIT_PROGRAM_UPGRADE_AUTHORITY_CUSTODY_MODES)
+      .optional(),
     SOLANA_AUDIT_TREASURY: solanaPublicKeySchema.optional(),
     SOLANA_AUDIT_FEE_PAYER_PUBLIC_KEY: solanaPublicKeySchema.optional(),
     SOLANA_AUDIT_FEE_PAYER_SECRET_KEY: z.string().min(1).optional(),
@@ -303,25 +322,21 @@ const parsed = z
         });
       }
 
-      if (
-        input.SOLANA_AUDIT_ROOT_PUBLISHER_PUBLIC_KEY &&
-        input.SOLANA_AUDIT_FEE_PAYER_PUBLIC_KEY &&
-        input.SOLANA_AUDIT_ROOT_PUBLISHER_PUBLIC_KEY !==
-          input.SOLANA_AUDIT_FEE_PAYER_PUBLIC_KEY
-      ) {
-        context.addIssue({
-          code: z.ZodIssueCode.custom,
-          message:
-            "SOLANA_AUDIT_ROOT_PUBLISHER_PUBLIC_KEY must match SOLANA_AUDIT_FEE_PAYER_PUBLIC_KEY until an external root-publisher signing service is integrated.",
-          path: ["SOLANA_AUDIT_ROOT_PUBLISHER_PUBLIC_KEY"],
-        });
-      }
-
       const cluster = input.SOLANA_AUDIT_CLUSTER || SHOLAN_TOKEN_DEFAULTS.cluster;
       const mainnetConfirmed =
         input.SOLANA_AUDIT_MAINNET_CONFIRMED !== undefined
           ? toBoolean(input.SOLANA_AUDIT_MAINNET_CONFIRMED)
           : false;
+      const rootPublisherCustody =
+        input.SOLANA_AUDIT_ROOT_PUBLISHER_CUSTODY ??
+        (solanaAuditRootPublisherPublicKey &&
+        input.SOLANA_AUDIT_FEE_PAYER_PUBLIC_KEY &&
+        solanaAuditRootPublisherPublicKey !== input.SOLANA_AUDIT_FEE_PAYER_PUBLIC_KEY
+          ? "external_kms_hsm_or_multisig_signing_service"
+          : "backend_fee_payer_devnet");
+      const programUpgradeCustody =
+        input.SOLANA_AUDIT_PROGRAM_UPGRADE_AUTHORITY_CUSTODY ??
+        "developer_wallet";
 
       if (cluster === "mainnet-beta" && !mainnetConfirmed) {
         context.addIssue({
@@ -330,6 +345,81 @@ const parsed = z
             "SOLANA_AUDIT_MAINNET_CONFIRMED must be true before enabling Solana audit transactions on mainnet-beta.",
           path: ["SOLANA_AUDIT_MAINNET_CONFIRMED"],
         });
+      }
+
+      if (cluster === "mainnet-beta") {
+        if (!input.SOLANA_AUDIT_ROOT_PUBLISHER_PUBLIC_KEY) {
+          context.addIssue({
+            code: z.ZodIssueCode.custom,
+            message:
+              "SOLANA_AUDIT_ROOT_PUBLISHER_PUBLIC_KEY must be explicit before enabling mainnet Solana audit transactions.",
+            path: ["SOLANA_AUDIT_ROOT_PUBLISHER_PUBLIC_KEY"],
+          });
+        }
+
+        if (
+          solanaAuditRootPublisherPublicKey &&
+          input.SOLANA_AUDIT_FEE_PAYER_PUBLIC_KEY &&
+          solanaAuditRootPublisherPublicKey === input.SOLANA_AUDIT_FEE_PAYER_PUBLIC_KEY
+        ) {
+          context.addIssue({
+            code: z.ZodIssueCode.custom,
+            message:
+              "SOLANA_AUDIT_ROOT_PUBLISHER_PUBLIC_KEY and SOLANA_AUDIT_FEE_PAYER_PUBLIC_KEY must be different before mainnet.",
+            path: ["SOLANA_AUDIT_ROOT_PUBLISHER_PUBLIC_KEY"],
+          });
+        }
+
+        if (
+          input.SOLANA_AUDIT_REGISTRY_AUTHORITY &&
+          input.SOLANA_AUDIT_FEE_PAYER_PUBLIC_KEY &&
+          input.SOLANA_AUDIT_REGISTRY_AUTHORITY === input.SOLANA_AUDIT_FEE_PAYER_PUBLIC_KEY
+        ) {
+          context.addIssue({
+            code: z.ZodIssueCode.custom,
+            message:
+              "SOLANA_AUDIT_REGISTRY_AUTHORITY and SOLANA_AUDIT_FEE_PAYER_PUBLIC_KEY must be different before mainnet.",
+            path: ["SOLANA_AUDIT_REGISTRY_AUTHORITY"],
+          });
+        }
+
+        if (
+          rootPublisherCustody !==
+          "external_kms_hsm_or_multisig_signing_service"
+        ) {
+          context.addIssue({
+            code: z.ZodIssueCode.custom,
+            message:
+              "SOLANA_AUDIT_ROOT_PUBLISHER_CUSTODY must be external_kms_hsm_or_multisig_signing_service before mainnet.",
+            path: ["SOLANA_AUDIT_ROOT_PUBLISHER_CUSTODY"],
+          });
+        }
+
+        if (programUpgradeCustody === "developer_wallet") {
+          context.addIssue({
+            code: z.ZodIssueCode.custom,
+            message:
+              "SOLANA_AUDIT_PROGRAM_UPGRADE_AUTHORITY_CUSTODY must be multisig_timelock, immutable, or external_governance before mainnet.",
+            path: ["SOLANA_AUDIT_PROGRAM_UPGRADE_AUTHORITY_CUSTODY"],
+          });
+        }
+
+        const upgradeAuthority = input.SOLANA_AUDIT_PROGRAM_UPGRADE_AUTHORITY;
+        if (
+          upgradeAuthority &&
+          [
+            input.SOLANA_AUDIT_FEE_PAYER_PUBLIC_KEY,
+            input.SOLANA_AUDIT_REGISTRY_AUTHORITY,
+            solanaAuditRootPublisherPublicKey,
+          ].includes(upgradeAuthority)
+        ) {
+          context.addIssue({
+            code: z.ZodIssueCode.custom,
+            message:
+              "SOLANA_AUDIT_PROGRAM_UPGRADE_AUTHORITY must be distinct from fee payer, registry authority, and root publisher before mainnet.",
+            path: ["SOLANA_AUDIT_PROGRAM_UPGRADE_AUTHORITY"],
+          });
+        }
       }
     }
 
@@ -593,6 +683,17 @@ const parsed = z
     SOLANA_AUDIT_ROOT_PUBLISHER_PUBLIC_KEY: emptyToUndefined(
       process.env.SOLANA_AUDIT_ROOT_PUBLISHER_PUBLIC_KEY,
     ),
+    SOLANA_AUDIT_ROOT_PUBLISHER_CUSTODY: emptyToUndefined(
+      process.env.SOLANA_AUDIT_ROOT_PUBLISHER_CUSTODY,
+    ) as (typeof SOLANA_AUDIT_ROOT_PUBLISHER_CUSTODY_MODES)[number] | undefined,
+    SOLANA_AUDIT_PROGRAM_UPGRADE_AUTHORITY: emptyToUndefined(
+      process.env.SOLANA_AUDIT_PROGRAM_UPGRADE_AUTHORITY,
+    ),
+    SOLANA_AUDIT_PROGRAM_UPGRADE_AUTHORITY_CUSTODY: emptyToUndefined(
+      process.env.SOLANA_AUDIT_PROGRAM_UPGRADE_AUTHORITY_CUSTODY,
+    ) as
+      | (typeof SOLANA_AUDIT_PROGRAM_UPGRADE_AUTHORITY_CUSTODY_MODES)[number]
+      | undefined,
     SOLANA_AUDIT_TREASURY: emptyToUndefined(process.env.SOLANA_AUDIT_TREASURY),
     SOLANA_AUDIT_FEE_PAYER_PUBLIC_KEY: emptyToUndefined(
       process.env.SOLANA_AUDIT_FEE_PAYER_PUBLIC_KEY,
@@ -766,6 +867,20 @@ const solanaAuditMainnetConfirmed =
   parsed.SOLANA_AUDIT_MAINNET_CONFIRMED !== undefined
     ? toBoolean(parsed.SOLANA_AUDIT_MAINNET_CONFIRMED)
     : false;
+const solanaAuditRootPublisherPublicKey =
+  parsed.SOLANA_AUDIT_ROOT_PUBLISHER_PUBLIC_KEY ??
+  parsed.SOLANA_AUDIT_FEE_PAYER_PUBLIC_KEY ??
+  null;
+const solanaAuditRootPublisherCustody =
+  parsed.SOLANA_AUDIT_ROOT_PUBLISHER_CUSTODY ??
+  (solanaAuditRootPublisherPublicKey &&
+  parsed.SOLANA_AUDIT_FEE_PAYER_PUBLIC_KEY &&
+  solanaAuditRootPublisherPublicKey !== parsed.SOLANA_AUDIT_FEE_PAYER_PUBLIC_KEY
+    ? "external_kms_hsm_or_multisig_signing_service"
+    : "backend_fee_payer_devnet");
+const solanaAuditProgramUpgradeAuthorityCustody =
+  parsed.SOLANA_AUDIT_PROGRAM_UPGRADE_AUTHORITY_CUSTODY ??
+  "developer_wallet";
 const zkpGroth16VoteVerifierEnabled =
   parsed.ZKP_GROTH16_VOTE_VERIFIER_ENABLED !== undefined
     ? toBoolean(parsed.ZKP_GROTH16_VOTE_VERIFIER_ENABLED)
@@ -845,10 +960,12 @@ export const env = Object.freeze({
     tokenSymbol: SHOLAN_TOKEN_DEFAULTS.symbol,
     tokenDecimals: SHOLAN_TOKEN_DEFAULTS.decimals,
     registryAuthority: parsed.SOLANA_AUDIT_REGISTRY_AUTHORITY ?? null,
-    rootPublisherPublicKey:
-      parsed.SOLANA_AUDIT_ROOT_PUBLISHER_PUBLIC_KEY ??
-      parsed.SOLANA_AUDIT_FEE_PAYER_PUBLIC_KEY ??
-      null,
+    rootPublisherPublicKey: solanaAuditRootPublisherPublicKey,
+    rootPublisherCustody: solanaAuditRootPublisherCustody,
+    programUpgradeAuthority:
+      parsed.SOLANA_AUDIT_PROGRAM_UPGRADE_AUTHORITY ?? null,
+    programUpgradeAuthorityCustody:
+      solanaAuditProgramUpgradeAuthorityCustody,
     treasury: parsed.SOLANA_AUDIT_TREASURY ?? null,
     feePayerPublicKey: parsed.SOLANA_AUDIT_FEE_PAYER_PUBLIC_KEY ?? null,
     feePayerSecretKey: parsed.SOLANA_AUDIT_FEE_PAYER_SECRET_KEY ?? null,
