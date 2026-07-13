@@ -64,6 +64,18 @@ const SOLANA_AUDIT_PROGRAM_UPGRADE_AUTHORITY_CUSTODY_MODES = [
   "external_governance",
 ] as const;
 
+const ZKP_RELEASE_CHANNELS = [
+  "private_beta",
+  "public_devnet_v0_1",
+  "mainnet_v0_1_1",
+] as const;
+
+const ZKP_ARTIFACT_RELEASE_STAGES = [
+  "internal_rc",
+  "ceremony_pending",
+  "production_final",
+] as const;
+
 const normalizeAndroidCertDigest = (value: string): string => {
   const trimmed = value.trim();
   const hexCandidate = trimmed.replace(/:/g, "");
@@ -170,6 +182,11 @@ const parsed = z
     ZKP_BALLOT_CUSTODY_MODE: z.enum(BALLOT_CUSTODY_MODES).optional(),
     ZKP_PUBLIC_SECRET_BALLOT_CLAIMS_ENABLED: z.string().optional(),
     ZKP_LIVE_PROVISIONAL_RESULTS_ENABLED: z.string().optional(),
+    ZKP_RELEASE_CHANNEL: z.enum(ZKP_RELEASE_CHANNELS).optional(),
+    ZKP_ARTIFACT_RELEASE_STAGE: z
+      .enum(ZKP_ARTIFACT_RELEASE_STAGES)
+      .optional(),
+    ZKP_PUBLIC_DEVNET_V0_1_CONFIRMED: z.string().optional(),
   })
   .superRefine((input, context) => {
     const hasUrl = Boolean(input.SUPABASE_URL);
@@ -277,9 +294,22 @@ const parsed = z
       input.SOLANA_AUDIT_TRANSACTIONS_ENABLED !== undefined
         ? toBoolean(input.SOLANA_AUDIT_TRANSACTIONS_ENABLED)
         : false;
+    const solanaAuditCluster =
+      input.SOLANA_AUDIT_CLUSTER || SHOLAN_TOKEN_DEFAULTS.cluster;
+    const solanaAuditMainnetConfirmed =
+      input.SOLANA_AUDIT_MAINNET_CONFIRMED !== undefined
+        ? toBoolean(input.SOLANA_AUDIT_MAINNET_CONFIRMED)
+        : false;
     const solanaAuditRootPublisherPublicKey =
       input.SOLANA_AUDIT_ROOT_PUBLISHER_PUBLIC_KEY ??
       input.SOLANA_AUDIT_FEE_PAYER_PUBLIC_KEY;
+    const zkpReleaseChannel = input.ZKP_RELEASE_CHANNEL ?? "private_beta";
+    const zkpArtifactReleaseStage =
+      input.ZKP_ARTIFACT_RELEASE_STAGE ?? "internal_rc";
+    const zkpPublicDevnetV01Confirmed =
+      input.ZKP_PUBLIC_DEVNET_V0_1_CONFIRMED !== undefined
+        ? toBoolean(input.ZKP_PUBLIC_DEVNET_V0_1_CONFIRMED)
+        : false;
 
     if (
       input.SOLANA_AUDIT_REGISTRY_AUTHORITY &&
@@ -322,11 +352,6 @@ const parsed = z
         });
       }
 
-      const cluster = input.SOLANA_AUDIT_CLUSTER || SHOLAN_TOKEN_DEFAULTS.cluster;
-      const mainnetConfirmed =
-        input.SOLANA_AUDIT_MAINNET_CONFIRMED !== undefined
-          ? toBoolean(input.SOLANA_AUDIT_MAINNET_CONFIRMED)
-          : false;
       const rootPublisherCustody =
         input.SOLANA_AUDIT_ROOT_PUBLISHER_CUSTODY ??
         (solanaAuditRootPublisherPublicKey &&
@@ -338,7 +363,7 @@ const parsed = z
         input.SOLANA_AUDIT_PROGRAM_UPGRADE_AUTHORITY_CUSTODY ??
         "developer_wallet";
 
-      if (cluster === "mainnet-beta" && !mainnetConfirmed) {
+      if (solanaAuditCluster === "mainnet-beta" && !solanaAuditMainnetConfirmed) {
         context.addIssue({
           code: z.ZodIssueCode.custom,
           message:
@@ -347,7 +372,7 @@ const parsed = z
         });
       }
 
-      if (cluster === "mainnet-beta") {
+      if (solanaAuditCluster === "mainnet-beta") {
         if (!input.SOLANA_AUDIT_ROOT_PUBLISHER_PUBLIC_KEY) {
           context.addIssue({
             code: z.ZodIssueCode.custom,
@@ -420,6 +445,64 @@ const parsed = z
             path: ["SOLANA_AUDIT_PROGRAM_UPGRADE_AUTHORITY"],
           });
         }
+      }
+    }
+
+    if (zkpReleaseChannel === "public_devnet_v0_1") {
+      if (solanaAuditCluster !== "devnet") {
+        context.addIssue({
+          code: z.ZodIssueCode.custom,
+          message:
+            "ZKP_RELEASE_CHANNEL=public_devnet_v0_1 requires SOLANA_AUDIT_CLUSTER=devnet.",
+          path: ["ZKP_RELEASE_CHANNEL"],
+        });
+      }
+
+      if (solanaAuditMainnetConfirmed) {
+        context.addIssue({
+          code: z.ZodIssueCode.custom,
+          message:
+            "ZKP public devnet v0.1 release must keep SOLANA_AUDIT_MAINNET_CONFIRMED=false.",
+          path: ["SOLANA_AUDIT_MAINNET_CONFIRMED"],
+        });
+      }
+
+      if (!zkpPublicDevnetV01Confirmed) {
+        context.addIssue({
+          code: z.ZodIssueCode.custom,
+          message:
+            "ZKP_PUBLIC_DEVNET_V0_1_CONFIRMED=true is required to run the public v0.1 campaign on devnet.",
+          path: ["ZKP_PUBLIC_DEVNET_V0_1_CONFIRMED"],
+        });
+      }
+    }
+
+    if (zkpReleaseChannel === "mainnet_v0_1_1") {
+      if (solanaAuditCluster !== "mainnet-beta") {
+        context.addIssue({
+          code: z.ZodIssueCode.custom,
+          message:
+            "ZKP_RELEASE_CHANNEL=mainnet_v0_1_1 requires SOLANA_AUDIT_CLUSTER=mainnet-beta.",
+          path: ["ZKP_RELEASE_CHANNEL"],
+        });
+      }
+
+      if (!solanaAuditMainnetConfirmed) {
+        context.addIssue({
+          code: z.ZodIssueCode.custom,
+          message:
+            "ZKP_RELEASE_CHANNEL=mainnet_v0_1_1 requires SOLANA_AUDIT_MAINNET_CONFIRMED=true.",
+          path: ["SOLANA_AUDIT_MAINNET_CONFIRMED"],
+        });
+      }
+
+      if (zkpArtifactReleaseStage !== "production_final") {
+        context.addIssue({
+          code: z.ZodIssueCode.custom,
+          message:
+            "ZKP_RELEASE_CHANNEL=mainnet_v0_1_1 requires ZKP_ARTIFACT_RELEASE_STAGE=production_final.",
+          path: ["ZKP_ARTIFACT_RELEASE_STAGE"],
+        });
       }
     }
 
@@ -775,6 +858,15 @@ const parsed = z
     ZKP_LIVE_PROVISIONAL_RESULTS_ENABLED: emptyToUndefined(
       process.env.ZKP_LIVE_PROVISIONAL_RESULTS_ENABLED,
     ),
+    ZKP_RELEASE_CHANNEL: emptyToUndefined(process.env.ZKP_RELEASE_CHANNEL) as
+      | (typeof ZKP_RELEASE_CHANNELS)[number]
+      | undefined,
+    ZKP_ARTIFACT_RELEASE_STAGE: emptyToUndefined(
+      process.env.ZKP_ARTIFACT_RELEASE_STAGE,
+    ) as (typeof ZKP_ARTIFACT_RELEASE_STAGES)[number] | undefined,
+    ZKP_PUBLIC_DEVNET_V0_1_CONFIRMED: emptyToUndefined(
+      process.env.ZKP_PUBLIC_DEVNET_V0_1_CONFIRMED,
+    ),
   });
 
 const authIssuer =
@@ -899,6 +991,13 @@ const zkpLiveProvisionalResultsEnabled =
   parsed.ZKP_LIVE_PROVISIONAL_RESULTS_ENABLED !== undefined
     ? toBoolean(parsed.ZKP_LIVE_PROVISIONAL_RESULTS_ENABLED)
     : zkpBallotCustodyMode !== THRESHOLD_TRUSTEE_CUSTODY_MODE;
+const zkpReleaseChannel = parsed.ZKP_RELEASE_CHANNEL ?? "private_beta";
+const zkpArtifactReleaseStage =
+  parsed.ZKP_ARTIFACT_RELEASE_STAGE ?? "internal_rc";
+const zkpPublicDevnetV01Confirmed =
+  parsed.ZKP_PUBLIC_DEVNET_V0_1_CONFIRMED !== undefined
+    ? toBoolean(parsed.ZKP_PUBLIC_DEVNET_V0_1_CONFIRMED)
+    : false;
 const normalizeHex64Env = (value: string | undefined): string | null =>
   value ? value.trim().toLowerCase() : null;
 
@@ -979,6 +1078,13 @@ export const env = Object.freeze({
     transactionsEnabled: solanaAuditTransactionsEnabled,
   }),
   zkp: Object.freeze({
+    release: Object.freeze({
+      channel: zkpReleaseChannel,
+      artifactStage: zkpArtifactReleaseStage,
+      publicDevnetV01Confirmed: zkpPublicDevnetV01Confirmed,
+      publicDevnetVersion: "0.1",
+      mainnetMigrationVersion: "0.1.1",
+    }),
     ballotCustody: Object.freeze({
       mode: zkpBallotCustodyMode,
       publicSecretBallotClaimsEnabled: zkpPublicSecretBallotClaimsEnabled,

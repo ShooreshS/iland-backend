@@ -32,6 +32,7 @@ const voteManifest = readJson(voteManifestPath);
 const tallyManifest = readJson(tallyManifestPath);
 
 const env = {
+  ZKP_ARTIFACT_RELEASE_STAGE: "ceremony_pending",
   ZKP_GROTH16_PUBLIC_INPUT_SCHEMA_VERSION:
     voteManifest.publicInputSchemaVersion,
   ZKP_GROTH16_TALLY_ARTIFACT_MANIFEST_HASH: readHash(tallyManifestPath),
@@ -54,6 +55,8 @@ const env = {
     voteManifest.trustedSetupTranscriptHash,
   ZKP_GROTH16_VOTE_VERIFIER_ENABLED: "true",
   ZKP_GROTH16_VOTE_VERIFIER_KEY_HASH: voteManifest.verifierKeyHash,
+  ZKP_PUBLIC_DEVNET_V0_1_CONFIRMED: "true",
+  ZKP_RELEASE_CHANNEL: "public_devnet_v0_1",
 };
 
 for (const key of Object.keys(env).sort()) {

@@ -10,6 +10,7 @@ import {
 } from "./groth16TallyProofVerifierService";
 import { getGroth16TallyProverArtifactStatus } from "./groth16TallyProverService";
 import { getBallotCustodyPolicy } from "./ballotCustodyPolicyService";
+import { getZkpReleasePolicy } from "./zkpReleasePolicyService";
 
 const startedAt = Date.now();
 
@@ -63,10 +64,16 @@ export const getZkpHealthStatus = () => {
   const vote = getGroth16VerifierConfig();
   const tally = getGroth16TallyVerifierConfig();
   const ballotCustody = getBallotCustodyPolicy();
+  const releasePolicy = getZkpReleasePolicy();
   const voteConfigured = isGroth16VoteVerifierConfigured(vote);
   const tallyConfigured = isGroth16TallyVerifierConfigured(tally);
   const tallyProver = getGroth16TallyProverArtifactStatus(tally);
-  const ok = voteConfigured && tallyConfigured && tallyProver.configured;
+  const releaseGateOk =
+    releasePolicy.releaseChannel === "private_beta" ||
+    releasePolicy.gates.publicDevnetV01Allowed ||
+    releasePolicy.gates.mainnetV011Allowed;
+  const ok =
+    voteConfigured && tallyConfigured && tallyProver.configured && releaseGateOk;
 
   return {
     ok,
@@ -98,6 +105,7 @@ export const getZkpHealthStatus = () => {
         artifactManifestError: tally.tallyArtifactManifestError,
       },
       tallyGroth16Prover: tallyProver,
+      releasePolicy,
       ballotCustody: {
         version: ballotCustody.version,
         mode: ballotCustody.mode,
