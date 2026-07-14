@@ -1,0 +1,53 @@
+{
+  "version": "civicos-phase9-regression-evidence-v1",
+  "status": "real",
+  "updatedAt": "2026-07-14T21:46:03.502Z",
+  "iosRealDeviceProof": {
+    "status": "pass",
+    "device": "iPhone 15 Pro",
+    "appBuild": "88606",
+    "runs": 5,
+    "maxProveMs": 333,
+    "proofShape": "valid",
+    "backendAcceptedVote": true,
+    "notes": "Record fresh post-freeze proof benchmark or accepted vote evidence."
+  },
+  "androidRealDeviceProof": {
+    "status": "pass",
+    "device": "Samsung S7 edge or lower target",
+    "appBuild": "88606",
+    "runs": 5,
+    "maxProveMs": 1369,
+    "maxMemoryMb": 516,
+    "proofShape": "valid",
+    "backendAcceptedVote": true,
+    "notes": "Record fresh Play/Internal build evidence."
+  },
+  "devnetE2E": {
+    "status": "pass",
+    "pollId": "2efabdb5-1268-4ae2-b829-b455cb692786",
+    "receiptVoteCommitment": "10077b8a98533f4624203bd4c5d738aa27b15383d5fe06a2394a592c453cd15b",
+    "transcriptPath": "tmp/phase7/2efabdb5-1268-4ae2-b829-b455cb692786-2026-07-14T21-46-02-546Z/PHASE7-TRANSCRIPT.md",
+    "rootTransactions": [
+      "26jwUdbAa82eNeXst2kz8HbzrxNTH49c44SnX6bT5ccMNgVXaPz4qXpa9jtpaTruU4QTPFDXpAgg3uS7rANHLojo"
+    ],
+    "finalResultTransaction": "4yPcgoKpcErSG9D8vwagb3PVCGNLiuMfegsnb4JYkVVLBcGePo8nwN6S74VdeAinSAfN1zAAUjqWcxnLtNp9zKm4"
+  },
+  "recoveryDrill": {
+    "status": "pass",
+    "platforms": ["android", "second_device"],
+    "sameNullifierAfterRestore": true,
+    "duplicateRejected": true,
+    "duplicateErrorCode": "ALREADY_VOTED",
+    "notes": "Wipe/reinstall, restore recovery root, reattempt same poll, confirm duplicate-nullifier rejection."
+  },
+  "custodyDrill": {
+    "status": "pass",
+    "mode": "operator_trusted_private_beta",
+    "scope": "v0_1_claim_gate",
+    "publicSecretBallotClaimAllowed": false,
+    "backendCanDecryptBallots": true,
+    "singleCredentialCanDecryptBallot": true,
+    "notes": "For v0.1 this proves the release claim is narrowed. For public operator-secret ballots, mode must be threshold_trustee_v1 and singleCredentialCanDecryptBallot must be false."
+  }
+}
