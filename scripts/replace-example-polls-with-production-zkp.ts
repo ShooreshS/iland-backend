@@ -111,6 +111,7 @@ Useful env:
   CIVICOS_ZKP_REPLACE_VOTES_PER_POLL=3
   CIVICOS_ZKP_REPLACE_FINAL_STATUS=closed
   CIVICOS_ZKP_REPLACE_INCLUDE_PRODUCTION=false
+  CIVICOS_ALLOW_ZKP_TEST_DATA_WRITES=true
   CIVICOS_ZKP_REPLACE_CONFIRM_DELETE=true
 `;
 
@@ -769,6 +770,21 @@ const main = async () => {
   if (mode === "dry-run") {
     console.log("Dry run complete. No database rows were changed.");
     return;
+  }
+
+  if (!toBoolean(process.env.CIVICOS_ALLOW_ZKP_TEST_DATA_WRITES)) {
+    throw new Error(
+      "--apply creates synthetic users, credentials, votes, and tally proofs; set CIVICOS_ALLOW_ZKP_TEST_DATA_WRITES=true to acknowledge this is a test-data write.",
+    );
+  }
+
+  if (
+    process.env.NODE_ENV === "production" &&
+    !toBoolean(process.env.CIVICOS_ALLOW_PRODUCTION_TEST_DATA_WRITES)
+  ) {
+    throw new Error(
+      "--apply is blocked when NODE_ENV=production unless CIVICOS_ALLOW_PRODUCTION_TEST_DATA_WRITES=true is also set.",
+    );
   }
 
   if (deleteOriginals && !toBoolean(process.env.CIVICOS_ZKP_REPLACE_CONFIRM_DELETE)) {

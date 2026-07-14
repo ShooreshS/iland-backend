@@ -10,6 +10,7 @@
     "audit:verify": "node scripts/verify-public-audit.mjs",
     "phase7:acceptance": "node scripts/phase7-devnet-acceptance.mjs",
     "phase9:readiness": "node scripts/check-phase9-readiness.mjs",
+    "phase10:readiness": "node scripts/check-phase10-cleanliness.mjs",
     "zkp:env": "node scripts/print-zkp-artifact-env.mjs",
     "zkp:prepare-prover-artifacts": "node scripts/prepare-zkp-prover-artifacts.mjs",
     "zkp:tally-proof": "bun scripts/generate-submit-tally-proof.ts",
