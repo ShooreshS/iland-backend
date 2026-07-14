@@ -87,16 +87,19 @@ log "Ceremony inputs ready in ${INPUT_DIR}"
 cat <<'NEXT'
 
 Next steps:
-  1. Zip the human-ceremony folder and send it to contributor #1.
+  1. Zip only the human-ceremony/contributor folder and send that kit to
+     contributor #1. Do not send the coordinator folder or kit root.
   2. When their `output` folder comes back:
      - verify each returned zkey extends the chain:
          zkp/circuits/node_modules/.bin/snarkjs zkey verify \
            zkp/circuits/build/<circuit>.r1cs \
            zkp/circuits/build/powersOfTau28_hez_final_<power>.ptau \
            <returned zkey>
-     - replace the files in human-ceremony/input/ with the returned zkeys
-       (keep their _0001/_0002/... names), archive the previous ones,
-       and send the re-zipped kit to the next contributor.
+     - archive the previous files in human-ceremony/contributor/input/
+     - replace human-ceremony/contributor/input/ with the returned zkeys
+       (keep their _0001/_0002/... names)
+     - re-zip only human-ceremony/contributor/ and send it to the next
+       contributor.
   3. After at least THREE independent contributors, run:
        ./coordinator/finalize-ceremony.sh <beacon-hex> [iterations]
 NEXT

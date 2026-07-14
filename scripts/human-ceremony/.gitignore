@@ -1,5 +1,5 @@
-input/*.zkey
-output/*
-!output/README.txt
+.DS_Store
+*.zip
+contributor*/
 final/
 coordinator/ceremony-verification-*.log
