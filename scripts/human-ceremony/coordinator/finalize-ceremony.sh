@@ -87,27 +87,27 @@ CIRCUITS=("credential_commitment_vote:16" "encrypted_choice_tally:20")
 log "Ceremony finalized. Full verification transcript: ${VERIFY_LOG}"
 cat <<NEXT
 
-Next steps (production artifact pinning):
-  1. Copy the final artifacts over the RC ones in the frozen build dir:
-       cp "${FINAL_DIR}"/credential_commitment_vote_final.zkey "${BUILD_DIR}/"
-       cp "${FINAL_DIR}"/credential_commitment_vote.vkey.json  "${BUILD_DIR}/"
-       cp "${FINAL_DIR}"/encrypted_choice_tally_final.zkey     "${BUILD_DIR}/"
-       cp "${FINAL_DIR}"/encrypted_choice_tally.vkey.json      "${BUILD_DIR}/"
-  2. Regenerate proofs, transcripts, manifests and fixtures in production mode
-     (contributor names in ceremony order, comma separated):
-       cd "${CIRCUIT_ROOT}"
-       npm run prove:dev
-       CIVICOS_GROTH16_ARTIFACT_PROFILE=production \\
-       CIVICOS_GROTH16_CONTRIBUTORS="<name1>,<name2>,<name3>,..." \\
-       CIVICOS_GROTH16_BEACON_SOURCE="<where the beacon came from>" \\
-       CIVICOS_GROTH16_BEACON_VALUE="${BEACON_HEX}" \\
-         bash -c 'npm run transcripts && npm run manifests && npm run fixtures'
-  3. Refresh the backend env pins and update Railway:
-       cd "${BACKEND_ROOT}" && npm run zkp:env
-  4. Publish, alongside the audit material:
-       - the ceremony verification transcript (${VERIFY_LOG})
-       - the phase2-transcript JSON files from the build dir
-       - every contributor attestation
-       - the beacon source/value and how to re-check it
-  5. Re-run ./scripts/overnight.sh (safe-verify) and the backend test suite.
+Next step: run the production artifact pinning pipeline.
+
+Required env:
+  CIVICOS_GROTH16_CONTRIBUTORS="<name1>,<name2>,<name3>,..."
+  CIVICOS_GROTH16_BEACON_SOURCE="<where the beacon came from>"
+  CIVICOS_GROTH16_BEACON_VALUE="${BEACON_HEX}"
+
+Command:
+  cd "${BACKEND_ROOT}"
+  CIVICOS_GROTH16_ARTIFACT_PROFILE=production \\
+  CIVICOS_GROTH16_CONTRIBUTORS="<name1>,<name2>,<name3>,..." \\
+  CIVICOS_GROTH16_BEACON_SOURCE="<where the beacon came from>" \\
+  CIVICOS_GROTH16_BEACON_VALUE="${BEACON_HEX}" \\
+    bun run phase9:pin-artifacts -- --profile=production --source-dir="${FINAL_DIR}"
+
+Then publish, alongside the audit material:
+  - the ceremony verification transcript (${VERIFY_LOG})
+  - the phase2-transcript JSON files from the build dir
+  - every contributor attestation
+  - the beacon source/value and how to re-check it
+
+Finally rerun:
+  bun run phase9:regression
 NEXT

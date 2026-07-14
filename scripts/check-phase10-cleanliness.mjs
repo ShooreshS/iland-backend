@@ -11,6 +11,11 @@ const appRoot = resolve(backendRoot, "../iland");
 const TRUE_VALUES = new Set(["1", "true", "yes"]);
 
 const args = new Set(process.argv.slice(2));
+const getArg = (name) => {
+  const prefix = `${name}=`;
+  const entry = process.argv.slice(2).find((arg) => arg.startsWith(prefix));
+  return entry ? entry.slice(prefix.length) : null;
+};
 const expectEmptyOperationalDb =
   args.has("--expect-empty-operational") ||
   TRUE_VALUES.has(
@@ -18,6 +23,24 @@ const expectEmptyOperationalDb =
       .trim()
       .toLowerCase(),
   );
+const defaultPreservedVerifiedIdentityIds = Object.freeze([
+  "0ccf7dd6-9fbd-4eef-8952-29102f636422",
+  "4ccdcda5-2e9c-4a68-ad2c-e98a6d728f45",
+  "ffe5c615-b4a5-4b1e-885a-e7a818e72ec0",
+]);
+const preserveVerifiedIdentityIds = (
+  getArg("--preserve-verified-identities") ||
+  process.env.CIVICOS_PHASE10_PRESERVE_VERIFIED_IDENTITY_IDS ||
+  (args.has("--expect-preserved-identities")
+    ? defaultPreservedVerifiedIdentityIds.join(",")
+    : "")
+)
+  .split(",")
+  .map((entry) => entry.trim().toLowerCase())
+  .filter(Boolean);
+const expectPreservedIdentities =
+  args.has("--expect-preserved-identities") ||
+  preserveVerifiedIdentityIds.length > 0;
 
 const loadDotEnvFile = (filePath) => {
   if (!existsSync(filePath)) {
@@ -106,6 +129,9 @@ const countRows = async (supabase, spec) => {
       case "in":
         query = query.in(filter.column, filter.value);
         break;
+      case "not.in":
+        query = query.not(filter.column, "in", `(${filter.value.join(",")})`);
+        break;
       case "is":
         query = query.is(filter.column, filter.value);
         break;
@@ -123,6 +149,27 @@ const countRows = async (supabase, spec) => {
   }
 
   return count ?? 0;
+};
+
+const listRows = async (supabase, spec) => {
+  let query = supabase.from(spec.table).select(spec.select ?? "*");
+  for (const filter of spec.filters ?? []) {
+    switch (filter.op) {
+      case "in":
+        query = query.in(filter.column, filter.value);
+        break;
+      case "eq":
+        query = query.eq(filter.column, filter.value);
+        break;
+      default:
+        throw new Error(`Unsupported list filter op: ${filter.op}`);
+    }
+  }
+  const { data, error } = await query;
+  if (error) {
+    throw new Error(`${spec.table}: ${error.message}`);
+  }
+  return data || [];
 };
 
 const forbiddenMarkers = Object.freeze([
@@ -310,15 +357,133 @@ if (supabaseUrl && serviceRoleKey) {
     }
   }
 
+  if (expectPreservedIdentities) {
+    if (preserveVerifiedIdentityIds.length !== 3) {
+      record(false, "Phase 10 preserve set contains exactly 3 verified identity ids", {
+        count: preserveVerifiedIdentityIds.length,
+      });
+    }
+
+    try {
+      const preservedIdentities = await listRows(supabase, {
+        table: "verified_identities",
+        select: "id,user_id,verification_method",
+        filters: [
+          {
+            op: "in",
+            column: "id",
+            value: preserveVerifiedIdentityIds,
+          },
+        ],
+      });
+      const preservedUserIds = preservedIdentities.map((row) => row.user_id);
+      record(
+        preservedIdentities.length === 3 &&
+          preservedIdentities.every(
+            (row) => row.verification_method === "passport_nfc",
+          ),
+        "preserved identities exist and are passport_nfc",
+        preservedIdentities.map((row) => ({
+          id: row.id,
+          userId: row.user_id,
+          verificationMethod: row.verification_method,
+        })),
+      );
+
+      const preservedUserCount = preservedUserIds.length;
+      const allowedByUserTable = [
+        "users",
+        "identity_profiles",
+        "wallet_credentials",
+        "auth_credentials",
+        "app_attestation_credentials",
+        "auth_sessions",
+        "refresh_token_families",
+      ];
+      for (const table of allowedByUserTable) {
+        const unexpected = await countRows(supabase, {
+          table,
+          filters: [
+            {
+              op: "not.in",
+              column: table === "users" ? "id" : "user_id",
+              value: preservedUserIds,
+            },
+          ],
+        });
+        record(unexpected === 0, `no non-preserved rows in ${table}`, {
+          unexpected,
+        });
+      }
+      record(
+        (operationalCounts.users ?? -1) === preservedUserCount,
+        "only preserved users remain",
+        { count: operationalCounts.users, expected: preservedUserCount },
+      );
+      record(
+        (operationalCounts.verified_identities ?? -1) === 3,
+        "only preserved verified identities remain",
+        { count: operationalCounts.verified_identities, expected: 3 },
+      );
+
+      const nonPreservedRegistry = await countRows(supabase, {
+        table: "credential_registry",
+        filters: [
+          {
+            op: "not.in",
+            column: "verified_identity_id",
+            value: preserveVerifiedIdentityIds,
+          },
+        ],
+      });
+      record(
+        nonPreservedRegistry === 0,
+        "no non-preserved credential registry rows remain",
+        { unexpected: nonPreservedRegistry },
+      );
+
+      for (const table of [
+        "polls",
+        "poll_options",
+        "votes",
+        "poll_zk_votes",
+        "poll_tally_proofs",
+        "poll_roots",
+        "poll_audit_events",
+        "poll_encryption_keys",
+        "poll_map_marker_cache",
+        "poll_map_refresh_queue",
+        "credential_roots",
+        "oidc_access_tokens",
+        "oidc_authorize_qr_transactions",
+        "oidc_authorization_requests",
+        "oidc_authorization_codes",
+        "oidc_grants",
+        "oidc_pairwise_subjects",
+        "oidc_refresh_token_families",
+        "oidc_audit_events",
+        "backend_audit_events",
+      ]) {
+        record((operationalCounts[table] ?? -1) === 0, `${table} is empty`, {
+          count: operationalCounts[table],
+        });
+      }
+    } catch (error) {
+      record(false, "preserved identity verification query failed", {
+        message: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
   const nonEmptyOperationalTables = Object.entries(operationalCounts)
     .filter(([, count]) => count > 0)
     .sort(([a], [b]) => a.localeCompare(b));
 
-  if (expectEmptyOperationalDb) {
+  if (expectEmptyOperationalDb && !expectPreservedIdentities) {
     for (const [table, count] of nonEmptyOperationalTables) {
       record(false, `operational table is empty: ${table}`, { count });
     }
-  } else if (nonEmptyOperationalTables.length > 0) {
+  } else if (!expectPreservedIdentities && nonEmptyOperationalTables.length > 0) {
     warn(
       "operational DB is not empty; pass --expect-empty-operational for the public-launch cleanup gate",
       Object.fromEntries(nonEmptyOperationalTables),
@@ -330,6 +495,8 @@ const report = {
   status: blockers.length === 0 ? "clean" : "blocked",
   mode: expectEmptyOperationalDb
     ? "public_launch_empty_operational_db"
+    : expectPreservedIdentities
+      ? "public_launch_preserve_verified_identities"
     : "forbidden_debug_marker_scan",
   destructive: false,
   checkedAt: new Date().toISOString(),

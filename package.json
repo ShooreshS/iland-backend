@@ -10,6 +10,8 @@
     "audit:verify": "node scripts/verify-public-audit.mjs",
     "phase7:acceptance": "node scripts/phase7-devnet-acceptance.mjs",
     "phase9:readiness": "node scripts/check-phase9-readiness.mjs",
+    "phase9:pin-artifacts": "node scripts/pin-groth16-artifacts.mjs",
+    "phase9:regression": "node scripts/run-phase9-regression-suite.mjs",
     "phase10:readiness": "node scripts/check-phase10-cleanliness.mjs",
     "zkp:env": "node scripts/print-zkp-artifact-env.mjs",
     "zkp:prepare-prover-artifacts": "node scripts/prepare-zkp-prover-artifacts.mjs",

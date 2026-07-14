@@ -1,0 +1,51 @@
+{
+  "version": "civicos-phase9-regression-evidence-v1",
+  "status": "template",
+  "updatedAt": "2026-07-14T00:00:00.000Z",
+  "iosRealDeviceProof": {
+    "status": "pass",
+    "device": "iPhone model/build",
+    "appBuild": "886xx",
+    "runs": 5,
+    "maxProveMs": 310,
+    "proofShape": "valid",
+    "backendAcceptedVote": true,
+    "notes": "Record fresh post-freeze proof benchmark or accepted vote evidence."
+  },
+  "androidRealDeviceProof": {
+    "status": "pass",
+    "device": "Samsung S7 edge or lower target",
+    "appBuild": "886xx",
+    "runs": 5,
+    "maxProveMs": 1369,
+    "maxMemoryMb": 516,
+    "proofShape": "valid",
+    "backendAcceptedVote": true,
+    "notes": "Record fresh Play/Internal build evidence."
+  },
+  "devnetE2E": {
+    "status": "pass",
+    "pollId": "<uuid>",
+    "receiptVoteCommitment": "<64 hex>",
+    "transcriptPath": "tmp/phase7/<poll-id>/PHASE7-TRANSCRIPT.md",
+    "rootTransactions": [],
+    "finalResultTransaction": "<signature>"
+  },
+  "recoveryDrill": {
+    "status": "pass",
+    "platforms": ["android", "second_device"],
+    "sameNullifierAfterRestore": true,
+    "duplicateRejected": true,
+    "duplicateErrorCode": "ALREADY_VOTED",
+    "notes": "Wipe/reinstall, restore recovery root, reattempt same poll, confirm duplicate-nullifier rejection."
+  },
+  "custodyDrill": {
+    "status": "pass",
+    "mode": "operator_trusted_private_beta",
+    "scope": "v0_1_claim_gate",
+    "publicSecretBallotClaimAllowed": false,
+    "backendCanDecryptBallots": true,
+    "singleCredentialCanDecryptBallot": true,
+    "notes": "For v0.1 this proves the release claim is narrowed. For public operator-secret ballots, mode must be threshold_trustee_v1 and singleCredentialCanDecryptBallot must be false."
+  }
+}
