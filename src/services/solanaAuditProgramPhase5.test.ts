@@ -46,11 +46,13 @@ describe("Phase 5 Solana audit program scaffold", () => {
       "initialize_registry",
       "create_poll",
       "commit_roots",
+      "commit_credential_root",
       "finalize_poll",
       "pub struct PollRegistry",
       "pub root_publisher: Pubkey",
       "pub struct PollAccount",
       "pub struct PollRootAccount",
+      "pub struct CredentialRootAccount",
       "pub struct FinalResultAccount",
       "pub token_program: Option<Pubkey>",
       "pub enum PollStatus",
@@ -82,6 +84,9 @@ describe("Phase 5 Solana audit program scaffold", () => {
     expect(source).toContain("root_publisher != ctx.accounts.authority.key()");
     expect(source).toContain("has_one = root_publisher");
     expect(source).toContain(
+      "seeds = [b\"credential-root\", registry.key().as_ref(), root.as_ref()]",
+    );
+    expect(source).toContain(
       "final_vote_commitment_root == poll.latest_vote_commitment_root",
     );
     expect(source).toContain(
@@ -111,6 +116,7 @@ describe("Phase 5 Solana audit program scaffold", () => {
       expect(source.toLowerCase()).not.toContain(unsupportedV1Surface);
     });
     expect(source).toContain("commit_roots");
+    expect(source).toContain("commit_credential_root");
     expect(source).toContain("finalize_poll");
   });
 });

@@ -282,6 +282,7 @@ describe("GET /verification/credential-roots route", () => {
             leafCount: 1,
             createdAt: "2026-07-13T00:00:00.000Z",
             solanaTxSignature: null,
+            explorerUrl: null,
           },
           acceptedRoots:
             input?.limit === "1"
@@ -293,12 +294,16 @@ describe("GET /verification/credential-roots route", () => {
                     leafCount: 1,
                     createdAt: "2026-07-13T00:00:00.000Z",
                     solanaTxSignature: null,
+                    explorerUrl: null,
                   },
                 ]
               : [],
           anchoring: {
             mode: "public-api-root-chain",
+            cluster: "devnet",
+            programId: "FsXuodQtkWjE1EZEAUskvRuj4bGMrKZAHAEf4WEk4oRo",
             solanaTxSignatureField: "solanaTxSignature",
+            solanaExplorerUrlField: "explorerUrl",
             registryRowIdsExposed: false,
             credentialCommitmentsExposed: false,
           },

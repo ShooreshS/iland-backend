@@ -124,6 +124,31 @@ pub mod civicos_audit {
         Ok(())
     }
 
+    pub fn commit_credential_root(
+        ctx: Context<CommitCredentialRoot>,
+        root: [u8; 32],
+        previous_root: Option<[u8; 32]>,
+        merkle_depth: u8,
+        leaf_count: u64,
+    ) -> Result<()> {
+        require!(
+            merkle_depth > 0 && merkle_depth <= 64,
+            AuditError::InvalidCredentialMerkleDepth
+        );
+
+        let now = Clock::get()?.unix_timestamp;
+        let credential_root = &mut ctx.accounts.credential_root;
+        credential_root.registry = ctx.accounts.registry.key();
+        credential_root.root = root;
+        credential_root.previous_root = previous_root;
+        credential_root.merkle_depth = merkle_depth;
+        credential_root.leaf_count = leaf_count;
+        credential_root.submitted_by = ctx.accounts.root_publisher.key();
+        credential_root.submitted_at = now;
+        credential_root.bump = ctx.bumps.credential_root;
+        Ok(())
+    }
+
     pub fn finalize_poll(
         ctx: Context<FinalizePoll>,
         final_vote_commitment_root: [u8; 32],
@@ -233,6 +258,29 @@ pub struct CommitRoots<'info> {
 }
 
 #[derive(Accounts)]
+#[instruction(root: [u8; 32])]
+pub struct CommitCredentialRoot<'info> {
+    #[account(
+        seeds = [b"registry"],
+        bump = registry.bump,
+        has_one = root_publisher @ AuditError::Unauthorized
+    )]
+    pub registry: Account<'info, PollRegistry>,
+    #[account(
+        init,
+        payer = payer,
+        space = 8 + CredentialRootAccount::LEN,
+        seeds = [b"credential-root", registry.key().as_ref(), root.as_ref()],
+        bump
+    )]
+    pub credential_root: Account<'info, CredentialRootAccount>,
+    pub root_publisher: Signer<'info>,
+    #[account(mut)]
+    pub payer: Signer<'info>,
+    pub system_program: Program<'info, System>,
+}
+
+#[derive(Accounts)]
 pub struct FinalizePoll<'info> {
     #[account(
         seeds = [b"registry"],
@@ -320,6 +368,22 @@ impl PollRootAccount {
 }
 
 #[account]
+pub struct CredentialRootAccount {
+    pub registry: Pubkey,
+    pub root: [u8; 32],
+    pub previous_root: Option<[u8; 32]>,
+    pub merkle_depth: u8,
+    pub leaf_count: u64,
+    pub submitted_by: Pubkey,
+    pub submitted_at: i64,
+    pub bump: u8,
+}
+
+impl CredentialRootAccount {
+    pub const LEN: usize = 32 + 32 + (1 + 32) + 1 + 8 + 32 + 8 + 1;
+}
+
+#[account]
 pub struct FinalResultAccount {
     pub poll: Pubkey,
     pub final_vote_commitment_root: [u8; 32],
@@ -375,6 +439,8 @@ pub enum AuditError {
     InvalidTokenConfig,
     #[msg("Registry authority and root publisher must be separate keys.")]
     AuthoritySeparationRequired,
+    #[msg("Credential Merkle depth must be between 1 and 64.")]
+    InvalidCredentialMerkleDepth,
 }
 
 #[cfg(test)]
@@ -382,10 +448,11 @@ mod tests {
     use super::*;
 
     #[test]
-    fn account_sizes_match_phase_5_layout() {
-        assert_eq!(PollRegistry::LEN, 163);
-        assert_eq!(PollAccount::LEN, 323);
-        assert_eq!(PollRootAccount::LEN, 281);
-        assert_eq!(FinalResultAccount::LEN, 202);
+        fn account_sizes_match_phase_5_layout() {
+            assert_eq!(PollRegistry::LEN, 163);
+            assert_eq!(PollAccount::LEN, 323);
+            assert_eq!(PollRootAccount::LEN, 281);
+            assert_eq!(CredentialRootAccount::LEN, 147);
+            assert_eq!(FinalResultAccount::LEN, 202);
+        }
     }
-}

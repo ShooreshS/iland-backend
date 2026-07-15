@@ -12,7 +12,7 @@ import {
 } from "@solana/web3.js";
 
 import env from "../config/env";
-import type { PollRow } from "../types/db";
+import type { CredentialRootRow, PollRow } from "../types/db";
 
 const ANCHOR_GLOBAL_NAMESPACE = "global";
 const ANCHOR_ACCOUNT_NAMESPACE = "account";
@@ -71,6 +71,21 @@ export type SolanaAuditPublicationResult = Readonly<{
     rootCommit: string | null;
     finalResult: string | null;
   }>;
+}>;
+
+export type SolanaCredentialRootPublicationInput = Readonly<{
+  credentialRoot: CredentialRootRow;
+}>;
+
+export type SolanaCredentialRootPublicationResult = Readonly<{
+  cluster: string;
+  programId: string;
+  registryAddress: string;
+  credentialRootAddress: string;
+  signature: string;
+  feePayerPublicKey: string;
+  rootPublisherPublicKey: string;
+  explorerUrl: string | null;
 }>;
 
 type SolanaAuditEnv = typeof env.solanaAudit;
@@ -252,6 +267,16 @@ const deriveFinalResultAddress = (
 ): PublicKey =>
   PublicKey.findProgramAddressSync(
     [Buffer.from("final-result"), pollAddress.toBuffer()],
+    programId,
+  )[0];
+
+export const deriveCredentialRootAddress = (
+  programId: PublicKey,
+  registryAddress: PublicKey,
+  root: Buffer,
+): PublicKey =>
+  PublicKey.findProgramAddressSync(
+    [Buffer.from("credential-root"), registryAddress.toBuffer(), root],
     programId,
   )[0];
 
@@ -519,6 +544,35 @@ const buildCommitRootsInstruction = (input: {
     ]),
   });
 
+const buildCommitCredentialRootInstruction = (input: {
+  programId: PublicKey;
+  registryAddress: PublicKey;
+  credentialRootAddress: PublicKey;
+  rootPublisher: PublicKey;
+  payer: PublicKey;
+  root: Buffer;
+  previousRoot: Buffer | null;
+  merkleDepth: number;
+  leafCount: number;
+}): TransactionInstruction =>
+  new TransactionInstruction({
+    programId: input.programId,
+    keys: [
+      { pubkey: input.registryAddress, isSigner: false, isWritable: false },
+      { pubkey: input.credentialRootAddress, isSigner: false, isWritable: true },
+      { pubkey: input.rootPublisher, isSigner: true, isWritable: false },
+      { pubkey: input.payer, isSigner: true, isWritable: true },
+      { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
+    ],
+    data: Buffer.concat([
+      anchorDiscriminator("commit_credential_root"),
+      input.root,
+      writeOptionBytes32(input.previousRoot),
+      Buffer.from([input.merkleDepth]),
+      writeU64(input.leafCount),
+    ]),
+  });
+
 const buildFinalizePollInstruction = (input: {
   programId: PublicKey;
   registryAddress: PublicKey;
@@ -592,6 +646,150 @@ export const createSolanaAuditPublisherService = (
   const sendTransaction = deps.sendTransaction ?? sendSimulatedTransaction;
 
   return Object.freeze({
+    async publishCredentialRoot(
+      input: SolanaCredentialRootPublicationInput,
+    ): Promise<SolanaCredentialRootPublicationResult> {
+      if (!solanaAuditEnv.transactionsEnabled) {
+        throw new Error("Solana audit transactions are not enabled.");
+      }
+
+      const merkleDepth = Math.trunc(input.credentialRoot.merkle_depth);
+      const leafCount = Math.trunc(input.credentialRoot.leaf_count);
+      if (!Number.isInteger(merkleDepth) || merkleDepth < 1 || merkleDepth > 64) {
+        throw new Error("Credential root Merkle depth must be between 1 and 64.");
+      }
+      if (!Number.isInteger(leafCount) || leafCount < 0) {
+        throw new Error("Credential root leaf count must be a non-negative integer.");
+      }
+
+      const connection = resolveConnection();
+      const signer = resolveFeePayer();
+      const programId = new PublicKey(solanaAuditEnv.programId);
+      const rootPublisher = solanaAuditEnv.rootPublisherPublicKey
+        ? new PublicKey(solanaAuditEnv.rootPublisherPublicKey)
+        : signer.publicKey;
+      const registryAuthority = solanaAuditEnv.registryAuthority
+        ? new PublicKey(solanaAuditEnv.registryAuthority)
+        : signer.publicKey;
+
+      if (registryAuthority.equals(rootPublisher)) {
+        throw new Error(
+          "Solana audit registry authority and root publisher must be different keys.",
+        );
+      }
+
+      if (solanaAuditEnv.feePayerPublicKey) {
+        assertSignerMatchesPublicKey(
+          "Solana audit fee payer",
+          signer,
+          new PublicKey(solanaAuditEnv.feePayerPublicKey),
+        );
+      }
+
+      const rootPublisherSigner = deps.getRootPublisherSigner
+        ? deps.getRootPublisherSigner()
+        : rootPublisher.equals(signer.publicKey)
+          ? signer
+          : null;
+      if (!rootPublisherSigner) {
+        throw new Error(
+          "Solana audit root publisher signer is not configured. Provide an external root-publisher signing service or keep the root publisher equal to the devnet fee payer.",
+        );
+      }
+      assertSignerMatchesPublicKey(
+        "Solana audit root publisher",
+        rootPublisherSigner,
+        rootPublisher,
+      );
+      const rootPublisherAdditionalSigners = rootPublisherSigner.publicKey.equals(
+        signer.publicKey,
+      )
+        ? []
+        : [rootPublisherSigner];
+
+      const programAccount = await connection.getAccountInfo(programId);
+      assertProgramAccount(programAccount, programId, solanaAuditEnv.cluster);
+
+      const registryAddress = deriveRegistryAddress(programId);
+      const registryAccount = await connection.getAccountInfo(registryAddress);
+      if (!registryAccount) {
+        throw new Error(
+          "Solana audit registry is not initialized. Initialize it externally with SOLANA_AUDIT_REGISTRY_AUTHORITY before publishing credential roots.",
+        );
+      }
+      assertAnchorPdaAccount({
+        account: registryAccount,
+        accountName: "PollRegistry",
+        address: registryAddress,
+        programId,
+        label: "registry",
+      });
+      assertRegistryGovernance({
+        account: registryAccount,
+        registryAuthority,
+        rootPublisher,
+      });
+
+      const root = hex32(input.credentialRoot.root);
+      const previousRoot = input.credentialRoot.previous_root
+        ? hex32(input.credentialRoot.previous_root)
+        : null;
+      const credentialRootAddress = deriveCredentialRootAddress(
+        programId,
+        registryAddress,
+        root,
+      );
+      const credentialRootAccount =
+        await connection.getAccountInfo(credentialRootAddress);
+
+      let signature: string;
+      if (credentialRootAccount) {
+        assertAnchorPdaAccount({
+          account: credentialRootAccount,
+          accountName: "CredentialRootAccount",
+          address: credentialRootAddress,
+          programId,
+          label: "credential root",
+        });
+        signature = await recoverExistingAccountSignature({
+          connection,
+          address: credentialRootAddress,
+          label: "credential root",
+        });
+      } else {
+        signature = await sendTransaction({
+          connection,
+          signer,
+          additionalSigners: rootPublisherAdditionalSigners,
+          label: "commit_credential_root",
+          instructions: [
+            buildCommitCredentialRootInstruction({
+              programId,
+              registryAddress,
+              credentialRootAddress,
+              rootPublisher,
+              payer: signer.publicKey,
+              root,
+              previousRoot,
+              merkleDepth,
+              leafCount,
+            }),
+          ],
+        });
+      }
+
+      return Object.freeze({
+        cluster: solanaAuditEnv.cluster,
+        programId: programId.toBase58(),
+        registryAddress: registryAddress.toBase58(),
+        credentialRootAddress: credentialRootAddress.toBase58(),
+        signature,
+        feePayerPublicKey: signer.publicKey.toBase58(),
+        rootPublisherPublicKey: rootPublisher.toBase58(),
+        explorerUrl: buildExplorerUrl(signature, solanaAuditEnv),
+      });
+    },
+
     async publishPollAudit(
       input: SolanaAuditPublicationInput,
     ): Promise<SolanaAuditPublicationResult> {

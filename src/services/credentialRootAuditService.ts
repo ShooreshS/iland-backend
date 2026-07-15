@@ -1,3 +1,4 @@
+import env from "../config/env";
 import credentialRegistryRepository from "../repositories/credentialRegistryRepository";
 import type { CredentialRootRow } from "../types/db";
 import {
@@ -23,6 +24,7 @@ export type PublicCredentialRoot = Readonly<{
   leafCount: number;
   createdAt: string;
   solanaTxSignature: string | null;
+  explorerUrl: string | null;
 }>;
 
 export type CredentialRootAudit = Readonly<{
@@ -33,8 +35,11 @@ export type CredentialRootAudit = Readonly<{
   latestRoot: PublicCredentialRoot | null;
   acceptedRoots: readonly PublicCredentialRoot[];
   anchoring: Readonly<{
-    mode: "public-api-root-chain";
+    mode: "public-api-root-chain" | "solana-root-chain";
+    cluster: string;
+    programId: string;
     solanaTxSignatureField: "solanaTxSignature";
+    solanaExplorerUrlField: "explorerUrl";
     registryRowIdsExposed: false;
     credentialCommitmentsExposed: false;
   }>;
@@ -63,7 +68,22 @@ const toPublicCredentialRoot = (
     leafCount: row.leaf_count,
     createdAt: row.created_at,
     solanaTxSignature: row.solana_tx_signature,
+    explorerUrl: buildSolanaExplorerUrl(row.solana_tx_signature),
   });
+
+const buildSolanaExplorerUrl = (signature: string | null): string | null => {
+  if (!signature) {
+    return null;
+  }
+
+  if (env.solanaAudit.cluster === "mainnet-beta") {
+    return `https://explorer.solana.com/tx/${signature}`;
+  }
+
+  const cluster =
+    env.solanaAudit.cluster === "localnet" ? "custom" : env.solanaAudit.cluster;
+  return `https://explorer.solana.com/tx/${signature}?cluster=${cluster}`;
+};
 
 export const createCredentialRootAuditService = (
   overrides: Partial<{
@@ -85,16 +105,26 @@ export const createCredentialRootAuditService = (
         }),
       ]);
 
+      const publicAcceptedRoots = Object.freeze(
+        acceptedRoots.map(toPublicCredentialRoot),
+      );
+      const hasSolanaAnchor = publicAcceptedRoots.some(
+        (root) => Boolean(root.solanaTxSignature),
+      );
+
       return Object.freeze({
         version: CREDENTIAL_ROOT_AUDIT_VERSION,
         commitmentScheme: CIVIC_CREDENTIAL_REGISTRY_COMMITMENT_SCHEME,
         merkleDepth: CIVIC_CREDENTIAL_REGISTRY_MERKLE_DEPTH,
         identityMaterialExposed: false,
         latestRoot: latestRoot ? toPublicCredentialRoot(latestRoot) : null,
-        acceptedRoots: Object.freeze(acceptedRoots.map(toPublicCredentialRoot)),
+        acceptedRoots: publicAcceptedRoots,
         anchoring: Object.freeze({
-          mode: "public-api-root-chain",
+          mode: hasSolanaAnchor ? "solana-root-chain" : "public-api-root-chain",
+          cluster: env.solanaAudit.cluster,
+          programId: env.solanaAudit.programId,
           solanaTxSignatureField: "solanaTxSignature",
+          solanaExplorerUrlField: "explorerUrl",
           registryRowIdsExposed: false,
           credentialCommitmentsExposed: false,
         }),

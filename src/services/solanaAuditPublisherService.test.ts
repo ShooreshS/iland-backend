@@ -7,9 +7,10 @@ import {
   SystemProgram,
 } from "@solana/web3.js";
 
-import type { PollRow } from "../types/db";
+import type { CredentialRootRow, PollRow } from "../types/db";
 import {
   createSolanaAuditPublisherService,
+  deriveCredentialRootAddress,
   derivePollIdHash,
   type SolanaAuditConnection,
 } from "./solanaAuditPublisherService";
@@ -22,6 +23,7 @@ const NULLIFIER_ROOT = "3".repeat(64);
 const VOTE_COMMITMENT_ROOT = "4".repeat(64);
 const ENCRYPTED_VOTE_ROOT = "5".repeat(64);
 const RESULT_HASH = "6".repeat(64);
+const CREDENTIAL_ROOT = "8".repeat(64);
 const RECOVERED_ROOT_SIGNATURE =
   "4YHeA1YVcraxnDLwG5UNRRnUPWz1XgRqRZf6ahck2nssmDmJiFyyo8qFmxUzBGBtuLyYx7KtH6E96fK9RoXynjdx";
 
@@ -59,6 +61,20 @@ const createPoll = (overrides: Partial<PollRow> = {}): PollRow => ({
   poll_encryption_key_id: "poll-key-1",
   created_at: FIXED_TIME,
   updated_at: FIXED_TIME,
+  ...overrides,
+});
+
+const createCredentialRoot = (
+  overrides: Partial<CredentialRootRow> = {},
+): CredentialRootRow => ({
+  id: "credential-root-row-1",
+  root: CREDENTIAL_ROOT,
+  previous_root: null,
+  merkle_depth: 32,
+  leaf_count: 1,
+  latest_credential_registry_id: "credential-registry-row-1",
+  solana_tx_signature: null,
+  created_at: FIXED_TIME,
   ...overrides,
 });
 
@@ -171,6 +187,181 @@ const createConnection = (input: {
   }) as unknown as SolanaAuditConnection;
 
 describe("Phase 7 Solana audit publisher", () => {
+  it("publishes accepted credential roots with the root publisher signer", async () => {
+    const feePayer = Keypair.generate();
+    const rootPublisher = Keypair.generate();
+    const registryAuthority = Keypair.generate().publicKey;
+    const programId = Keypair.generate().publicKey;
+    const registryAddress = PublicKey.findProgramAddressSync(
+      [Buffer.from("registry")],
+      programId,
+    )[0];
+    const credentialRootAddress = deriveCredentialRootAddress(
+      programId,
+      registryAddress,
+      Buffer.from(CREDENTIAL_ROOT, "hex"),
+    );
+    const accounts = new Map<string, AccountInfo<Buffer>>([
+      [
+        programId.toBase58(),
+        createAccountInfo({
+          owner: SystemProgram.programId,
+          accountName: "Program",
+          executable: true,
+        }),
+      ],
+      [
+        registryAddress.toBase58(),
+        createAccountInfo({
+          owner: programId,
+          accountName: "PollRegistry",
+          registryAuthority,
+          rootPublisher: rootPublisher.publicKey,
+        }),
+      ],
+    ]);
+    const sent = [] as {
+      label: string;
+      signer: string;
+      additionalSigners: string[];
+      accountMetas: string[];
+    }[];
+    const service = createSolanaAuditPublisherService({
+      solanaAuditEnv: createAuditEnv(
+        programId,
+        feePayer.publicKey,
+        registryAuthority,
+        rootPublisher.publicKey,
+      ),
+      getBackendFeePayer: () => feePayer,
+      getRootPublisherSigner: () => rootPublisher,
+      getConnection: () =>
+        createConnection({
+          getAccountInfo: async (address: PublicKey) =>
+            accounts.get(address.toBase58()) ?? null,
+          getSignaturesForAddress: async () => [],
+        }),
+      sendTransaction: async ({ label, signer, additionalSigners, instructions }) => {
+        sent.push({
+          label,
+          signer: signer.publicKey.toBase58(),
+          additionalSigners: (additionalSigners ?? []).map((entry) =>
+            entry.publicKey.toBase58(),
+          ),
+          accountMetas: instructions[0].keys.map((meta) =>
+            [
+              meta.pubkey.toBase58(),
+              meta.isSigner ? "signer" : "readonly",
+              meta.isWritable ? "writable" : "not-writable",
+            ].join(":"),
+          ),
+        });
+        return `${label}-signature`;
+      },
+    });
+
+    const result = await service.publishCredentialRoot({
+      credentialRoot: createCredentialRoot(),
+    });
+
+    expect(result.credentialRootAddress).toBe(credentialRootAddress.toBase58());
+    expect(result.signature).toBe("commit_credential_root-signature");
+    expect(result.explorerUrl).toBe(
+      "https://explorer.solana.com/tx/commit_credential_root-signature?cluster=devnet",
+    );
+    expect(sent.map((entry) => entry.label)).toEqual(["commit_credential_root"]);
+    expect(sent[0].signer).toBe(feePayer.publicKey.toBase58());
+    expect(sent[0].additionalSigners).toEqual([
+      rootPublisher.publicKey.toBase58(),
+    ]);
+    expect(sent[0].accountMetas.slice(1, 4)).toEqual([
+      `${credentialRootAddress.toBase58()}:readonly:writable`,
+      `${rootPublisher.publicKey.toBase58()}:signer:not-writable`,
+      `${feePayer.publicKey.toBase58()}:signer:writable`,
+    ]);
+  });
+
+  it("recovers existing credential-root PDA signatures so retries can complete", async () => {
+    const feePayer = Keypair.generate();
+    const registryAuthority = Keypair.generate().publicKey;
+    const programId = Keypair.generate().publicKey;
+    const registryAddress = PublicKey.findProgramAddressSync(
+      [Buffer.from("registry")],
+      programId,
+    )[0];
+    const credentialRootAddress = deriveCredentialRootAddress(
+      programId,
+      registryAddress,
+      Buffer.from(CREDENTIAL_ROOT, "hex"),
+    );
+    const accounts = new Map<string, AccountInfo<Buffer>>([
+      [
+        programId.toBase58(),
+        createAccountInfo({
+          owner: SystemProgram.programId,
+          accountName: "Program",
+          executable: true,
+        }),
+      ],
+      [
+        registryAddress.toBase58(),
+        createAccountInfo({
+          owner: programId,
+          accountName: "PollRegistry",
+          registryAuthority,
+          rootPublisher: feePayer.publicKey,
+        }),
+      ],
+      [
+        credentialRootAddress.toBase58(),
+        createAccountInfo({
+          owner: programId,
+          accountName: "CredentialRootAccount",
+        }),
+      ],
+    ]);
+    const sentLabels: string[] = [];
+    const signatureLookups: string[] = [];
+    const service = createSolanaAuditPublisherService({
+      solanaAuditEnv: createAuditEnv(
+        programId,
+        feePayer.publicKey,
+        registryAuthority,
+      ),
+      getBackendFeePayer: () => feePayer,
+      getConnection: () =>
+        createConnection({
+          getAccountInfo: async (address: PublicKey) =>
+            accounts.get(address.toBase58()) ?? null,
+          getSignaturesForAddress: async (address: PublicKey) => {
+            signatureLookups.push(address.toBase58());
+            return [
+              {
+                signature: RECOVERED_ROOT_SIGNATURE,
+                slot: 1,
+                err: null,
+                memo: null,
+                blockTime: null,
+                confirmationStatus: "confirmed",
+              },
+            ];
+          },
+        }),
+      sendTransaction: async ({ label }) => {
+        sentLabels.push(label);
+        return `${label}-signature`;
+      },
+    });
+
+    const result = await service.publishCredentialRoot({
+      credentialRoot: createCredentialRoot(),
+    });
+
+    expect(sentLabels).toEqual([]);
+    expect(signatureLookups).toEqual([credentialRootAddress.toBase58()]);
+    expect(result.signature).toBe(RECOVERED_ROOT_SIGNATURE);
+  });
+
   it("recovers an existing root PDA signature so DB retries can complete", async () => {
     const feePayer = Keypair.generate();
     const registryAuthority = Keypair.generate().publicKey;

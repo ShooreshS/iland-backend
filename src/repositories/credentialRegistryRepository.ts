@@ -213,6 +213,28 @@ export const createCredentialRegistryRepository = (
       return (data || []) as CredentialRootRow[];
     },
 
+    async listUnpublishedRoots(input: {
+      merkleDepth: number;
+      limit: number;
+    }): Promise<CredentialRootRow[]> {
+      const supabase = getSupabaseAdminClient();
+
+      const { data, error } = await supabase
+        .from("credential_roots")
+        .select(CREDENTIAL_ROOT_COLUMNS)
+        .eq("merkle_depth", input.merkleDepth)
+        .is("solana_tx_signature", null)
+        .order("leaf_count", { ascending: true })
+        .order("created_at", { ascending: true })
+        .limit(input.limit);
+
+      if (error) {
+        throw error;
+      }
+
+      return (data || []) as CredentialRootRow[];
+    },
+
     async insertRoot(input: NewCredentialRootRow): Promise<CredentialRootRow> {
       const supabase = getSupabaseAdminClient();
 

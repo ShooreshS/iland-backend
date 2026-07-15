@@ -1,12 +1,12 @@
 # CivicOS Solana Audit Program
 
-Phase 5 adds an Anchor program for public audit anchoring. It stores poll policy hashes, credential schema hashes, nullifier/vote-commitment/encrypted-vote root batches, accepted vote counts, and final result hashes.
+Phase 5 adds an Anchor program for public audit anchoring. It stores poll policy hashes, credential schema hashes, credential registry roots, nullifier/vote-commitment/encrypted-vote root batches, accepted vote counts, and final result hashes.
 
 This program intentionally does not verify vote ZK proofs on-chain. The v1 trust model remains:
 
 1. CivicOS backend verifies vote legitimacy off-chain.
 2. Backend stores accepted vote nullifiers, vote commitments, and encrypted-vote commitments.
-3. Backend commits Merkle roots to this Solana program when publishing result/audit material, or earlier if CivicOS later enables periodic anchoring.
+3. Backend commits credential registry roots and poll Merkle roots to this Solana program when publishing result/audit material, or earlier if CivicOS later enables periodic anchoring.
 4. Public audit tooling compares backend/exported vote records against on-chain roots.
 
 ## Program
@@ -22,6 +22,7 @@ The source-declared program id is the current local deployment key public key. B
 - `initialize_registry`: creates the global registry PDA and sets signer registry authority, dedicated root publisher, treasury, and token mint/token-program metadata. Registry authority and root publisher must be different keys.
 - `create_poll`: creates a poll PDA keyed by `poll_id_hash` and stores frozen `poll_policy_hash` / `credential_schema_hash`. This is authorized by the registry's `root_publisher`; a separate `payer` account can fund rent and fees.
 - `commit_roots`: appends a batch root account, verifies previous nullifier / vote-commitment / encrypted-vote roots and next batch index, and advances the poll latest roots. This is authorized by the registry's `root_publisher`; a separate `payer` account can fund rent and fees. Commits are allowed after the poll opens and before finalization, so CivicOS can delay publication until result release.
+- `commit_credential_root`: creates a credential-root PDA keyed by the registry and credential root hash. It stores the accepted credential Merkle root, previous root pointer, Merkle depth, leaf count, publisher, and timestamp. This is authorized by the registry's `root_publisher`; a separate `payer` account can fund rent and fees.
 - `finalize_poll`: stores final vote/nullifier/encrypted-vote roots and the final result hash after the poll closes. This is authorized by the registry's `root_publisher`; a separate `payer` account can fund rent and fees.
 
 ## Minimal Mainnet Footprint
@@ -34,6 +35,7 @@ never write to Solana. The only on-chain writes are audit anchors:
 | --------------------- | --------------------------------- | ----------------------------------------------------------------------------------- |
 | Program deploy        | once, plus rare reviewed upgrades | the `civicos_audit` program                                                         |
 | `initialize_registry` | once per deployed audit program   | registry PDA with registry authority, root publisher, treasury, and SHOLAN metadata |
+| `commit_credential_root` | one per accepted credential-root update | credential-root PDA with root, previous root, Merkle depth, and leaf count      |
 | `create_poll`         | one per poll                      | poll PDA with policy/schema hashes and voting window                                |
 | `commit_roots`        | one per sealed 64-vote batch      | chained root PDA for nullifier, vote-commitment, and encrypted-vote roots           |
 | `finalize_poll`       | one per poll                      | final result PDA with result hash and tally proof hash                              |

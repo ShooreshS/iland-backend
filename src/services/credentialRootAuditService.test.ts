@@ -46,21 +46,27 @@ describe("credentialRootAuditService", () => {
         root: "1".repeat(64),
         leafCount: 1,
         solanaTxSignature: null,
+        explorerUrl: null,
       },
       acceptedRoots: [
         {
           root: "1".repeat(64),
           previousRoot: null,
           leafCount: 1,
+          explorerUrl: null,
         },
         {
           root: "2".repeat(64),
           previousRoot: "1".repeat(64),
           leafCount: 2,
           solanaTxSignature: "devnet-signature",
+          explorerUrl: expect.stringContaining(
+            "https://explorer.solana.com/tx/devnet-signature",
+          ),
         },
       ],
       anchoring: {
+        mode: "solana-root-chain",
         registryRowIdsExposed: false,
         credentialCommitmentsExposed: false,
       },
