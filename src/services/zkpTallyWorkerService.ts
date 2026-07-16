@@ -28,7 +28,8 @@ export type ZkpTallyWorkerDependencies = Readonly<{
   repositoryLike?: Pick<
     typeof zkpTallyJobRepository,
     "claim" | "complete" | "fail" | "heartbeat"
-  >;
+  > &
+    Partial<Pick<typeof zkpTallyJobRepository, "requeueRecoverableFailed">>;
   pollRepositoryLike?: Pick<
     typeof pollRepository,
     "getById" | "getOptionsByPollId"
@@ -109,6 +110,11 @@ const classifyRetryable = (errorCode: string, message: string): boolean => {
   );
 };
 
+const RECOVERABLE_FAILED_JOB_ERROR_CODES = [
+  "TALLY_PROVER_UNCONFIGURED",
+  "TALLY_PROOF_GENERATION_FAILED",
+] as const;
+
 const failJob = async (input: {
   repository: Pick<typeof zkpTallyJobRepository, "fail">;
   job: ZkpTallyJobRow;
@@ -158,6 +164,21 @@ export const createZkpTallyWorkerService = (
 
   return {
     workerId,
+
+    async requeueRecoverableFailedJobs(): Promise<ZkpTallyJobRow[]> {
+      const requeueRecoverableFailed = repository.requeueRecoverableFailed;
+      if (!requeueRecoverableFailed) {
+        return [];
+      }
+
+      return withWorkerStep("requeue recoverable failed tally jobs", () =>
+        requeueRecoverableFailed({
+          errorCodes: [...RECOVERABLE_FAILED_JOB_ERROR_CODES],
+          maxAttempts: env.zkp.tallyWorker.maxAttempts,
+          limit: 25,
+        }),
+      );
+    },
 
     async processNextJob(): Promise<ZkpTallyWorkerCycleResult> {
       try {
@@ -369,6 +390,16 @@ export const createZkpTallyWorkerService = (
         status: "starting",
         message: "ZKP tally worker starting.",
       });
+
+      const requeued = await this.requeueRecoverableFailedJobs();
+      if (requeued.length > 0) {
+        console.info("[zkpTallyWorker] requeued recoverable failed jobs", {
+          count: requeued.length,
+          pollIds: requeued.map((job) => job.poll_id),
+          errorCodes: [...RECOVERABLE_FAILED_JOB_ERROR_CODES],
+        });
+      }
+
       console.info("[zkpTallyWorker] started", {
         workerId,
         pollIntervalMs: env.zkp.tallyWorker.pollIntervalMs,

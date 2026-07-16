@@ -178,6 +178,62 @@ export const zkpTallyJobRepository = {
     return data || [];
   },
 
+  async requeueRecoverableFailed(input: {
+    errorCodes: string[];
+    maxAttempts: number;
+    limit?: number;
+  }): Promise<ZkpTallyJobRow[]> {
+    if (input.errorCodes.length === 0) {
+      return [];
+    }
+
+    const supabase = requireSupabaseAdminClient();
+    const limit = Math.max(1, input.limit ?? 25);
+    const { data: candidates, error: selectError } = await supabase
+      .from("zkp_tally_jobs")
+      .select("id")
+      .eq("status", "failed")
+      .in("error_code", input.errorCodes)
+      .is("tally_proof_hash", null)
+      .order("updated_at", { ascending: true })
+      .limit(limit)
+      .returns<Array<Pick<ZkpTallyJobRow, "id">>>();
+
+    if (selectError) {
+      throw selectError;
+    }
+
+    const ids = (candidates || [])
+      .map((row) => row.id)
+      .filter((id): id is string => typeof id === "string" && id.length > 0);
+    if (ids.length === 0) {
+      return [];
+    }
+
+    const nowIso = new Date().toISOString();
+    const { data, error } = await supabase
+      .from("zkp_tally_jobs")
+      .update({
+        status: "pending",
+        attempts: 0,
+        max_attempts: input.maxAttempts,
+        locked_by: null,
+        locked_at: null,
+        next_attempt_at: nowIso,
+        error_code: null,
+        error_message: null,
+      })
+      .in("id", ids)
+      .select(ZKP_TALLY_JOB_COLUMNS)
+      .returns<ZkpTallyJobRow[]>();
+
+    if (error) {
+      throw error;
+    }
+
+    return data || [];
+  },
+
   async getQueueCounts(): Promise<ZkpTallyQueueStatusCounts> {
     const supabase = requireSupabaseAdminClient();
     const counts = { ...EMPTY_COUNTS };

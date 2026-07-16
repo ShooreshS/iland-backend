@@ -76,6 +76,70 @@ const createJob = (overrides: Partial<ZkpTallyJobRow> = {}): ZkpTallyJobRow => (
 });
 
 describe("zkp tally worker service", () => {
+  it("requeues recoverable failed jobs after worker boot config is healthy", async () => {
+    const requeuedJob = createJob({
+      status: "pending",
+      attempts: 0,
+      error_code: null,
+      error_message: null,
+    });
+    let requeueInput: unknown = null;
+
+    const service = createZkpTallyWorkerService({
+      repositoryLike: {
+        claim: async () => null,
+        complete: async () => {
+          throw new Error("complete should not be called");
+        },
+        fail: async () => {
+          throw new Error("fail should not be called");
+        },
+        heartbeat: async () => ({
+          worker_id: "worker-1",
+          host: "test",
+          status: "starting",
+          current_job_id: null,
+          message: null,
+          first_seen_at: FIXED_TIME,
+          last_seen_at: FIXED_TIME,
+        }),
+        requeueRecoverableFailed: async (input) => {
+          requeueInput = input;
+          return [requeuedJob];
+        },
+      },
+      pollRepositoryLike: {
+        getById: async () => createPoll(),
+        getOptionsByPollId: async () => [createOption()],
+      },
+      pollTallyProofRepositoryLike: {
+        getLatestByPollId: async () => null,
+      },
+      tallyProverLike: {
+        generateProofForPoll: async () => {
+          throw new Error("prover should not be called");
+        },
+      },
+      publicAuditServiceLike: {
+        submitTallyProof: async () => {
+          throw new Error("submit should not be called");
+        },
+      },
+    });
+
+    const requeued = await service.requeueRecoverableFailedJobs();
+
+    expect(requeued).toEqual([requeuedJob]);
+    expect(requeueInput).toMatchObject({
+      errorCodes: [
+        "TALLY_PROVER_UNCONFIGURED",
+        "TALLY_PROOF_GENERATION_FAILED",
+      ],
+      maxAttempts: 3,
+      limit: 25,
+    });
+  });
+
   it("generates, submits, and completes one claimed tally job", async () => {
     const job = createJob();
     const completedJob = createJob({
