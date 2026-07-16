@@ -47,8 +47,47 @@ const sleep = (ms: number): Promise<void> =>
 const truncateMessage = (value: string, maxLength = 1_000): string =>
   value.length > maxLength ? `${value.slice(0, maxLength)}...` : value;
 
-const toErrorMessage = (error: unknown): string =>
-  error instanceof Error ? error.message : String(error);
+const toErrorMessage = (error: unknown): string => {
+  if (error instanceof Error) {
+    return error.message;
+  }
+
+  if (error && typeof error === "object") {
+    const record = error as Record<string, unknown>;
+    const message = typeof record.message === "string" ? record.message : null;
+    const code = typeof record.code === "string" ? record.code : null;
+    const details = typeof record.details === "string" ? record.details : null;
+    const hint = typeof record.hint === "string" ? record.hint : null;
+    const parts = [
+      code ? `code=${code}` : null,
+      message,
+      details ? `details=${details}` : null,
+      hint ? `hint=${hint}` : null,
+    ].filter(Boolean);
+    if (parts.length > 0) {
+      return parts.join("; ");
+    }
+
+    try {
+      return JSON.stringify(error);
+    } catch {
+      return String(error);
+    }
+  }
+
+  return String(error);
+};
+
+const withWorkerStep = async <T>(
+  step: string,
+  fn: () => Promise<T>,
+): Promise<T> => {
+  try {
+    return await fn();
+  } catch (error) {
+    throw new Error(`${step} failed: ${toErrorMessage(error)}`);
+  }
+};
 
 const classifyRetryable = (errorCode: string, message: string): boolean => {
   if (
@@ -119,31 +158,45 @@ export const createZkpTallyWorkerService = (
     workerId,
 
     async processNextJob(): Promise<ZkpTallyWorkerCycleResult> {
-      await polls.closeExpiredPolls?.();
+      try {
+        await polls.closeExpiredPolls?.();
+      } catch (error) {
+        console.warn("[zkpTallyWorker] closeExpiredPolls failed; continuing", {
+          message: toErrorMessage(error),
+        });
+      }
 
-      const job = await repository.claim({
-        workerId,
-        lockTimeoutSeconds: Math.ceil(env.zkp.tallyWorker.lockTimeoutMs / 1_000),
-      });
+      const job = await withWorkerStep("claim_zkp_tally_job", () =>
+        repository.claim({
+          workerId,
+          lockTimeoutSeconds: Math.ceil(env.zkp.tallyWorker.lockTimeoutMs / 1_000),
+        }),
+      );
 
       if (!job) {
-        await heartbeat({
-          status: "idle",
-          message: "No pending ZKP tally jobs.",
-        });
+        await withWorkerStep("heartbeat idle", () =>
+          heartbeat({
+            status: "idle",
+            message: "No pending ZKP tally jobs.",
+          }),
+        );
         return {
           claimed: false,
           message: "No pending ZKP tally jobs.",
         };
       }
 
-      await heartbeat({
-        status: "running",
-        currentJobId: job.id,
-        message: `Processing poll ${job.poll_id}.`,
-      });
+      await withWorkerStep("heartbeat running", () =>
+        heartbeat({
+          status: "running",
+          currentJobId: job.id,
+          message: `Processing poll ${job.poll_id}.`,
+        }),
+      );
 
-      const poll = await polls.getById(job.poll_id);
+      const poll = await withWorkerStep("load poll", () =>
+        polls.getById(job.poll_id),
+      );
       if (!poll) {
         const failed = await failJob({
           repository,
