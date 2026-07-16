@@ -22,15 +22,27 @@ const EMPTY_COUNTS: ZkpTallyQueueStatusCounts = {
   cancelled: 0,
 };
 
-const toRpcRow = (data: unknown): ZkpTallyJobRow | null => {
+export const normalizeZkpTallyJobRpcRow = (
+  data: unknown,
+): ZkpTallyJobRow | null => {
   if (Array.isArray(data)) {
-    return toRpcRow(data[0]);
+    return normalizeZkpTallyJobRpcRow(data[0]);
   }
 
   if (!data || typeof data !== "object") {
     return null;
   }
-  return data as ZkpTallyJobRow;
+
+  const row = data as Partial<ZkpTallyJobRow>;
+  if (
+    typeof row.id !== "string" ||
+    typeof row.poll_id !== "string" ||
+    typeof row.status !== "string"
+  ) {
+    return null;
+  }
+
+  return row as ZkpTallyJobRow;
 };
 
 export const zkpTallyJobRepository = {
@@ -50,7 +62,7 @@ export const zkpTallyJobRepository = {
       throw error;
     }
 
-    const row = toRpcRow(data);
+    const row = normalizeZkpTallyJobRpcRow(data);
     if (!row) {
       throw new Error("Tally job enqueue did not return a row.");
     }
@@ -71,7 +83,7 @@ export const zkpTallyJobRepository = {
       throw error;
     }
 
-    return toRpcRow(data);
+    return normalizeZkpTallyJobRpcRow(data);
   },
 
   async complete(input: {
@@ -94,7 +106,7 @@ export const zkpTallyJobRepository = {
       throw error;
     }
 
-    const row = toRpcRow(data);
+    const row = normalizeZkpTallyJobRpcRow(data);
     if (!row) {
       throw new Error("Tally job completion did not update a running job.");
     }
@@ -123,7 +135,7 @@ export const zkpTallyJobRepository = {
       throw error;
     }
 
-    const row = toRpcRow(data);
+    const row = normalizeZkpTallyJobRpcRow(data);
     if (!row) {
       throw new Error("Tally job failure did not update a running job.");
     }

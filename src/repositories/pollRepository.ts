@@ -156,6 +156,43 @@ const closeExpiredPolls = async (nowIso = new Date().toISOString()): Promise<voi
   }
 };
 
+const getByIdInternal = async (
+  pollId: string,
+  options: { refreshStatus: boolean },
+): Promise<PollRow | null> => {
+  if (options.refreshStatus) {
+    await closeExpiredPolls();
+  }
+
+  const supabase = requireSupabaseAdminClient();
+
+  const { data, error } = await supabase
+    .from("polls")
+    .select(POLL_COLUMNS)
+    .eq("id", pollId)
+    .maybeSingle<PollRow>();
+
+  if (error && isMissingPollContractColumnError(error)) {
+    const fallback = await supabase
+      .from("polls")
+      .select(BASE_POLL_COLUMNS)
+      .eq("id", pollId)
+      .maybeSingle<PartialPollRow>();
+
+    if (fallback.error) {
+      throw fallback.error;
+    }
+
+    return fallback.data ? withPollContractDefaults(fallback.data) : null;
+  }
+
+  if (error) {
+    throw error;
+  }
+
+  return data ? withPollContractDefaults(data) : null;
+};
+
 export const pollRepository = {
   closeExpiredPolls,
 
@@ -192,35 +229,11 @@ export const pollRepository = {
   },
 
   async getById(pollId: string): Promise<PollRow | null> {
-    await closeExpiredPolls();
+    return getByIdInternal(pollId, { refreshStatus: true });
+  },
 
-    const supabase = requireSupabaseAdminClient();
-
-    const { data, error } = await supabase
-      .from("polls")
-      .select(POLL_COLUMNS)
-      .eq("id", pollId)
-      .maybeSingle<PollRow>();
-
-    if (error && isMissingPollContractColumnError(error)) {
-      const fallback = await supabase
-        .from("polls")
-        .select(BASE_POLL_COLUMNS)
-        .eq("id", pollId)
-        .maybeSingle<PartialPollRow>();
-
-      if (fallback.error) {
-        throw fallback.error;
-      }
-
-      return fallback.data ? withPollContractDefaults(fallback.data) : null;
-    }
-
-    if (error) {
-      throw error;
-    }
-
-    return data ? withPollContractDefaults(data) : null;
+  async getByIdWithoutStatusRefresh(pollId: string): Promise<PollRow | null> {
+    return getByIdInternal(pollId, { refreshStatus: false });
   },
 
   async getOptionsByPollId(pollId: string): Promise<PollOptionRow[]> {

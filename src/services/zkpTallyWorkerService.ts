@@ -6,7 +6,9 @@ import pollRepository from "../repositories/pollRepository";
 import pollTallyProofRepository from "../repositories/pollTallyProofRepository";
 import zkpTallyJobRepository from "../repositories/zkpTallyJobRepository";
 import type { ZkpTallyJobRow } from "../types/db";
-import groth16TallyProverService from "./groth16TallyProverService";
+import groth16TallyProverService, {
+  getGroth16TallyProverArtifactStatus,
+} from "./groth16TallyProverService";
 import pollPublicAuditService from "./pollPublicAuditService";
 
 export type ZkpTallyWorkerCycleResult =
@@ -31,7 +33,7 @@ export type ZkpTallyWorkerDependencies = Readonly<{
     typeof pollRepository,
     "getById" | "getOptionsByPollId"
   > &
-    Partial<Pick<typeof pollRepository, "closeExpiredPolls">>;
+    Partial<Pick<typeof pollRepository, "closeExpiredPolls" | "getByIdWithoutStatusRefresh">>;
   pollTallyProofRepositoryLike?: Pick<
     typeof pollTallyProofRepository,
     "getLatestByPollId"
@@ -194,8 +196,9 @@ export const createZkpTallyWorkerService = (
         }),
       );
 
+      const loadPollById = polls.getByIdWithoutStatusRefresh ?? polls.getById;
       const poll = await withWorkerStep("load poll", () =>
-        polls.getById(job.poll_id),
+        loadPollById(job.poll_id),
       );
       if (!poll) {
         const failed = await failJob({
@@ -329,6 +332,14 @@ export const createZkpTallyWorkerService = (
       if (!env.supabase.enabled) {
         throw new Error(
           "ZKP tally worker requires SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY. Copy both variables into the Railway worker service.",
+        );
+      }
+      const tallyProverStatus = getGroth16TallyProverArtifactStatus();
+      if (!tallyProverStatus.configured) {
+        throw new Error(
+          `ZKP tally worker prover is not configured: ${
+            tallyProverStatus.message ?? "unknown artifact/configuration error"
+          }`,
         );
       }
 

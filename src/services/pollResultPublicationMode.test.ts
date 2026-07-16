@@ -32,6 +32,7 @@ describe("poll result publication mode contract", () => {
       "migrations",
       "20260716150000_add_poll_result_publication_mode.sql",
     );
+    const repository = readSrc("repositories", "pollRepository.ts");
     const worker = readSrc("services", "zkpTallyWorkerService.ts");
     const publisher = readSrc("services", "zkpAutoResultPublisherService.ts");
     const server = readSrc("server.ts");
@@ -43,6 +44,9 @@ describe("poll result publication mode contract", () => {
     expect(worker).not.toContain("publishPollAudit");
     expect(worker).toContain("final publication is delegated to the main backend");
     expect(worker).toContain("SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY");
+    expect(worker).toContain("getGroth16TallyProverArtifactStatus");
+    expect(worker).toContain("getByIdWithoutStatusRefresh");
+    expect(repository).toContain("async getByIdWithoutStatusRefresh");
     expect(publisher).toContain("publishPollAudit");
     expect(publisher).toContain('poll.result_publication_mode === "auto_on_close"');
     expect(server).toContain("createZkpAutoResultPublisherService");
