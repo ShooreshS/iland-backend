@@ -46,6 +46,7 @@ import type {
   VoteSubmissionErrorCode,
   VoteSubmissionFailureDto,
   VoteSubmissionResultDto,
+  PollResultPublicationMode,
   PollVotePrivacyMode,
 } from "../types/contracts";
 import type { PollOptionRow, PollRow, PollTallyProofRow, UserRow } from "../types/db";
@@ -75,6 +76,11 @@ const normalizeVotePrivacyMode = (
 
   return "zk_secret_ballot_v1";
 };
+
+const normalizeResultPublicationMode = (
+  value: PollRow["result_publication_mode"],
+): PollResultPublicationMode =>
+  value === "creator_managed" ? "creator_managed" : "auto_on_close";
 
 const isDevLegacyVotePathEnabled = (): boolean =>
   process.env.NODE_ENV !== "production" &&
@@ -108,6 +114,9 @@ const mapPoll = (row: PollRow): PollDto => {
     pollPolicyHash: row.poll_policy_hash ?? null,
     credentialSchemaHash: row.credential_schema_hash ?? null,
     votePrivacyMode: normalizeVotePrivacyMode(row.vote_privacy_mode),
+    resultPublicationMode: normalizeResultPublicationMode(
+      row.result_publication_mode,
+    ),
     optionSetHash: row.option_set_hash ?? null,
     pollEncryptionKeyId: row.poll_encryption_key_id ?? null,
     startsAt: row.starts_at,

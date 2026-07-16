@@ -15,6 +15,7 @@ import type {
   PollManagementErrorCode,
   PollOptionDto,
   PollOptionInputDto,
+  PollResultPublicationMode,
   PollStatus,
   PollVotePrivacyMode,
   PublishDraftPollResultDto,
@@ -40,10 +41,15 @@ const MIN_PUBLISHABLE_ACTIVE_OPTIONS = 2;
 const PRODUCTION_ZKP_MAX_OPTIONS = 8;
 const PRODUCTION_ZKP_VOTE_PRIVACY_MODE = "zk_secret_ballot_v1" as const;
 const DEFAULT_VOTE_PRIVACY_MODE = PRODUCTION_ZKP_VOTE_PRIVACY_MODE;
+const DEFAULT_RESULT_PUBLICATION_MODE = "auto_on_close" as const;
 const KNOWN_VOTE_PRIVACY_MODES = new Set<PollVotePrivacyMode>([
   "legacy_identity_linked",
   "zk_preprover_audit",
   "zk_secret_ballot_v1",
+]);
+const KNOWN_RESULT_PUBLICATION_MODES = new Set<PollResultPublicationMode>([
+  "auto_on_close",
+  "creator_managed",
 ]);
 
 type NormalizedPollMutationInput = {
@@ -62,6 +68,7 @@ type NormalizedPollMutationInput = {
   status: PollStatus;
   eligibilityRule: PollEligibilityRule;
   votePrivacyMode: PollVotePrivacyMode;
+  resultPublicationMode: PollResultPublicationMode;
   pollEncryptionKeyId: string | null;
   startsAt: string | null;
   endsAt: string | null;
@@ -110,6 +117,14 @@ const normalizeVotePrivacyMode = (
     ? (value as PollVotePrivacyMode)
     : DEFAULT_VOTE_PRIVACY_MODE;
 
+const normalizeResultPublicationMode = (
+  value: PollResultPublicationMode | string | null | undefined,
+): PollResultPublicationMode =>
+  typeof value === "string" &&
+  KNOWN_RESULT_PUBLICATION_MODES.has(value as PollResultPublicationMode)
+    ? (value as PollResultPublicationMode)
+    : DEFAULT_RESULT_PUBLICATION_MODE;
+
 const mapPoll = (row: PollRow): PollDto => {
   const allowedDocumentCountryCodes = toArray(row.allowed_document_country_codes);
   const allowedHomeAreaIds = toArray(row.allowed_home_area_ids);
@@ -138,6 +153,9 @@ const mapPoll = (row: PollRow): PollDto => {
     pollPolicyHash: row.poll_policy_hash ?? null,
     credentialSchemaHash: row.credential_schema_hash ?? null,
     votePrivacyMode: normalizeVotePrivacyMode(row.vote_privacy_mode),
+    resultPublicationMode: normalizeResultPublicationMode(
+      row.result_publication_mode,
+    ),
     optionSetHash: row.option_set_hash ?? null,
     pollEncryptionKeyId: row.poll_encryption_key_id ?? null,
     startsAt: row.starts_at,
@@ -289,6 +307,9 @@ const normalizeMutationInput = (
   }
 
   const votePrivacyMode = normalizeVotePrivacyMode(input.votePrivacyMode);
+  const resultPublicationMode = normalizeResultPublicationMode(
+    input.resultPublicationMode,
+  );
   const pollEncryptionKeyId = normalizeOptionalString(input.pollEncryptionKeyId);
   const startsAt = normalizeOptionalTimestamp(input.startsAt);
   const endsAt = normalizeOptionalTimestamp(input.endsAt);
@@ -373,6 +394,7 @@ const normalizeMutationInput = (
       status: (input.status || "active") as PollStatus,
       eligibilityRule,
       votePrivacyMode,
+      resultPublicationMode,
       pollEncryptionKeyId,
       startsAt,
       endsAt,
@@ -568,6 +590,7 @@ const buildPollInsertPayload = (
     credential_schema_json: credentialSchema,
     credential_schema_hash: credentialSchemaHash,
     vote_privacy_mode: data.votePrivacyMode,
+    result_publication_mode: data.resultPublicationMode,
     option_set_hash: optionSetHash,
     poll_encryption_key_id: data.pollEncryptionKeyId,
   };
@@ -748,6 +771,10 @@ export const pollDraftService = {
         input.votePrivacyMode ??
         existingPoll.vote_privacy_mode ??
         DEFAULT_VOTE_PRIVACY_MODE,
+      resultPublicationMode:
+        input.resultPublicationMode ??
+        existingPoll.result_publication_mode ??
+        DEFAULT_RESULT_PUBLICATION_MODE,
       pollEncryptionKeyId:
         input.pollEncryptionKeyId === undefined
           ? existingPoll.poll_encryption_key_id ?? null
@@ -884,6 +911,9 @@ export const pollDraftService = {
             minimumAge: existingPoll.minimum_age,
           },
           votePrivacyMode,
+          resultPublicationMode:
+            existingPoll.result_publication_mode ??
+            DEFAULT_RESULT_PUBLICATION_MODE,
           pollEncryptionKeyId,
           startsAt: existingPoll.starts_at || now,
           endsAt: existingPoll.ends_at,

@@ -81,6 +81,7 @@ describe("zkp tally worker service", () => {
       result_hash: HEX_C,
     });
     let completedInput: unknown = null;
+    let publishedInput: unknown = null;
 
     const service = createZkpTallyWorkerService({
       repositoryLike: {
@@ -135,6 +136,15 @@ describe("zkp tally worker service", () => {
           },
           audit: null as never,
         }),
+        publishPollAudit: async (input) => {
+          publishedInput = input;
+          return {
+            success: true,
+            message: "published",
+            publication: null,
+            audit: null as never,
+          };
+        },
       },
     });
 
@@ -151,6 +161,10 @@ describe("zkp tally worker service", () => {
       proofPublicInputsHash: HEX_A,
       tallyProofHash: HEX_B,
       resultHash: HEX_C,
+    });
+    expect(publishedInput).toMatchObject({
+      pollId: job.poll_id,
+      viewerUserId: "owner-1",
     });
   });
 
@@ -195,6 +209,9 @@ describe("zkp tally worker service", () => {
       publicAuditServiceLike: {
         submitTallyProof: async () => {
           throw new Error("submit should not be called");
+        },
+        publishPollAudit: async () => {
+          throw new Error("publish should not be called");
         },
       },
     });

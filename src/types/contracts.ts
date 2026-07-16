@@ -13,6 +13,10 @@ export type PollVotePrivacyMode =
   | "zk_preprover_audit"
   | "zk_secret_ballot_v1";
 
+export type PollResultPublicationMode =
+  | "auto_on_close"
+  | "creator_managed";
+
 export type PollEligibilityRule = {
   requiresVerifiedIdentity: boolean;
   allowedDocumentCountryCodes?: string[];
@@ -36,6 +40,7 @@ export type PollDto = {
   pollPolicyHash: string | null;
   credentialSchemaHash: string | null;
   votePrivacyMode: PollVotePrivacyMode;
+  resultPublicationMode: PollResultPublicationMode;
   optionSetHash: string | null;
   pollEncryptionKeyId: string | null;
   startsAt: string | null;
@@ -599,6 +604,7 @@ export type CreatePollRequestDto = {
   status?: PollStatus;
   eligibilityRule?: Partial<PollEligibilityRule> | null;
   votePrivacyMode?: PollVotePrivacyMode;
+  resultPublicationMode?: PollResultPublicationMode;
   pollEncryptionKeyId?: string | null;
   startsAt?: string | null;
   endsAt?: string | null;
@@ -616,6 +622,7 @@ export type UpdateDraftPollRequestDto = {
   status?: "draft" | "active";
   eligibilityRule?: Partial<PollEligibilityRule> | null;
   votePrivacyMode?: PollVotePrivacyMode;
+  resultPublicationMode?: PollResultPublicationMode;
   pollEncryptionKeyId?: string | null;
   startsAt?: string | null;
   endsAt?: string | null;

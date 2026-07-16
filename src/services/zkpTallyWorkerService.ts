@@ -30,13 +30,17 @@ export type ZkpTallyWorkerDependencies = Readonly<{
   pollRepositoryLike?: Pick<
     typeof pollRepository,
     "getById" | "getOptionsByPollId"
-  >;
+  > &
+    Partial<Pick<typeof pollRepository, "closeExpiredPolls">>;
   pollTallyProofRepositoryLike?: Pick<
     typeof pollTallyProofRepository,
     "getLatestByPollId"
   >;
   tallyProverLike?: Pick<typeof groth16TallyProverService, "generateProofForPoll">;
-  publicAuditServiceLike?: Pick<typeof pollPublicAuditService, "submitTallyProof">;
+  publicAuditServiceLike?: Pick<
+    typeof pollPublicAuditService,
+    "submitTallyProof" | "publishPollAudit"
+  >;
   sleepFn?: (ms: number) => Promise<void>;
 }>;
 
@@ -118,6 +122,8 @@ export const createZkpTallyWorkerService = (
     workerId,
 
     async processNextJob(): Promise<ZkpTallyWorkerCycleResult> {
+      await polls.closeExpiredPolls?.();
+
       const job = await repository.claim({
         workerId,
         lockTimeoutSeconds: Math.ceil(env.zkp.tallyWorker.lockTimeoutMs / 1_000),
@@ -159,24 +165,6 @@ export const createZkpTallyWorkerService = (
         };
       }
 
-      const existingTallyProof = await tallyProofs.getLatestByPollId(poll.id);
-      if (existingTallyProof) {
-        const completed = await repository.complete({
-          jobId: job.id,
-          workerId,
-          proofPublicInputsHash: existingTallyProof.tally_public_inputs_hash,
-          tallyProofHash: existingTallyProof.tally_proof_hash,
-          resultHash: existingTallyProof.result_hash,
-        });
-        return {
-          claimed: true,
-          jobId: completed.id,
-          pollId: completed.poll_id,
-          status: "succeeded",
-          message: "Verified tally proof was already recorded.",
-        };
-      }
-
       if (!poll.created_by_user_id) {
         const failed = await failJob({
           repository,
@@ -192,6 +180,46 @@ export const createZkpTallyWorkerService = (
           pollId: poll.id,
           status: failed.status === "failed" ? "failed" : "pending",
           message: "Poll owner is missing.",
+        };
+      }
+
+      const existingTallyProof = await tallyProofs.getLatestByPollId(poll.id);
+      if (existingTallyProof) {
+        const published = await publicAudit.publishPollAudit({
+          pollId: poll.id,
+          viewerUserId: poll.created_by_user_id,
+        });
+        if (!published.success) {
+          const failed = await failJob({
+            repository,
+            job,
+            workerId,
+            errorCode: published.errorCode,
+            message: published.message,
+            retryable: classifyRetryable(published.errorCode, published.message),
+          });
+          return {
+            claimed: true,
+            jobId: job.id,
+            pollId: poll.id,
+            status: failed.status === "failed" ? "failed" : "pending",
+            message: published.message,
+          };
+        }
+
+        const completed = await repository.complete({
+          jobId: job.id,
+          workerId,
+          proofPublicInputsHash: existingTallyProof.tally_public_inputs_hash,
+          tallyProofHash: existingTallyProof.tally_proof_hash,
+          resultHash: existingTallyProof.result_hash,
+        });
+        return {
+          claimed: true,
+          jobId: completed.id,
+          pollId: completed.poll_id,
+          status: "succeeded",
+          message: "Verified tally proof was already recorded.",
         };
       }
 
@@ -238,6 +266,28 @@ export const createZkpTallyWorkerService = (
           pollId: poll.id,
           status: failed.status === "failed" ? "failed" : "pending",
           message: submitted.message,
+        };
+      }
+
+      const published = await publicAudit.publishPollAudit({
+        pollId: poll.id,
+        viewerUserId: poll.created_by_user_id,
+      });
+      if (!published.success) {
+        const failed = await failJob({
+          repository,
+          job,
+          workerId,
+          errorCode: published.errorCode,
+          message: published.message,
+          retryable: classifyRetryable(published.errorCode, published.message),
+        });
+        return {
+          claimed: true,
+          jobId: job.id,
+          pollId: poll.id,
+          status: failed.status === "failed" ? "failed" : "pending",
+          message: published.message,
         };
       }
 

@@ -1,5 +1,6 @@
 import type {
   PollJurisdictionType,
+  PollResultPublicationMode,
   PollStatus,
   PollVotePrivacyMode,
 } from "./contracts";
@@ -469,6 +470,7 @@ export type PollRow = {
   credential_schema_json?: JsonValue | null;
   credential_schema_hash?: string | null;
   vote_privacy_mode?: PollVotePrivacyMode;
+  result_publication_mode?: PollResultPublicationMode;
   option_set_hash?: string | null;
   poll_encryption_key_id?: string | null;
   created_at: string;
@@ -510,6 +512,7 @@ export type NewPollRow = {
   credential_schema_json?: JsonValue | null;
   credential_schema_hash?: string | null;
   vote_privacy_mode?: PollVotePrivacyMode;
+  result_publication_mode?: PollResultPublicationMode;
   option_set_hash?: string | null;
   poll_encryption_key_id?: string | null;
 };

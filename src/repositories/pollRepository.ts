@@ -5,12 +5,15 @@ import type {
   PollOptionRow,
   PollRow,
 } from "../types/db";
-import type { PollVotePrivacyMode } from "../types/contracts";
+import type {
+  PollResultPublicationMode,
+  PollVotePrivacyMode,
+} from "../types/contracts";
 
 const BASE_POLL_COLUMNS =
   "id,slug,created_by_user_id,title,description,status,jurisdiction_type,jurisdiction_country_code,jurisdiction_area_ids,jurisdiction_land_ids,requires_verified_identity,allowed_document_country_codes,allowed_home_area_ids,allowed_land_ids,minimum_age,starts_at,ends_at,poll_policy_json,poll_policy_hash,credential_schema_json,credential_schema_hash,created_at,updated_at";
 const POLL_CONTRACT_COLUMNS =
-  "vote_privacy_mode,option_set_hash,poll_encryption_key_id";
+  "vote_privacy_mode,result_publication_mode,option_set_hash,poll_encryption_key_id";
 const POLL_COLUMNS = `${BASE_POLL_COLUMNS},${POLL_CONTRACT_COLUMNS}`;
 
 const POLL_OPTION_COLUMNS =
@@ -18,6 +21,7 @@ const POLL_OPTION_COLUMNS =
 
 const POLL_CONTRACT_COLUMN_NAMES = [
   "vote_privacy_mode",
+  "result_publication_mode",
   "option_set_hash",
   "poll_encryption_key_id",
 ] as const;
@@ -35,7 +39,10 @@ type PartialPollRow = Omit<
   Partial<
     Pick<
       PollRow,
-      "vote_privacy_mode" | "option_set_hash" | "poll_encryption_key_id"
+      | "vote_privacy_mode"
+      | "result_publication_mode"
+      | "option_set_hash"
+      | "poll_encryption_key_id"
     >
   >;
 
@@ -80,9 +87,17 @@ const resolveVotePrivacyMode = (
   return "zk_secret_ballot_v1";
 };
 
+const resolveResultPublicationMode = (
+  row: PartialPollRow,
+): PollResultPublicationMode =>
+  row.result_publication_mode === "creator_managed"
+    ? "creator_managed"
+    : "auto_on_close";
+
 const withPollContractDefaults = (row: PartialPollRow): PollRow => ({
   ...row,
   vote_privacy_mode: resolveVotePrivacyMode(row),
+  result_publication_mode: resolveResultPublicationMode(row),
   option_set_hash: row.option_set_hash ?? null,
   poll_encryption_key_id: row.poll_encryption_key_id ?? null,
 });
@@ -113,6 +128,7 @@ const buildPollInsertPayload = (input: NewPollRow) => ({
 
 const buildPollContractPayload = (input: NewPollRow) => ({
   vote_privacy_mode: input.vote_privacy_mode ?? "zk_secret_ballot_v1",
+  result_publication_mode: input.result_publication_mode ?? "auto_on_close",
   option_set_hash: input.option_set_hash ?? null,
   poll_encryption_key_id: input.poll_encryption_key_id ?? null,
 });

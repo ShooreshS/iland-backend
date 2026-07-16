@@ -40,6 +40,10 @@ const votePrivacyModeSchema = z.enum([
   "zk_preprover_audit",
   "zk_secret_ballot_v1",
 ]);
+const resultPublicationModeSchema = z.enum([
+  "auto_on_close",
+  "creator_managed",
+]);
 
 const pollEncryptionKeyIdSchema = z
   .string()
@@ -281,6 +285,7 @@ const createPollRequestSchema = z.object({
     .nullable()
     .optional(),
   votePrivacyMode: votePrivacyModeSchema.optional(),
+  resultPublicationMode: resultPublicationModeSchema.optional(),
   pollEncryptionKeyId: pollEncryptionKeyIdSchema,
   startsAt: optionalTimestampSchema,
   endsAt: optionalTimestampSchema,
