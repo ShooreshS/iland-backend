@@ -54,6 +54,9 @@ describe("poll result publication mode contract", () => {
 
     expect(runner).toContain('process.env.ILAND_ENV_VALIDATION_SCOPE ||= "supabase-admin-script"');
     expect(runner).toContain('process.env.SOLANA_AUDIT_TRANSACTIONS_ENABLED = "false"');
-    expect(envSource).toContain("trimmed.startsWith('\"') && trimmed.endsWith('\"')");
+    expect(runner).toContain('process.env.ZKP_TALLY_PROVER_MODE = "worker"');
+    expect(runner).toContain('process.env.ZKP_TALLY_WORKER_ENABLED = "true"');
+    expect(envSource).toContain("const stripWrappingQuotes");
+    expect(envSource).toContain("ZKP_TALLY_WORKER_ENABLED: emptyToUndefined");
   });
 });

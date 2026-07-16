@@ -5,6 +5,8 @@
 // Final on-chain publication belongs to the main backend replica.
 process.env.ILAND_ENV_VALIDATION_SCOPE ||= "supabase-admin-script";
 process.env.SOLANA_AUDIT_TRANSACTIONS_ENABLED = "false";
+process.env.ZKP_TALLY_PROVER_MODE = "worker";
+process.env.ZKP_TALLY_WORKER_ENABLED = "true";
 
 const { zkpTallyWorkerService } = await import(
   "../src/services/zkpTallyWorkerService"

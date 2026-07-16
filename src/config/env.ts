@@ -30,23 +30,29 @@ import {
   DEFAULT_GROTH16_VOTE_VERIFIER_KEY_HASH,
 } from "./zkpGroth16ArtifactDefaults";
 
+const stripWrappingQuotes = (value: string): string => {
+  const trimmed = value.trim();
+  if (
+    (trimmed.startsWith('"') && trimmed.endsWith('"')) ||
+    (trimmed.startsWith("'") && trimmed.endsWith("'"))
+  ) {
+    return trimmed.slice(1, -1);
+  }
+
+  return trimmed;
+};
+
 const emptyToUndefined = (value: unknown): string | undefined => {
   if (typeof value !== "string") {
     return undefined;
   }
 
-  const trimmed = value.trim();
-  return trimmed.length > 0 ? trimmed : undefined;
+  const normalized = stripWrappingQuotes(value).trim();
+  return normalized.length > 0 ? normalized : undefined;
 };
 
 const toBoolean = (value: string): boolean => {
-  const trimmed = value.trim();
-  const unquoted =
-    (trimmed.startsWith('"') && trimmed.endsWith('"')) ||
-    (trimmed.startsWith("'") && trimmed.endsWith("'"))
-      ? trimmed.slice(1, -1)
-      : trimmed;
-  const normalized = unquoted.trim().toLowerCase();
+  const normalized = stripWrappingQuotes(value).trim().toLowerCase();
   return normalized === "1" || normalized === "true" || normalized === "yes";
 };
 
@@ -858,6 +864,34 @@ const parsed = z
     ) as (typeof ZKP_ARTIFACT_RELEASE_STAGES)[number] | undefined,
     ZKP_PUBLIC_DEVNET_V0_1_CONFIRMED: emptyToUndefined(
       process.env.ZKP_PUBLIC_DEVNET_V0_1_CONFIRMED,
+    ),
+    ZKP_TALLY_PROVER_MODE: emptyToUndefined(
+      process.env.ZKP_TALLY_PROVER_MODE,
+    ) as (typeof ZKP_TALLY_PROVER_MODES)[number] | undefined,
+    ZKP_TALLY_WORKER_ENABLED: emptyToUndefined(
+      process.env.ZKP_TALLY_WORKER_ENABLED,
+    ),
+    ZKP_TALLY_WORKER_ID: emptyToUndefined(process.env.ZKP_TALLY_WORKER_ID),
+    ZKP_TALLY_WORKER_CONCURRENCY: emptyToUndefined(
+      process.env.ZKP_TALLY_WORKER_CONCURRENCY,
+    ),
+    ZKP_TALLY_WORKER_POLL_INTERVAL_MS: emptyToUndefined(
+      process.env.ZKP_TALLY_WORKER_POLL_INTERVAL_MS,
+    ),
+    ZKP_TALLY_WORKER_LOCK_TIMEOUT_MS: emptyToUndefined(
+      process.env.ZKP_TALLY_WORKER_LOCK_TIMEOUT_MS,
+    ),
+    ZKP_TALLY_WORKER_MAX_ATTEMPTS: emptyToUndefined(
+      process.env.ZKP_TALLY_WORKER_MAX_ATTEMPTS,
+    ),
+    ZKP_TALLY_WORKER_RETRY_DELAY_MS: emptyToUndefined(
+      process.env.ZKP_TALLY_WORKER_RETRY_DELAY_MS,
+    ),
+    ZKP_TALLY_WORKER_HEARTBEAT_STALE_MS: emptyToUndefined(
+      process.env.ZKP_TALLY_WORKER_HEARTBEAT_STALE_MS,
+    ),
+    ZKP_TALLY_WORKER_REQUIRED_FOR_PRODUCTION: emptyToUndefined(
+      process.env.ZKP_TALLY_WORKER_REQUIRED_FOR_PRODUCTION,
     ),
   });
 
