@@ -42,6 +42,7 @@ describe("poll result publication mode contract", () => {
     expect(worker).toContain("await polls.closeExpiredPolls?.()");
     expect(worker).not.toContain("publishPollAudit");
     expect(worker).toContain("final publication is delegated to the main backend");
+    expect(worker).toContain("SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY");
     expect(publisher).toContain("publishPollAudit");
     expect(publisher).toContain('poll.result_publication_mode === "auto_on_close"');
     expect(server).toContain("createZkpAutoResultPublisherService");

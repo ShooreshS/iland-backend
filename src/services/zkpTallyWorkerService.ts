@@ -273,6 +273,11 @@ export const createZkpTallyWorkerService = (
       if (env.zkp.tallyWorker.proverMode !== "worker") {
         throw new Error("ZKP_TALLY_PROVER_MODE must be worker for the worker.");
       }
+      if (!env.supabase.enabled) {
+        throw new Error(
+          "ZKP tally worker requires SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY. Copy both variables into the Railway worker service.",
+        );
+      }
 
       let stopping = false;
       const stop = async (signal: NodeJS.Signals) => {
