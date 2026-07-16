@@ -13,6 +13,7 @@ import type {
   PublicAuditInclusionProofResultDto,
   PublicAuditFinalResultPublicationDto,
   PublicAuditMerkleProofStepDto,
+  PublicAuditTallyJobDto,
   PublicAuditTallyProofSummaryDto,
   PublicAuditTreeKind,
   PublicAuditTreeSummaryDto,
@@ -54,6 +55,10 @@ import zkpAuditEventService, {
   ZKP_AUDIT_REJECTION_REASON_CODES,
   type ZkpAuditRejectionReasonCode,
 } from "./zkpAuditEventService";
+import zkpTallyJobService, {
+  mapZkpTallyJobToPublicDto,
+  resolvePublicTallyProofStatus,
+} from "./zkpTallyJobService";
 
 export const PUBLIC_AUDIT_VERSION = "civicos-public-audit-v1" as const;
 export const PUBLIC_AUDIT_RESULT_HASH_VERSION =
@@ -833,13 +838,14 @@ export const pollPublicAuditService = {
       return null;
     }
 
-    const [material, publishedRoots, finalResultEvent] = await Promise.all([
+    const [material, publishedRoots, finalResultEvent, tallyJob] = await Promise.all([
       loadPollAuditMaterial(poll),
       pollAuditRepository.listRootsByPollId(poll.id),
       pollAuditRepository.getLatestAuditEventByPollIdAndType(
         poll.id,
         "poll_final_result_published_on_chain",
       ),
+      zkpTallyJobService.getLatestJobForPoll(poll.id),
     ]);
     const rootCommits = publishedRoots
       .map((root) => mapRootCommit(root))
@@ -866,6 +872,13 @@ export const pollPublicAuditService = {
       isProductionZkpPoll(poll) &&
       isPollFinalResultPublishable(poll) &&
       material.acceptedVoteCount > 0;
+    const tallyProofStatus = resolvePublicTallyProofStatus({
+      productionPoll: isProductionZkpPoll(poll),
+      finalResultPublishable: isPollFinalResultPublishable(poll),
+      acceptedVoteCount: material.acceptedVoteCount,
+      hasVerifiedTallyProof: Boolean(material.tallyProof),
+      job: tallyJob,
+    });
     const publicationStatus =
       finalResultPublication ||
       (rootCommits.length > 0 && !finalResultPublicationRequired)
@@ -914,6 +927,8 @@ export const pollPublicAuditService = {
           : null,
       rootCommits,
       resultHash: material.resultHash,
+      tallyProofStatus,
+      tallyJob: mapZkpTallyJobToPublicDto(tallyJob),
       tallyProofHash: material.tallyProof?.tally_proof_hash ?? null,
       tallyPublicInputsHash:
         material.tallyProof?.tally_public_inputs_hash ?? null,
@@ -947,8 +962,9 @@ export const pollPublicAuditService = {
     | {
         success: true;
         message: string;
-        publication: SolanaAuditPublicationResult;
+        publication: SolanaAuditPublicationResult | null;
         audit: PublicPollAuditDto;
+        tallyJob?: PublicAuditTallyJobDto | null;
       }
     | {
         success: false;
@@ -957,6 +973,7 @@ export const pollPublicAuditService = {
           | "POLL_NOT_OWNED"
           | "NO_ACCEPTED_AUDIT_VOTES"
           | "TRANSACTIONS_DISABLED"
+          | "TALLY_PROVER_DISABLED"
           | "PUBLICATION_FAILED";
         message: string;
       }
@@ -1023,6 +1040,61 @@ export const pollPublicAuditService = {
       isPollFinalResultPublishable(poll) &&
       !material.tallyProof
     ) {
+      if (env.zkp.tallyWorker.proverMode === "worker") {
+        try {
+          const job = await zkpTallyJobService.enqueueForPoll({
+            pollId: poll.id,
+          });
+          const audit = await this.getPublicPollAudit(poll.id);
+          if (!audit) {
+            throw new Error("Queued tally proof audit could not be reloaded.");
+          }
+
+          return {
+            success: true,
+            message:
+              job.status === "running"
+                ? "Tally proof generation is already running. Reload audit status shortly."
+                : "Tally proof generation has been queued. Reload audit status shortly.",
+            publication: null,
+            audit,
+            tallyJob: mapZkpTallyJobToPublicDto(job),
+          };
+        } catch (error) {
+          await zkpAuditEventService.appendPublicationRejected({
+            pollId: poll.id,
+            reasonCode: ZKP_AUDIT_REJECTION_REASON_CODES.publicationFailed,
+            errorCode: "TALLY_PROOF_QUEUE_FAILED",
+            acceptedVoteCount: material.acceptedVoteCount,
+            resultHash: material.resultHash,
+          });
+          return {
+            success: false,
+            errorCode: "PUBLICATION_FAILED",
+            message:
+              error instanceof Error
+                ? error.message
+                : "Tally proof generation could not be queued.",
+          };
+        }
+      }
+
+      if (env.zkp.tallyWorker.proverMode === "disabled") {
+        await zkpAuditEventService.appendPublicationRejected({
+          pollId: poll.id,
+          reasonCode: ZKP_AUDIT_REJECTION_REASON_CODES.tallyProofInvalid,
+          errorCode: "TALLY_PROVER_DISABLED",
+          acceptedVoteCount: material.acceptedVoteCount,
+          resultHash: material.resultHash,
+        });
+        return {
+          success: false,
+          errorCode: "TALLY_PROVER_DISABLED",
+          message:
+            "Final result publication requires a verified tally proof, but tally proving is disabled.",
+        };
+      }
+
       const generatedTallyProof =
         await groth16TallyProverService.generateProofForPoll({
           poll,

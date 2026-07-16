@@ -75,6 +75,8 @@ const ZKP_ARTIFACT_RELEASE_STAGES = [
   "production_final",
 ] as const;
 
+const ZKP_TALLY_PROVER_MODES = ["inline", "worker", "disabled"] as const;
+
 const normalizeAndroidCertDigest = (value: string): string => {
   const trimmed = value.trim();
   const hexCandidate = trimmed.replace(/:/g, "");
@@ -186,6 +188,20 @@ const parsed = z
       .enum(ZKP_ARTIFACT_RELEASE_STAGES)
       .optional(),
     ZKP_PUBLIC_DEVNET_V0_1_CONFIRMED: z.string().optional(),
+    ZKP_TALLY_PROVER_MODE: z.enum(ZKP_TALLY_PROVER_MODES).optional(),
+    ZKP_TALLY_WORKER_ENABLED: z.string().optional(),
+    ZKP_TALLY_WORKER_ID: z.string().min(1).optional(),
+    ZKP_TALLY_WORKER_CONCURRENCY: z.coerce.number().int().min(1).optional(),
+    ZKP_TALLY_WORKER_POLL_INTERVAL_MS: z.coerce.number().int().min(250).optional(),
+    ZKP_TALLY_WORKER_LOCK_TIMEOUT_MS: z.coerce.number().int().min(1_000).optional(),
+    ZKP_TALLY_WORKER_MAX_ATTEMPTS: z.coerce.number().int().min(1).optional(),
+    ZKP_TALLY_WORKER_RETRY_DELAY_MS: z.coerce.number().int().min(0).optional(),
+    ZKP_TALLY_WORKER_HEARTBEAT_STALE_MS: z.coerce
+      .number()
+      .int()
+      .min(1_000)
+      .optional(),
+    ZKP_TALLY_WORKER_REQUIRED_FOR_PRODUCTION: z.string().optional(),
   })
   .superRefine((input, context) => {
     const hasUrl = Boolean(input.SUPABASE_URL);
@@ -968,6 +984,25 @@ const zkpPublicDevnetV01Confirmed =
   parsed.ZKP_PUBLIC_DEVNET_V0_1_CONFIRMED !== undefined
     ? toBoolean(parsed.ZKP_PUBLIC_DEVNET_V0_1_CONFIRMED)
     : false;
+const zkpTallyProverMode = parsed.ZKP_TALLY_PROVER_MODE ?? "inline";
+const zkpTallyWorkerEnabled =
+  parsed.ZKP_TALLY_WORKER_ENABLED !== undefined
+    ? toBoolean(parsed.ZKP_TALLY_WORKER_ENABLED)
+    : false;
+const zkpTallyWorkerConcurrency = parsed.ZKP_TALLY_WORKER_CONCURRENCY ?? 1;
+const zkpTallyWorkerPollIntervalMs =
+  parsed.ZKP_TALLY_WORKER_POLL_INTERVAL_MS ?? 5_000;
+const zkpTallyWorkerLockTimeoutMs =
+  parsed.ZKP_TALLY_WORKER_LOCK_TIMEOUT_MS ?? 600_000;
+const zkpTallyWorkerMaxAttempts = parsed.ZKP_TALLY_WORKER_MAX_ATTEMPTS ?? 3;
+const zkpTallyWorkerRetryDelayMs =
+  parsed.ZKP_TALLY_WORKER_RETRY_DELAY_MS ?? 60_000;
+const zkpTallyWorkerHeartbeatStaleMs =
+  parsed.ZKP_TALLY_WORKER_HEARTBEAT_STALE_MS ?? 120_000;
+const zkpTallyWorkerRequiredForProduction =
+  parsed.ZKP_TALLY_WORKER_REQUIRED_FOR_PRODUCTION !== undefined
+    ? toBoolean(parsed.ZKP_TALLY_WORKER_REQUIRED_FOR_PRODUCTION)
+    : false;
 const normalizeHex64Env = (value: string | undefined): string | null =>
   value ? value.trim().toLowerCase() : null;
 
@@ -1059,6 +1094,18 @@ export const env = Object.freeze({
       mode: zkpBallotCustodyMode,
       publicSecretBallotClaimsEnabled: zkpPublicSecretBallotClaimsEnabled,
       liveProvisionalResultsEnabled: zkpLiveProvisionalResultsEnabled,
+    }),
+    tallyWorker: Object.freeze({
+      proverMode: zkpTallyProverMode,
+      enabled: zkpTallyWorkerEnabled,
+      workerId: parsed.ZKP_TALLY_WORKER_ID ?? null,
+      concurrency: zkpTallyWorkerConcurrency,
+      pollIntervalMs: zkpTallyWorkerPollIntervalMs,
+      lockTimeoutMs: zkpTallyWorkerLockTimeoutMs,
+      maxAttempts: zkpTallyWorkerMaxAttempts,
+      retryDelayMs: zkpTallyWorkerRetryDelayMs,
+      heartbeatStaleMs: zkpTallyWorkerHeartbeatStaleMs,
+      requiredForProduction: zkpTallyWorkerRequiredForProduction,
     }),
     groth16: Object.freeze({
       voteVerifierEnabled: zkpGroth16VoteVerifierEnabled,

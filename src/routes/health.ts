@@ -24,8 +24,8 @@ const dbHealthRoute: RouteDefinition = {
 const zkpHealthRoute: RouteDefinition = {
   method: "GET",
   path: "/health/zkp",
-  handler: () => {
-    const result = getZkpHealthStatus();
+  handler: async () => {
+    const result = await getZkpHealthStatus();
     return json(result, result.ok ? 200 : 503);
   },
 };

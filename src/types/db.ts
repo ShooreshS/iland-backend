@@ -756,6 +756,50 @@ export type NewPollTallyProofRow = {
   verified_at?: string;
 };
 
+export type ZkpTallyJobStatus =
+  | "pending"
+  | "running"
+  | "succeeded"
+  | "failed"
+  | "cancelled";
+
+export type ZkpTallyJobRow = {
+  id: string;
+  poll_id: string;
+  status: ZkpTallyJobStatus;
+  priority: number;
+  attempts: number;
+  max_attempts: number;
+  locked_by: string | null;
+  locked_at: string | null;
+  next_attempt_at: string;
+  proof_public_inputs_hash: string | null;
+  tally_proof_hash: string | null;
+  result_hash: string | null;
+  error_code: string | null;
+  error_message: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type ZkpTallyWorkerHeartbeatStatus =
+  | "starting"
+  | "running"
+  | "idle"
+  | "stopping"
+  | "stopped"
+  | "error";
+
+export type ZkpTallyWorkerHeartbeatRow = {
+  worker_id: string;
+  host: string | null;
+  status: ZkpTallyWorkerHeartbeatStatus;
+  current_job_id: string | null;
+  message: string | null;
+  first_seen_at: string;
+  last_seen_at: string;
+};
+
 export type BackendAuditEventDecision =
   | "accepted"
   | "rejected"

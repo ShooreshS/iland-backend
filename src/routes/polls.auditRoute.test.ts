@@ -75,6 +75,8 @@ const sampleAudit: PublicPollAuditDto = {
   },
   rootCommits: [],
   resultHash: "6".repeat(64),
+  tallyProofStatus: "pending",
+  tallyJob: null,
   tallyProofHash: null,
   tallyPublicInputsHash: null,
   tallyProof: null,

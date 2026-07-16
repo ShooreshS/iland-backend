@@ -11,6 +11,7 @@ import {
 import { getGroth16TallyProverArtifactStatus } from "./groth16TallyProverService";
 import { getBallotCustodyPolicy } from "./ballotCustodyPolicyService";
 import { getZkpReleasePolicy } from "./zkpReleasePolicyService";
+import zkpTallyJobService from "./zkpTallyJobService";
 
 const startedAt = Date.now();
 
@@ -60,19 +61,28 @@ export const getSupabaseHealthStatus = async () => {
   };
 };
 
-export const getZkpHealthStatus = () => {
+export const getZkpHealthStatus = async () => {
   const vote = getGroth16VerifierConfig();
   const tally = getGroth16TallyVerifierConfig();
   const ballotCustody = getBallotCustodyPolicy();
   const releasePolicy = getZkpReleasePolicy();
+  const tallyWorker = await zkpTallyJobService.getQueueHealth();
   const voteConfigured = isGroth16VoteVerifierConfigured(vote);
   const tallyConfigured = isGroth16TallyVerifierConfigured(tally);
   const tallyProver = getGroth16TallyProverArtifactStatus(tally);
   const releaseGateOk =
     releasePolicy.releaseChannel === "private_beta" ||
     releasePolicy.gates.publicDevnetV01Allowed;
+  const tallyWorkerOk =
+    env.zkp.tallyWorker.proverMode !== "worker" ||
+    !env.zkp.tallyWorker.requiredForProduction ||
+    Boolean(tallyWorker.configured && tallyWorker.workerHeartbeatFresh);
   const ok =
-    voteConfigured && tallyConfigured && tallyProver.configured && releaseGateOk;
+    voteConfigured &&
+    tallyConfigured &&
+    tallyProver.configured &&
+    releaseGateOk &&
+    tallyWorkerOk;
 
   return {
     ok,
@@ -104,6 +114,7 @@ export const getZkpHealthStatus = () => {
         artifactManifestError: tally.tallyArtifactManifestError,
       },
       tallyGroth16Prover: tallyProver,
+      tallyWorker,
       releasePolicy,
       ballotCustody: {
         version: ballotCustody.version,

@@ -320,6 +320,7 @@ const auditPublishErrorStatusMap: Record<string, number> = {
   POLL_NOT_OWNED: 403,
   NO_ACCEPTED_AUDIT_VOTES: 409,
   TRANSACTIONS_DISABLED: 409,
+  TALLY_PROVER_DISABLED: 409,
   PUBLICATION_FAILED: 502,
 };
 

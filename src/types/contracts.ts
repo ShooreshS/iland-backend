@@ -198,6 +198,23 @@ export type PublicAuditTallyProofSummaryDto = {
   verifiedAt: string;
 };
 
+export type PublicAuditTallyProofStatus =
+  | "not_required"
+  | "pending"
+  | "running"
+  | "verified"
+  | "failed";
+
+export type PublicAuditTallyJobDto = {
+  status: "pending" | "running" | "succeeded" | "failed" | "cancelled";
+  attempts: number;
+  maxAttempts: number;
+  nextAttemptAt: string | null;
+  updatedAt: string;
+  errorCode: string | null;
+  errorMessage: string | null;
+};
+
 export type PublicAuditFinalResultPublicationDto = {
   status: "published_on_chain";
   finalResultAddress: string | null;
@@ -229,6 +246,8 @@ export type PublicPollAuditDto = {
   computedCurrentRootBatch: PublicAuditComputedRootBatchDto | null;
   rootCommits: PublicAuditRootCommitDto[];
   resultHash: string;
+  tallyProofStatus: PublicAuditTallyProofStatus;
+  tallyJob: PublicAuditTallyJobDto | null;
   tallyProofHash: string | null;
   tallyPublicInputsHash: string | null;
   tallyProof: PublicAuditTallyProofSummaryDto | null;
