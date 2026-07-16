@@ -40,7 +40,13 @@ const emptyToUndefined = (value: unknown): string | undefined => {
 };
 
 const toBoolean = (value: string): boolean => {
-  const normalized = value.trim().toLowerCase();
+  const trimmed = value.trim();
+  const unquoted =
+    (trimmed.startsWith('"') && trimmed.endsWith('"')) ||
+    (trimmed.startsWith("'") && trimmed.endsWith("'"))
+      ? trimmed.slice(1, -1)
+      : trimmed;
+  const normalized = unquoted.trim().toLowerCase();
   return normalized === "1" || normalized === "true" || normalized === "yes";
 };
 

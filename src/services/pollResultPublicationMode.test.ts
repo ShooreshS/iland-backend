@@ -41,4 +41,13 @@ describe("poll result publication mode contract", () => {
     expect(worker).toContain("publishPollAudit");
     expect(worker).toContain("Tally proof was verified and recorded.");
   });
+
+  it("keeps worker runner from overriding Solana publication env", () => {
+    const runner = readProject("scripts", "run-zkp-tally-worker.ts");
+    const envSource = readSrc("config", "env.ts");
+
+    expect(runner).toContain('process.env.ILAND_ENV_VALIDATION_SCOPE ||= "supabase-admin-script"');
+    expect(runner).not.toContain('SOLANA_AUDIT_TRANSACTIONS_ENABLED = "false"');
+    expect(envSource).toContain("trimmed.startsWith('\"') && trimmed.endsWith('\"')");
+  });
 });
