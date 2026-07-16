@@ -19,6 +19,7 @@ import {
   CIVIC_TALLY_PROOF_ENVELOPE_VERSION,
   CIVIC_TALLY_PUBLIC_INPUT_SCHEMA_VERSION,
   encodeGroth16TallyPublicSignals,
+  getGroth16TallyVerifierConfig,
   hashGroth16TallyOptionCounts,
   hashGroth16TallyPublicInputs,
   isGroth16TallyVerifierConfigured,
@@ -53,6 +54,35 @@ const fixtureManifestHash = readFileSync(
 const fixtureEnvelope = JSON.parse(
   readFileSync(new URL("encrypted_choice_tally.envelope.json", fixtureUrl), "utf8"),
 ) as Groth16TallyProofEnvelopeDto;
+
+const withEnv = async <T>(
+  values: Record<string, string | undefined>,
+  fn: () => Promise<T> | T,
+): Promise<T> => {
+  const previous = new Map<string, string | undefined>();
+  for (const key of Object.keys(values)) {
+    previous.set(key, process.env[key]);
+    const value = values[key];
+    if (value === undefined) {
+      delete process.env[key];
+    } else {
+      process.env[key] = value;
+    }
+  }
+
+  try {
+    return await fn();
+  } finally {
+    for (const [key, value] of previous.entries()) {
+      if (value === undefined) {
+        delete process.env[key];
+      } else {
+        process.env[key] = value;
+      }
+    }
+  }
+};
+
 const createPoll = (overrides: Partial<PollRow> = {}): PollRow => ({
   id: "poll-1",
   slug: "poll-1",
@@ -208,6 +238,25 @@ const createProof = async (
 };
 
 describe("groth16TallyProofVerifierService", () => {
+  it("normalizes wrapped Railway tally verifier env values", async () => {
+    await withEnv(
+      {
+        ZKP_GROTH16_TALLY_VERIFIER_ENABLED: '"true"',
+        ZKP_GROTH16_TALLY_CIRCUIT_ID: `"${fixtureManifest.circuitId}"`,
+        ZKP_GROTH16_TALLY_VERIFIER_KEY_HASH: `"${fixtureManifest.verifierKeyHash}"`,
+        ZKP_GROTH16_TALLY_PUBLIC_INPUT_SCHEMA_VERSION: `"${fixtureManifest.publicInputSchemaVersion}"`,
+        ZKP_GROTH16_TALLY_TRUSTED_SETUP_TRANSCRIPT_HASH: `"${fixtureManifest.trustedSetupTranscriptHash}"`,
+        ZKP_GROTH16_TALLY_ARTIFACT_MANIFEST_PATH: `"${fixtureManifestPath.pathname}"`,
+        ZKP_GROTH16_TALLY_ARTIFACT_MANIFEST_HASH: `"${fixtureManifestHash}"`,
+      },
+      () => {
+        const config = getGroth16TallyVerifierConfig();
+        expect(config.tallyArtifactManifestError).toBeNull();
+        expect(isGroth16TallyVerifierConfigured(config)).toBe(true);
+      },
+    );
+  });
+
   it("reports tally verifier configuration readiness", () => {
     expect(isGroth16TallyVerifierConfigured(configuredVerifier)).toBe(true);
     expect(

@@ -130,7 +130,13 @@ const parsePositiveIntegerEnv = (
     return fallback;
   }
 
-  const parsed = Number.parseInt(raw, 10);
+  const trimmed = raw.trim();
+  const normalized =
+    (trimmed.startsWith('"') && trimmed.endsWith('"')) ||
+    (trimmed.startsWith("'") && trimmed.endsWith("'"))
+      ? trimmed.slice(1, -1)
+      : trimmed;
+  const parsed = Number.parseInt(normalized, 10);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
 };
 
@@ -236,6 +242,40 @@ const getSnarkjsCliVersion = (): string | null => {
     }
     return null;
   }
+};
+
+const describeTallyVerifierConfigIssue = (
+  config: Groth16TallyVerifierConfig,
+): string => {
+  const missing = [
+    config.tallyVerifierEnabled ? null : "ZKP_GROTH16_TALLY_VERIFIER_ENABLED",
+    config.tallyCircuitId ? null : "ZKP_GROTH16_TALLY_CIRCUIT_ID",
+    config.tallyVerifierKeyHash ? null : "ZKP_GROTH16_TALLY_VERIFIER_KEY_HASH",
+    config.tallyPublicInputSchemaVersion
+      ? null
+      : "ZKP_GROTH16_TALLY_PUBLIC_INPUT_SCHEMA_VERSION",
+    config.tallyTrustedSetupTranscriptHash
+      ? null
+      : "ZKP_GROTH16_TALLY_TRUSTED_SETUP_TRANSCRIPT_HASH",
+    config.tallyArtifactManifestPath
+      ? null
+      : "ZKP_GROTH16_TALLY_ARTIFACT_MANIFEST_PATH",
+    config.tallyArtifactManifestHash
+      ? null
+      : "ZKP_GROTH16_TALLY_ARTIFACT_MANIFEST_HASH",
+  ].filter(Boolean);
+
+  const parts = [
+    missing.length > 0 ? `missing=${missing.join(",")}` : null,
+    `manifestStatus=${config.tallyArtifactManifestStatus}`,
+    config.tallyArtifactManifestError
+      ? `manifestError=${config.tallyArtifactManifestError}`
+      : null,
+  ].filter(Boolean);
+
+  return parts.length > 0
+    ? `Groth16 tally verifier/artifact manifest is not configured (${parts.join("; ")}).`
+    : "Groth16 tally verifier/artifact manifest is not configured.";
 };
 
 const orderedActiveOptions = (
@@ -760,7 +800,7 @@ export const getGroth16TallyProverArtifactStatus = (
       snarkjsCliReady,
       commandTimeoutMs,
       nodeMaxOldSpaceMb,
-      message: "Groth16 tally verifier/artifact manifest is not configured.",
+      message: describeTallyVerifierConfigIssue(config),
     };
   }
 

@@ -155,18 +155,33 @@ export type Groth16ProofVerifierDependencies = {
 const sha256Hex = (value: string): string =>
   createHash("sha256").update(value, "utf8").digest("hex");
 
+const stripWrappingQuotes = (value: string): string => {
+  const trimmed = value.trim();
+  if (
+    (trimmed.startsWith('"') && trimmed.endsWith('"')) ||
+    (trimmed.startsWith("'") && trimmed.endsWith("'"))
+  ) {
+    return trimmed.slice(1, -1);
+  }
+
+  return trimmed;
+};
+
 const normalizeHex64 = (value: string | null | undefined): string | null => {
-  const normalized = typeof value === "string" ? value.trim().toLowerCase() : "";
+  const normalized =
+    typeof value === "string" ? stripWrappingQuotes(value).toLowerCase() : "";
   return HEX_64_PATTERN.test(normalized) ? normalized : null;
 };
 
 const normalizeOptionalString = (value: string | undefined): string | null => {
-  const normalized = typeof value === "string" ? value.trim() : "";
+  const normalized =
+    typeof value === "string" ? stripWrappingQuotes(value).trim() : "";
   return normalized.length > 0 ? normalized : null;
 };
 
 const toBoolean = (value: string | undefined): boolean => {
-  const normalized = typeof value === "string" ? value.trim().toLowerCase() : "";
+  const normalized =
+    typeof value === "string" ? stripWrappingQuotes(value).toLowerCase() : "";
   return normalized === "1" || normalized === "true" || normalized === "yes";
 };
 

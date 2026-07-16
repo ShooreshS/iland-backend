@@ -7,6 +7,7 @@ process.env.ILAND_ENV_VALIDATION_SCOPE ||= "supabase-admin-script";
 process.env.SOLANA_AUDIT_TRANSACTIONS_ENABLED = "false";
 process.env.ZKP_TALLY_PROVER_MODE = "worker";
 process.env.ZKP_TALLY_WORKER_ENABLED = "true";
+process.env.ZKP_GROTH16_TALLY_VERIFIER_ENABLED = "true";
 
 const { zkpTallyWorkerService } = await import(
   "../src/services/zkpTallyWorkerService"
