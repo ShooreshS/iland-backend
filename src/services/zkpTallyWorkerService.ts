@@ -37,10 +37,7 @@ export type ZkpTallyWorkerDependencies = Readonly<{
     "getLatestByPollId"
   >;
   tallyProverLike?: Pick<typeof groth16TallyProverService, "generateProofForPoll">;
-  publicAuditServiceLike?: Pick<
-    typeof pollPublicAuditService,
-    "submitTallyProof" | "publishPollAudit"
-  >;
+  publicAuditServiceLike?: Pick<typeof pollPublicAuditService, "submitTallyProof">;
   sleepFn?: (ms: number) => Promise<void>;
 }>;
 
@@ -185,28 +182,6 @@ export const createZkpTallyWorkerService = (
 
       const existingTallyProof = await tallyProofs.getLatestByPollId(poll.id);
       if (existingTallyProof) {
-        const published = await publicAudit.publishPollAudit({
-          pollId: poll.id,
-          viewerUserId: poll.created_by_user_id,
-        });
-        if (!published.success) {
-          const failed = await failJob({
-            repository,
-            job,
-            workerId,
-            errorCode: published.errorCode,
-            message: published.message,
-            retryable: classifyRetryable(published.errorCode, published.message),
-          });
-          return {
-            claimed: true,
-            jobId: job.id,
-            pollId: poll.id,
-            status: failed.status === "failed" ? "failed" : "pending",
-            message: published.message,
-          };
-        }
-
         const completed = await repository.complete({
           jobId: job.id,
           workerId,
@@ -219,7 +194,7 @@ export const createZkpTallyWorkerService = (
           jobId: completed.id,
           pollId: completed.poll_id,
           status: "succeeded",
-          message: "Verified tally proof was already recorded.",
+          message: "Verified tally proof was already recorded; final publication is delegated to the main backend.",
         };
       }
 
@@ -269,28 +244,6 @@ export const createZkpTallyWorkerService = (
         };
       }
 
-      const published = await publicAudit.publishPollAudit({
-        pollId: poll.id,
-        viewerUserId: poll.created_by_user_id,
-      });
-      if (!published.success) {
-        const failed = await failJob({
-          repository,
-          job,
-          workerId,
-          errorCode: published.errorCode,
-          message: published.message,
-          retryable: classifyRetryable(published.errorCode, published.message),
-        });
-        return {
-          claimed: true,
-          jobId: job.id,
-          pollId: poll.id,
-          status: failed.status === "failed" ? "failed" : "pending",
-          message: published.message,
-        };
-      }
-
       const completed = await repository.complete({
         jobId: job.id,
         workerId,
@@ -309,7 +262,7 @@ export const createZkpTallyWorkerService = (
         jobId: completed.id,
         pollId: completed.poll_id,
         status: "succeeded",
-        message: "Tally proof was verified and recorded.",
+        message: "Tally proof was verified and recorded; final publication is delegated to the main backend.",
       };
     },
 

@@ -148,6 +148,24 @@ export const zkpTallyJobRepository = {
     return data || null;
   },
 
+  async listSucceeded(input: { limit?: number } = {}): Promise<ZkpTallyJobRow[]> {
+    const supabase = requireSupabaseAdminClient();
+    const { data, error } = await supabase
+      .from("zkp_tally_jobs")
+      .select(ZKP_TALLY_JOB_COLUMNS)
+      .eq("status", "succeeded")
+      .order("updated_at", { ascending: false })
+      .order("created_at", { ascending: false })
+      .limit(input.limit ?? 25)
+      .returns<ZkpTallyJobRow[]>();
+
+    if (error) {
+      throw error;
+    }
+
+    return data || [];
+  },
+
   async getQueueCounts(): Promise<ZkpTallyQueueStatusCounts> {
     const supabase = requireSupabaseAdminClient();
     const counts = { ...EMPTY_COUNTS };

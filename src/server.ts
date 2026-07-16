@@ -3,6 +3,7 @@ import { withErrorHandling } from "./middleware/errorHandler";
 import { json } from "./middleware/json";
 import { withRequestLogging } from "./middleware/requestLogger";
 import { resolveRoute } from "./routes";
+import { createZkpAutoResultPublisherService } from "./services/zkpAutoResultPublisherService";
 import { createPollMapRefreshWorker } from "./services/pollMapRefreshWorker";
 import type { RouteHandler } from "./types/http";
 
@@ -39,6 +40,16 @@ if (env.pollMapRefreshWorker.enabled) {
   pollMapRefreshWorker.start();
 } else {
   console.info("[pollMapRefreshWorker] disabled");
+}
+
+const zkpAutoResultPublisher = createZkpAutoResultPublisherService();
+if (
+  env.solanaAudit.transactionsEnabled &&
+  env.zkp.tallyWorker.proverMode === "worker"
+) {
+  zkpAutoResultPublisher.start();
+} else {
+  console.info("[zkpAutoResultPublisher] disabled");
 }
 
 const server = Bun.serve({

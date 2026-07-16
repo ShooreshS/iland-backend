@@ -26,28 +26,34 @@ describe("poll result publication mode contract", () => {
     expect(draftService).toContain('DEFAULT_RESULT_PUBLICATION_MODE = "auto_on_close"');
   });
 
-  it("queues automatic closed-poll tally jobs and worker publishes after proof", () => {
+  it("queues automatic closed-poll tally jobs and keeps publication out of the tally worker", () => {
     const migration = readProject(
       "supabase",
       "migrations",
       "20260716150000_add_poll_result_publication_mode.sql",
     );
     const worker = readSrc("services", "zkpTallyWorkerService.ts");
+    const publisher = readSrc("services", "zkpAutoResultPublisherService.ts");
+    const server = readSrc("server.ts");
 
     expect(migration).toContain("polls_enqueue_auto_result_publication_tally_job");
     expect(migration).toContain("new.result_publication_mode = 'auto_on_close'");
     expect(migration).toContain("perform public.enqueue_zkp_tally_job");
     expect(worker).toContain("await polls.closeExpiredPolls?.()");
-    expect(worker).toContain("publishPollAudit");
-    expect(worker).toContain("Tally proof was verified and recorded.");
+    expect(worker).not.toContain("publishPollAudit");
+    expect(worker).toContain("final publication is delegated to the main backend");
+    expect(publisher).toContain("publishPollAudit");
+    expect(publisher).toContain('poll.result_publication_mode === "auto_on_close"');
+    expect(server).toContain("createZkpAutoResultPublisherService");
+    expect(server).toContain("env.solanaAudit.transactionsEnabled");
   });
 
-  it("keeps worker runner from overriding Solana publication env", () => {
+  it("keeps worker runner from requiring Solana publication env", () => {
     const runner = readProject("scripts", "run-zkp-tally-worker.ts");
     const envSource = readSrc("config", "env.ts");
 
     expect(runner).toContain('process.env.ILAND_ENV_VALIDATION_SCOPE ||= "supabase-admin-script"');
-    expect(runner).not.toContain('SOLANA_AUDIT_TRANSACTIONS_ENABLED = "false"');
+    expect(runner).toContain('process.env.SOLANA_AUDIT_TRANSACTIONS_ENABLED = "false"');
     expect(envSource).toContain("trimmed.startsWith('\"') && trimmed.endsWith('\"')");
   });
 });
