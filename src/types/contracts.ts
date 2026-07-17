@@ -13,6 +13,14 @@ export type PollModerationStatus =
   | "appeal_approved"
   | "appeal_rejected";
 
+export type ContentModerationStatus = PollModerationStatus;
+
+export type DiscussionPostType =
+  | "discussion"
+  | "question"
+  | "proposal"
+  | "announcement";
+
 export type PollJurisdictionType =
   | "global"
   | "real_country"
@@ -131,6 +139,99 @@ export type ViewerVoteSummaryDto = {
   pollId: string;
   optionId: string;
   submittedAt: string;
+};
+
+export type DiscussionImageInputDto = {
+  imageUrl: string;
+  mimeType?: string | null;
+  sizeBytes?: number | null;
+  altText?: string | null;
+};
+
+export type CreateDiscussionPostRequestDto = {
+  postType: DiscussionPostType;
+  caption?: string | null;
+  image?: DiscussionImageInputDto | null;
+};
+
+export type DiscussionPostDto = {
+  id: string;
+  authorUserId: string;
+  authorNickname: string | null;
+  postType: DiscussionPostType;
+  caption: string | null;
+  imageUrl: string | null;
+  imageMimeType: string | null;
+  imageSizeBytes: number | null;
+  imageAltText: string | null;
+  moderationStatus: ContentModerationStatus;
+  moderationModel: string | null;
+  moderationFlagged: boolean | null;
+  moderatedAt: string | null;
+  moderationPolicyVersion: string | null;
+  likeCount: number;
+  commentCount: number;
+  feedScore: number;
+  viewerHasLiked: boolean;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type DiscussionCommentDto = {
+  id: string;
+  postId: string;
+  authorUserId: string;
+  authorNickname: string | null;
+  body: string;
+  moderationStatus: ContentModerationStatus;
+  moderationModel: string | null;
+  moderationFlagged: boolean | null;
+  moderatedAt: string | null;
+  moderationPolicyVersion: string | null;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type DiscussionMutationErrorCode =
+  | "USER_NOT_FOUND"
+  | "VERIFIED_IDENTITY_REQUIRED"
+  | "POST_NOT_FOUND"
+  | "VALIDATION_FAILED"
+  | "MODERATION_FAILED";
+
+export type DiscussionPostListDto = {
+  posts: DiscussionPostDto[];
+};
+
+export type CreateDiscussionPostResultDto = {
+  success: boolean;
+  post?: DiscussionPostDto;
+  errorCode?: DiscussionMutationErrorCode;
+  message?: string;
+};
+
+export type DiscussionCommentListDto = {
+  comments: DiscussionCommentDto[];
+};
+
+export type CreateDiscussionCommentRequestDto = {
+  body: string;
+};
+
+export type CreateDiscussionCommentResultDto = {
+  success: boolean;
+  comment?: DiscussionCommentDto;
+  errorCode?: DiscussionMutationErrorCode;
+  message?: string;
+};
+
+export type DiscussionLikeResultDto = {
+  success: boolean;
+  postId?: string;
+  liked?: boolean;
+  likeCount?: number;
+  errorCode?: DiscussionMutationErrorCode;
+  message?: string;
 };
 
 export type PollOptionResultDto = {

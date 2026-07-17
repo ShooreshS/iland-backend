@@ -1,4 +1,5 @@
 import type {
+  DiscussionPostType,
   PollJurisdictionType,
   PollModerationStatus,
   PollResultPublicationMode,
@@ -559,6 +560,113 @@ export type NewPollOptionRow = {
   display_order: number;
   is_active: boolean;
   created_at?: string;
+};
+
+export type DiscussionPostRow = {
+  id: string;
+  author_user_id: string;
+  author_public_nickname: string | null;
+  post_type: DiscussionPostType;
+  caption: string | null;
+  image_url: string | null;
+  image_mime_type: string | null;
+  image_size_bytes: number | null;
+  image_alt_text: string | null;
+  moderation_status: PollModerationStatus;
+  moderation_model: string | null;
+  moderation_flagged: boolean | null;
+  moderation_categories: JsonValue | null;
+  moderation_category_scores: JsonValue | null;
+  moderation_applied_input_types: JsonValue | null;
+  moderation_raw: JsonValue | null;
+  moderated_at: string | null;
+  moderation_error: string | null;
+  moderation_policy_version: string | null;
+  gate2_status: string | null;
+  gate2_model: string | null;
+  gate2_result: JsonValue | null;
+  human_review_status: string | null;
+  human_review_decision: string | null;
+  human_reviewed_at: string | null;
+  like_count: number;
+  comment_count: number;
+  feed_score: number;
+  deliberation_id: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type NewDiscussionPostRow = {
+  id?: string;
+  author_user_id: string;
+  author_public_nickname?: string | null;
+  post_type: DiscussionPostType;
+  caption?: string | null;
+  image_url?: string | null;
+  image_mime_type?: string | null;
+  image_size_bytes?: number | null;
+  image_alt_text?: string | null;
+  moderation_status: PollModerationStatus;
+  moderation_model?: string | null;
+  moderation_flagged?: boolean | null;
+  moderation_categories?: JsonValue | null;
+  moderation_category_scores?: JsonValue | null;
+  moderation_applied_input_types?: JsonValue | null;
+  moderation_raw?: JsonValue | null;
+  moderated_at?: string | null;
+  moderation_error?: string | null;
+  moderation_policy_version?: string | null;
+  gate2_status?: string | null;
+  gate2_model?: string | null;
+  gate2_result?: JsonValue | null;
+  human_review_status?: string | null;
+  human_review_decision?: string | null;
+  human_reviewed_at?: string | null;
+  deliberation_id?: string | null;
+};
+
+export type DiscussionCommentRow = {
+  id: string;
+  post_id: string;
+  author_user_id: string;
+  author_public_nickname: string | null;
+  body: string;
+  moderation_status: PollModerationStatus;
+  moderation_model: string | null;
+  moderation_flagged: boolean | null;
+  moderation_categories: JsonValue | null;
+  moderation_category_scores: JsonValue | null;
+  moderation_applied_input_types: JsonValue | null;
+  moderation_raw: JsonValue | null;
+  moderated_at: string | null;
+  moderation_error: string | null;
+  moderation_policy_version: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type NewDiscussionCommentRow = {
+  id?: string;
+  post_id: string;
+  author_user_id: string;
+  author_public_nickname?: string | null;
+  body: string;
+  moderation_status: PollModerationStatus;
+  moderation_model?: string | null;
+  moderation_flagged?: boolean | null;
+  moderation_categories?: JsonValue | null;
+  moderation_category_scores?: JsonValue | null;
+  moderation_applied_input_types?: JsonValue | null;
+  moderation_raw?: JsonValue | null;
+  moderated_at?: string | null;
+  moderation_error?: string | null;
+  moderation_policy_version?: string | null;
+};
+
+export type DiscussionPostLikeRow = {
+  post_id: string;
+  user_id: string;
+  created_at: string;
 };
 
 export type PollEncryptionKeyRow = {

@@ -1,0 +1,470 @@
+import { randomUUID } from "node:crypto";
+import discussionRepository from "../repositories/discussionRepository";
+import userRepository from "../repositories/userRepository";
+import verifiedIdentityRepository from "../repositories/verifiedIdentityRepository";
+import {
+  contentModerationService,
+  type ModeratePostResult,
+} from "./contentModerationService";
+import { validateModerationGate0 } from "./contentModerationGate0Service";
+import type {
+  CreateDiscussionCommentRequestDto,
+  CreateDiscussionCommentResultDto,
+  CreateDiscussionPostRequestDto,
+  CreateDiscussionPostResultDto,
+  DiscussionCommentDto,
+  DiscussionCommentListDto,
+  DiscussionImageInputDto,
+  DiscussionLikeResultDto,
+  DiscussionMutationErrorCode,
+  DiscussionPostDto,
+  DiscussionPostListDto,
+  DiscussionPostType,
+} from "../types/contracts";
+import type {
+  DiscussionCommentRow,
+  DiscussionPostRow,
+  UserRow,
+  VerifiedIdentityRow,
+} from "../types/db";
+
+const DISCUSSION_POST_TYPES = new Set<DiscussionPostType>([
+  "discussion",
+  "question",
+  "proposal",
+  "announcement",
+]);
+
+const DEFAULT_POST_LIMIT = 50;
+const MAX_POST_LIMIT = 100;
+const DEFAULT_COMMENT_LIMIT = 100;
+const MAX_COMMENT_LIMIT = 200;
+
+const MODERATION_USER_MESSAGES: Record<
+  ModeratePostResult["decision"],
+  string | null
+> = {
+  allow: null,
+  review_required:
+    "Your discussion needs additional review before it can be published.",
+  blocked:
+    "This discussion could not be published because it appears to violate CivicOS safety rules.",
+  moderation_error:
+    "We could not complete moderation. The discussion has not been published.",
+};
+
+const COMMENT_MODERATION_USER_MESSAGES: Record<
+  ModeratePostResult["decision"],
+  string | null
+> = {
+  allow: null,
+  review_required:
+    "Your comment needs additional review before it can be published.",
+  blocked:
+    "This comment could not be published because it appears to violate CivicOS safety rules.",
+  moderation_error:
+    "We could not complete moderation. The comment has not been published.",
+};
+
+type ImageResolver = (
+  input: DiscussionImageInputDto | null,
+) => Promise<DiscussionImageInputDto | null>;
+
+type DiscussionServiceDependencies = {
+  discussionRepositoryLike?: typeof discussionRepository;
+  userRepositoryLike?: Pick<typeof userRepository, "getById">;
+  verifiedIdentityRepositoryLike?: Pick<typeof verifiedIdentityRepository, "getByUserId">;
+  moderationServiceLike?: Pick<typeof contentModerationService, "moderatePost">;
+  imageResolver?: ImageResolver;
+};
+
+const normalizeText = (value: unknown): string | null => {
+  if (typeof value !== "string") {
+    return null;
+  }
+
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : null;
+};
+
+const normalizePostType = (value: unknown): DiscussionPostType =>
+  DISCUSSION_POST_TYPES.has(value as DiscussionPostType)
+    ? (value as DiscussionPostType)
+    : "discussion";
+
+const normalizeLimit = (
+  value: number | null | undefined,
+  fallback: number,
+  max: number,
+): number => {
+  if (!Number.isFinite(value)) {
+    return fallback;
+  }
+
+  return Math.min(max, Math.max(1, Math.trunc(value as number)));
+};
+
+const getAuthorNickname = (user: UserRow): string | null =>
+  user.public_nickname || user.display_name || user.username || null;
+
+const createFailure = <T extends { success: boolean }>(
+  errorCode: DiscussionMutationErrorCode,
+  message: string,
+): T =>
+  ({
+    success: false,
+    errorCode,
+    message,
+  }) as unknown as T;
+
+const resolveImageMetadataFromUrl: ImageResolver = async (input) => {
+  const imageUrl = normalizeText(input?.imageUrl);
+  if (!imageUrl) {
+    return null;
+  }
+
+  let mimeType = normalizeText(input?.mimeType)?.toLowerCase() || null;
+  let sizeBytes =
+    Number.isInteger(input?.sizeBytes) && Number(input?.sizeBytes) > 0
+      ? Number(input?.sizeBytes)
+      : null;
+
+  if (!mimeType || !sizeBytes) {
+    try {
+      const response = await fetch(imageUrl, { method: "HEAD" });
+      mimeType =
+        mimeType ||
+        normalizeText(response.headers.get("content-type"))?.split(";")[0]?.toLowerCase() ||
+        null;
+      const contentLength = Number(response.headers.get("content-length"));
+      sizeBytes =
+        sizeBytes || (Number.isInteger(contentLength) && contentLength > 0
+          ? contentLength
+          : null);
+    } catch {
+      // Gate 0 will return a user-safe metadata error when HEAD cannot resolve it.
+    }
+  }
+
+  return {
+    imageUrl,
+    mimeType,
+    sizeBytes,
+    altText: normalizeText(input?.altText),
+  };
+};
+
+const mapPost = (
+  row: DiscussionPostRow,
+  viewerLikedPostIds = new Set<string>(),
+): DiscussionPostDto => ({
+  id: row.id,
+  authorUserId: row.author_user_id,
+  authorNickname: row.author_public_nickname,
+  postType: row.post_type,
+  caption: row.caption,
+  imageUrl: row.image_url,
+  imageMimeType: row.image_mime_type,
+  imageSizeBytes: row.image_size_bytes,
+  imageAltText: row.image_alt_text,
+  moderationStatus: row.moderation_status,
+  moderationModel: row.moderation_model,
+  moderationFlagged: row.moderation_flagged,
+  moderatedAt: row.moderated_at,
+  moderationPolicyVersion: row.moderation_policy_version,
+  likeCount: row.like_count,
+  commentCount: row.comment_count,
+  feedScore: row.feed_score,
+  viewerHasLiked: viewerLikedPostIds.has(row.id),
+  createdAt: row.created_at,
+  updatedAt: row.updated_at,
+});
+
+const mapComment = (row: DiscussionCommentRow): DiscussionCommentDto => ({
+  id: row.id,
+  postId: row.post_id,
+  authorUserId: row.author_user_id,
+  authorNickname: row.author_public_nickname,
+  body: row.body,
+  moderationStatus: row.moderation_status,
+  moderationModel: row.moderation_model,
+  moderationFlagged: row.moderation_flagged,
+  moderatedAt: row.moderated_at,
+  moderationPolicyVersion: row.moderation_policy_version,
+  createdAt: row.created_at,
+  updatedAt: row.updated_at,
+});
+
+const applyModeration = (moderation: ModeratePostResult) => ({
+  moderation_status: moderation.moderationStatus,
+  moderation_model: moderation.model,
+  moderation_flagged: moderation.flagged,
+  moderation_categories: moderation.categories,
+  moderation_category_scores: moderation.categoryScores,
+  moderation_applied_input_types: moderation.appliedInputTypes,
+  moderation_raw: moderation.raw,
+  moderated_at: moderation.moderatedAt,
+  moderation_error: moderation.error,
+  moderation_policy_version: moderation.policyVersion,
+});
+
+export const createDiscussionService = (
+  dependencies: DiscussionServiceDependencies = {},
+) => {
+  const repo = dependencies.discussionRepositoryLike || discussionRepository;
+  const userRepo = dependencies.userRepositoryLike || userRepository;
+  const verifiedIdentityRepo =
+    dependencies.verifiedIdentityRepositoryLike || verifiedIdentityRepository;
+  const moderationService =
+    dependencies.moderationServiceLike || contentModerationService;
+  const imageResolver = dependencies.imageResolver || resolveImageMetadataFromUrl;
+
+  const requireVerifiedCreator = async (
+    viewerUserId: string,
+  ): Promise<
+    | { ok: true; user: UserRow; verifiedIdentity: VerifiedIdentityRow }
+    | { ok: false; errorCode: DiscussionMutationErrorCode; message: string }
+  > => {
+    const [user, verifiedIdentity] = await Promise.all([
+      userRepo.getById(viewerUserId),
+      verifiedIdentityRepo.getByUserId(viewerUserId),
+    ]);
+
+    if (!user) {
+      return {
+        ok: false,
+        errorCode: "USER_NOT_FOUND",
+        message: "The current user could not be resolved.",
+      };
+    }
+
+    if (!verifiedIdentity) {
+      return {
+        ok: false,
+        errorCode: "VERIFIED_IDENTITY_REQUIRED",
+        message: "A verified identity is required for discussion publishing.",
+      };
+    }
+
+    return { ok: true, user, verifiedIdentity };
+  };
+
+  return {
+    async listPosts(
+      viewerUserId: string,
+      limit?: number | null,
+    ): Promise<DiscussionPostListDto> {
+      const rows = await repo.listPublishedPosts(
+        normalizeLimit(limit, DEFAULT_POST_LIMIT, MAX_POST_LIMIT),
+      );
+      const likedPostIds = await repo.getLikedPostIds(
+        viewerUserId,
+        rows.map((row) => row.id),
+      );
+
+      return {
+        posts: rows.map((row) => mapPost(row, likedPostIds)),
+      };
+    },
+
+    async createPost(
+      input: CreateDiscussionPostRequestDto,
+      viewerUserId: string,
+    ): Promise<CreateDiscussionPostResultDto> {
+      const creator = await requireVerifiedCreator(viewerUserId);
+      if (!creator.ok) {
+        return createFailure<CreateDiscussionPostResultDto>(
+          creator.errorCode,
+          creator.message,
+        );
+      }
+
+      const postId = randomUUID();
+      const caption = normalizeText(input.caption);
+      const image = await imageResolver(input.image ?? null);
+      const gate0 = validateModerationGate0({
+        body: caption,
+        image: image
+          ? {
+              imageUrl: image.imageUrl,
+              mimeType: image.mimeType,
+              sizeBytes: image.sizeBytes,
+              altText: image.altText,
+            }
+          : null,
+      });
+
+      if (!gate0.ok) {
+        return createFailure<CreateDiscussionPostResultDto>(
+          "VALIDATION_FAILED",
+          gate0.message,
+        );
+      }
+
+      const moderation = await moderationService.moderatePost({
+        postId,
+        body: caption,
+        imageUrl: image?.imageUrl,
+        imageAltText: image?.altText,
+      });
+      const stored = await repo.insertPost({
+        id: postId,
+        author_user_id: creator.user.id,
+        author_public_nickname: getAuthorNickname(creator.user),
+        post_type: normalizePostType(input.postType),
+        caption,
+        image_url: image?.imageUrl ?? null,
+        image_mime_type: image?.mimeType ?? null,
+        image_size_bytes: image?.sizeBytes ?? null,
+        image_alt_text: image?.altText ?? null,
+        ...applyModeration(moderation),
+      });
+
+      return {
+        success: true,
+        post: mapPost(stored),
+        ...(MODERATION_USER_MESSAGES[moderation.decision]
+          ? { message: MODERATION_USER_MESSAGES[moderation.decision] as string }
+          : null),
+      };
+    },
+
+    async listComments(
+      postId: string,
+      limit?: number | null,
+    ): Promise<DiscussionCommentListDto> {
+      const post = await repo.getPostById(postId);
+      if (!post || post.moderation_status !== "published") {
+        return { comments: [] };
+      }
+
+      const comments = await repo.listPublishedComments(
+        postId,
+        normalizeLimit(limit, DEFAULT_COMMENT_LIMIT, MAX_COMMENT_LIMIT),
+      );
+
+      return { comments: comments.map(mapComment) };
+    },
+
+    async createComment(
+      postId: string,
+      input: CreateDiscussionCommentRequestDto,
+      viewerUserId: string,
+    ): Promise<CreateDiscussionCommentResultDto> {
+      const creator = await requireVerifiedCreator(viewerUserId);
+      if (!creator.ok) {
+        return createFailure<CreateDiscussionCommentResultDto>(
+          creator.errorCode,
+          creator.message,
+        );
+      }
+
+      const post = await repo.getPostById(postId);
+      if (!post || post.moderation_status !== "published") {
+        return createFailure<CreateDiscussionCommentResultDto>(
+          "POST_NOT_FOUND",
+          "The discussion post could not be found.",
+        );
+      }
+
+      const body = normalizeText(input.body);
+      const gate0 = validateModerationGate0({ body });
+      if (!gate0.ok) {
+        return createFailure<CreateDiscussionCommentResultDto>(
+          "VALIDATION_FAILED",
+          gate0.message,
+        );
+      }
+
+      const commentId = randomUUID();
+      const moderation = await moderationService.moderatePost({
+        postId: commentId,
+        body,
+      });
+      const stored = await repo.insertComment({
+        id: commentId,
+        post_id: post.id,
+        author_user_id: creator.user.id,
+        author_public_nickname: getAuthorNickname(creator.user),
+        body: body as string,
+        ...applyModeration(moderation),
+      });
+
+      return {
+        success: true,
+        comment: mapComment(stored),
+        ...(COMMENT_MODERATION_USER_MESSAGES[moderation.decision]
+          ? { message: COMMENT_MODERATION_USER_MESSAGES[moderation.decision] as string }
+          : null),
+      };
+    },
+
+    async likePost(
+      postId: string,
+      viewerUserId: string,
+    ): Promise<DiscussionLikeResultDto> {
+      const creator = await requireVerifiedCreator(viewerUserId);
+      if (!creator.ok) {
+        return createFailure<DiscussionLikeResultDto>(
+          creator.errorCode,
+          creator.message,
+        );
+      }
+
+      const post = await repo.getPostById(postId);
+      if (!post || post.moderation_status !== "published") {
+        return createFailure<DiscussionLikeResultDto>(
+          "POST_NOT_FOUND",
+          "The discussion post could not be found.",
+        );
+      }
+
+      if (!(await repo.getLike(postId, viewerUserId))) {
+        await repo.insertLike(postId, viewerUserId);
+      }
+      const updated = await repo.getPostById(postId);
+
+      return {
+        success: true,
+        postId,
+        liked: true,
+        likeCount: updated?.like_count ?? post.like_count,
+      };
+    },
+
+    async unlikePost(
+      postId: string,
+      viewerUserId: string,
+    ): Promise<DiscussionLikeResultDto> {
+      const creator = await requireVerifiedCreator(viewerUserId);
+      if (!creator.ok) {
+        return createFailure<DiscussionLikeResultDto>(
+          creator.errorCode,
+          creator.message,
+        );
+      }
+
+      const post = await repo.getPostById(postId);
+      if (!post || post.moderation_status !== "published") {
+        return createFailure<DiscussionLikeResultDto>(
+          "POST_NOT_FOUND",
+          "The discussion post could not be found.",
+        );
+      }
+
+      await repo.deleteLike(postId, viewerUserId);
+      const updated = await repo.getPostById(postId);
+
+      return {
+        success: true,
+        postId,
+        liked: false,
+        likeCount: updated?.like_count ?? Math.max(post.like_count - 1, 0),
+      };
+    },
+  };
+};
+
+export const discussionService = createDiscussionService();
+
+export default discussionService;

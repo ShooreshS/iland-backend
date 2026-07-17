@@ -1,0 +1,215 @@
+import { requireSupabaseAdminClient } from "../db/supabaseClient";
+import type {
+  DiscussionCommentRow,
+  DiscussionPostLikeRow,
+  DiscussionPostRow,
+  NewDiscussionCommentRow,
+  NewDiscussionPostRow,
+} from "../types/db";
+
+const POST_COLUMNS =
+  "id,author_user_id,author_public_nickname,post_type,caption,image_url,image_mime_type,image_size_bytes,image_alt_text,moderation_status,moderation_model,moderation_flagged,moderation_categories,moderation_category_scores,moderation_applied_input_types,moderation_raw,moderated_at,moderation_error,moderation_policy_version,gate2_status,gate2_model,gate2_result,human_review_status,human_review_decision,human_reviewed_at,like_count,comment_count,feed_score,deliberation_id,created_at,updated_at";
+
+const COMMENT_COLUMNS =
+  "id,post_id,author_user_id,author_public_nickname,body,moderation_status,moderation_model,moderation_flagged,moderation_categories,moderation_category_scores,moderation_applied_input_types,moderation_raw,moderated_at,moderation_error,moderation_policy_version,created_at,updated_at";
+
+const buildPostPayload = (input: NewDiscussionPostRow) => ({
+  ...(input.id ? { id: input.id } : null),
+  author_user_id: input.author_user_id,
+  author_public_nickname: input.author_public_nickname ?? null,
+  post_type: input.post_type,
+  caption: input.caption ?? null,
+  image_url: input.image_url ?? null,
+  image_mime_type: input.image_mime_type ?? null,
+  image_size_bytes: input.image_size_bytes ?? null,
+  image_alt_text: input.image_alt_text ?? null,
+  moderation_status: input.moderation_status,
+  moderation_model: input.moderation_model ?? null,
+  moderation_flagged: input.moderation_flagged ?? null,
+  moderation_categories: input.moderation_categories ?? null,
+  moderation_category_scores: input.moderation_category_scores ?? null,
+  moderation_applied_input_types: input.moderation_applied_input_types ?? null,
+  moderation_raw: input.moderation_raw ?? null,
+  moderated_at: input.moderated_at ?? null,
+  moderation_error: input.moderation_error ?? null,
+  moderation_policy_version: input.moderation_policy_version ?? null,
+  gate2_status: input.gate2_status ?? null,
+  gate2_model: input.gate2_model ?? null,
+  gate2_result: input.gate2_result ?? null,
+  human_review_status: input.human_review_status ?? null,
+  human_review_decision: input.human_review_decision ?? null,
+  human_reviewed_at: input.human_reviewed_at ?? null,
+  deliberation_id: input.deliberation_id ?? null,
+});
+
+const buildCommentPayload = (input: NewDiscussionCommentRow) => ({
+  ...(input.id ? { id: input.id } : null),
+  post_id: input.post_id,
+  author_user_id: input.author_user_id,
+  author_public_nickname: input.author_public_nickname ?? null,
+  body: input.body,
+  moderation_status: input.moderation_status,
+  moderation_model: input.moderation_model ?? null,
+  moderation_flagged: input.moderation_flagged ?? null,
+  moderation_categories: input.moderation_categories ?? null,
+  moderation_category_scores: input.moderation_category_scores ?? null,
+  moderation_applied_input_types: input.moderation_applied_input_types ?? null,
+  moderation_raw: input.moderation_raw ?? null,
+  moderated_at: input.moderated_at ?? null,
+  moderation_error: input.moderation_error ?? null,
+  moderation_policy_version: input.moderation_policy_version ?? null,
+});
+
+export const discussionRepository = {
+  async listPublishedPosts(limit: number): Promise<DiscussionPostRow[]> {
+    const supabase = requireSupabaseAdminClient();
+    const { data, error } = await supabase
+      .from("discussion_posts")
+      .select(POST_COLUMNS)
+      .eq("moderation_status", "published")
+      .order("feed_score", { ascending: false })
+      .order("created_at", { ascending: false })
+      .order("id", { ascending: false })
+      .limit(limit);
+
+    if (error) {
+      throw error;
+    }
+
+    return data || [];
+  },
+
+  async getPostById(postId: string): Promise<DiscussionPostRow | null> {
+    const supabase = requireSupabaseAdminClient();
+    const { data, error } = await supabase
+      .from("discussion_posts")
+      .select(POST_COLUMNS)
+      .eq("id", postId)
+      .maybeSingle<DiscussionPostRow>();
+
+    if (error) {
+      throw error;
+    }
+
+    return data || null;
+  },
+
+  async insertPost(input: NewDiscussionPostRow): Promise<DiscussionPostRow> {
+    const supabase = requireSupabaseAdminClient();
+    const { data, error } = await supabase
+      .from("discussion_posts")
+      .insert(buildPostPayload(input))
+      .select(POST_COLUMNS)
+      .single<DiscussionPostRow>();
+
+    if (error) {
+      throw error;
+    }
+
+    return data;
+  },
+
+  async getLikedPostIds(
+    userId: string,
+    postIds: string[],
+  ): Promise<Set<string>> {
+    if (postIds.length === 0) {
+      return new Set();
+    }
+
+    const supabase = requireSupabaseAdminClient();
+    const { data, error } = await supabase
+      .from("discussion_post_likes")
+      .select("post_id")
+      .eq("user_id", userId)
+      .in("post_id", postIds);
+
+    if (error) {
+      throw error;
+    }
+
+    return new Set((data || []).map((row) => row.post_id as string));
+  },
+
+  async getLike(
+    postId: string,
+    userId: string,
+  ): Promise<DiscussionPostLikeRow | null> {
+    const supabase = requireSupabaseAdminClient();
+    const { data, error } = await supabase
+      .from("discussion_post_likes")
+      .select("post_id,user_id,created_at")
+      .eq("post_id", postId)
+      .eq("user_id", userId)
+      .maybeSingle<DiscussionPostLikeRow>();
+
+    if (error) {
+      throw error;
+    }
+
+    return data || null;
+  },
+
+  async insertLike(postId: string, userId: string): Promise<void> {
+    const supabase = requireSupabaseAdminClient();
+    const { error } = await supabase
+      .from("discussion_post_likes")
+      .insert({ post_id: postId, user_id: userId });
+
+    if (error && error.code !== "23505") {
+      throw error;
+    }
+  },
+
+  async deleteLike(postId: string, userId: string): Promise<void> {
+    const supabase = requireSupabaseAdminClient();
+    const { error } = await supabase
+      .from("discussion_post_likes")
+      .delete()
+      .eq("post_id", postId)
+      .eq("user_id", userId);
+
+    if (error) {
+      throw error;
+    }
+  },
+
+  async listPublishedComments(
+    postId: string,
+    limit: number,
+  ): Promise<DiscussionCommentRow[]> {
+    const supabase = requireSupabaseAdminClient();
+    const { data, error } = await supabase
+      .from("discussion_comments")
+      .select(COMMENT_COLUMNS)
+      .eq("post_id", postId)
+      .eq("moderation_status", "published")
+      .order("created_at", { ascending: true })
+      .limit(limit);
+
+    if (error) {
+      throw error;
+    }
+
+    return data || [];
+  },
+
+  async insertComment(
+    input: NewDiscussionCommentRow,
+  ): Promise<DiscussionCommentRow> {
+    const supabase = requireSupabaseAdminClient();
+    const { data, error } = await supabase
+      .from("discussion_comments")
+      .insert(buildCommentPayload(input))
+      .select(COMMENT_COLUMNS)
+      .single<DiscussionCommentRow>();
+
+    if (error) {
+      throw error;
+    }
+
+    return data;
+  },
+};
+
+export default discussionRepository;

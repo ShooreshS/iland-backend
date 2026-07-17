@@ -1,4 +1,5 @@
 import { authRoutes } from "./auth";
+import { discussionRoutes } from "./discussions";
 import { healthRoutes } from "./health";
 import { idpRoutes } from "./idp";
 import { mapRoutes } from "./map";
@@ -10,6 +11,7 @@ import type { ResolvedRoute, RouteDefinition } from "../types/http";
 
 export const routes: RouteDefinition[] = [
   ...authRoutes,
+  ...discussionRoutes,
   ...healthRoutes,
   ...idpRoutes,
   ...pollRoutes,
