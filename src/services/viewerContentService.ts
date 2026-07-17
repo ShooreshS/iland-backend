@@ -171,7 +171,10 @@ export const createViewerContentService = (
 
       const posts = await Promise.all(
         rows.map(async (row): Promise<ViewerDiscussionPostDto> => {
-          const latestReviewAction = latestActionsByPostId.get(row.id) || null;
+          const latestReviewAction =
+            row.human_review_status || row.human_review_decision
+              ? latestActionsByPostId.get(row.id) || null
+              : null;
 
           return {
             ...mapPost(row, await resolveDisplayImageUrl(row)),

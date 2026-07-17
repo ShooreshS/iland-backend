@@ -43,6 +43,11 @@ const DEFAULT_POST_LIMIT = 50;
 const MAX_POST_LIMIT = 100;
 const DEFAULT_COMMENT_LIMIT = 100;
 const MAX_COMMENT_LIMIT = 200;
+const EDITABLE_POST_MODERATION_STATUSES = new Set([
+  "review_required",
+  "needs_edit",
+  "moderation_error",
+]);
 
 const MODERATION_USER_MESSAGES: Record<
   ModeratePostResult["decision"],
@@ -74,6 +79,10 @@ type ImageResolver = (
   input: DiscussionImageInputDto | null,
   viewerUserId: string,
 ) => Promise<DiscussionImageResolutionResult>;
+
+type ResolvedPostImageForModeration = NonNullable<
+  Extract<DiscussionImageResolutionResult, { ok: true }>["image"]
+>;
 
 type DiscussionServiceDependencies = {
   discussionRepositoryLike?: typeof discussionRepository;
@@ -177,6 +186,51 @@ const resolveImageMetadataFromUrl = async (
       mimeType: mimeType || "",
       sizeBytes: sizeBytes || 0,
       altText: normalizeText(input?.altText),
+    },
+  };
+};
+
+const createExistingImageForModeration = async (
+  row: DiscussionPostRow,
+  createDisplayImageUrl: (
+    storageBucket: string | null,
+    storagePath: string | null,
+  ) => Promise<string | null>,
+  altTextOverride?: string | null,
+): Promise<DiscussionImageResolutionResult> => {
+  if (!row.image_url && !row.image_storage_path) {
+    return { ok: true, image: null };
+  }
+
+  const moderationImageUrl =
+    row.image_url ||
+    (await createDisplayImageUrl(
+      row.image_storage_bucket,
+      row.image_storage_path,
+    ));
+
+  if (!moderationImageUrl) {
+    return {
+      ok: false,
+      errorCode: "MODERATION_FAILED",
+      message: "We could not prepare the current image for moderation.",
+    };
+  }
+
+  return {
+    ok: true,
+    image: {
+      moderationImageUrl,
+      storedImageUrl: row.image_url,
+      storageBucket: row.image_storage_bucket,
+      storagePath: row.image_storage_path,
+      uploadId: null,
+      mimeType: row.image_mime_type || "",
+      sizeBytes: row.image_size_bytes || 0,
+      altText:
+        altTextOverride !== undefined
+          ? normalizeText(altTextOverride)
+          : row.image_alt_text,
     },
   };
 };
@@ -308,6 +362,79 @@ export const createDiscussionService = (
     return { ok: true, user, verifiedIdentity };
   };
 
+  const moderatePostInput = async (params: {
+    postId: string;
+    input: CreateDiscussionPostRequestDto;
+    viewerUserId: string;
+    existingPost?: DiscussionPostRow | null;
+  }): Promise<
+    | {
+        ok: true;
+        caption: string | null;
+        image: ResolvedPostImageForModeration | null;
+        moderation: ModeratePostResult;
+      }
+    | {
+        ok: false;
+        errorCode: DiscussionMutationErrorCode;
+        message: string;
+      }
+  > => {
+    const { postId, input, viewerUserId, existingPost } = params;
+    const caption = normalizeText(input.caption);
+    const imageResult =
+      existingPost && input.image === undefined
+        ? await createExistingImageForModeration(
+            existingPost,
+            mediaService.createDisplayImageUrl,
+            input.imageAltText,
+          )
+        : await imageResolver(input.image ?? null, viewerUserId);
+
+    if (!imageResult.ok) {
+      return {
+        ok: false,
+        errorCode: imageResult.errorCode,
+        message: imageResult.message,
+      };
+    }
+
+    const image = imageResult.image;
+    const gate0 = validateModerationGate0({
+      body: caption,
+      image: image
+        ? {
+            imageUrl: image.moderationImageUrl,
+            mimeType: image.mimeType,
+            sizeBytes: image.sizeBytes,
+            altText: image.altText,
+          }
+        : null,
+    });
+
+    if (!gate0.ok) {
+      return {
+        ok: false,
+        errorCode: "VALIDATION_FAILED",
+        message: gate0.message,
+      };
+    }
+
+    const moderation = await moderationService.moderatePost({
+      postId,
+      body: caption,
+      imageUrl: image?.moderationImageUrl,
+      imageAltText: image?.altText,
+    });
+
+    return {
+      ok: true,
+      caption,
+      image,
+      moderation,
+    };
+  };
+
   return {
     async listPosts(
       viewerUserId: string,
@@ -343,41 +470,19 @@ export const createDiscussionService = (
       }
 
       const postId = randomUUID();
-      const caption = normalizeText(input.caption);
-      const imageResult = await imageResolver(input.image ?? null, creator.user.id);
-      if (!imageResult.ok) {
-        return createFailure<CreateDiscussionPostResultDto>(
-          imageResult.errorCode,
-          imageResult.message,
-        );
-      }
-
-      const image = imageResult.image;
-      const gate0 = validateModerationGate0({
-        body: caption,
-        image: image
-          ? {
-              imageUrl: image.moderationImageUrl,
-              mimeType: image.mimeType,
-              sizeBytes: image.sizeBytes,
-              altText: image.altText,
-            }
-          : null,
-      });
-
-      if (!gate0.ok) {
-        return createFailure<CreateDiscussionPostResultDto>(
-          "VALIDATION_FAILED",
-          gate0.message,
-        );
-      }
-
-      const moderation = await moderationService.moderatePost({
+      const moderationResult = await moderatePostInput({
         postId,
-        body: caption,
-        imageUrl: image?.moderationImageUrl,
-        imageAltText: image?.altText,
+        input,
+        viewerUserId: creator.user.id,
       });
+      if (!moderationResult.ok) {
+        return createFailure<CreateDiscussionPostResultDto>(
+          moderationResult.errorCode,
+          moderationResult.message,
+        );
+      }
+
+      const { caption, image, moderation } = moderationResult;
       const stored = await repo.insertPost({
         id: postId,
         author_user_id: creator.user.id,
@@ -392,6 +497,92 @@ export const createDiscussionService = (
         image_alt_text: image?.altText ?? null,
         ...applyModeration(moderation),
       });
+      await mediaService.attachUploadToPost(
+        image?.uploadId ?? null,
+        creator.user.id,
+        stored.id,
+      );
+      const displayImageUrl = await resolveDisplayImageUrl(stored);
+
+      return {
+        success: true,
+        post: mapPost(stored, new Set(), displayImageUrl),
+        ...(MODERATION_USER_MESSAGES[moderation.decision]
+          ? { message: MODERATION_USER_MESSAGES[moderation.decision] as string }
+          : null),
+      };
+    },
+
+    async updatePost(
+      postId: string,
+      input: CreateDiscussionPostRequestDto,
+      viewerUserId: string,
+    ): Promise<CreateDiscussionPostResultDto> {
+      const creator = await requireVerifiedCreator(viewerUserId);
+      if (!creator.ok) {
+        return createFailure<CreateDiscussionPostResultDto>(
+          creator.errorCode,
+          creator.message,
+        );
+      }
+
+      const existingPost = await repo.getPostById(postId);
+      if (!existingPost || existingPost.author_user_id !== creator.user.id) {
+        return createFailure<CreateDiscussionPostResultDto>(
+          "POST_NOT_FOUND",
+          "The discussion post could not be found.",
+        );
+      }
+
+      if (!EDITABLE_POST_MODERATION_STATUSES.has(existingPost.moderation_status)) {
+        return createFailure<CreateDiscussionPostResultDto>(
+          "POST_NOT_EDITABLE",
+          "Only unpublished posts waiting for review or edits can be changed here.",
+        );
+      }
+
+      const moderationResult = await moderatePostInput({
+        postId: existingPost.id,
+        input,
+        viewerUserId: creator.user.id,
+        existingPost,
+      });
+      if (!moderationResult.ok) {
+        return createFailure<CreateDiscussionPostResultDto>(
+          moderationResult.errorCode,
+          moderationResult.message,
+        );
+      }
+
+      const { caption, image, moderation } = moderationResult;
+      const stored = await repo.updatePostById(existingPost.id, {
+        id: existingPost.id,
+        author_user_id: creator.user.id,
+        author_public_nickname: getAuthorNickname(creator.user),
+        post_type: normalizePostType(input.postType),
+        caption,
+        image_url: image?.storedImageUrl ?? null,
+        image_storage_bucket: image?.storageBucket ?? null,
+        image_storage_path: image?.storagePath ?? null,
+        image_mime_type: image?.mimeType ?? null,
+        image_size_bytes: image?.sizeBytes ?? null,
+        image_alt_text: image?.altText ?? null,
+        human_review_status: null,
+        human_review_decision: null,
+        human_reviewed_at: null,
+        gate2_status: null,
+        gate2_model: null,
+        gate2_result: null,
+        ...applyModeration(moderation),
+      });
+
+      if (!stored) {
+        return createFailure<CreateDiscussionPostResultDto>(
+          "POST_NOT_FOUND",
+          "The discussion post could not be found.",
+        );
+      }
+
       await mediaService.attachUploadToPost(
         image?.uploadId ?? null,
         creator.user.id,

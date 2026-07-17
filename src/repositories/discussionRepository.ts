@@ -191,6 +191,29 @@ export const discussionRepository = {
     return data;
   },
 
+  async updatePostById(
+    postId: string,
+    input: NewDiscussionPostRow,
+  ): Promise<DiscussionPostRow | null> {
+    const supabase = requireSupabaseAdminClient();
+    const { id: _id, ...payload } = buildPostPayload(input);
+    const { data, error } = await supabase
+      .from("discussion_posts")
+      .update({
+        ...payload,
+        updated_at: new Date().toISOString(),
+      })
+      .eq("id", postId)
+      .select(POST_COLUMNS)
+      .maybeSingle<DiscussionPostRow>();
+
+    if (error) {
+      throw error;
+    }
+
+    return data || null;
+  },
+
   async getLikedPostIds(
     userId: string,
     postIds: string[],

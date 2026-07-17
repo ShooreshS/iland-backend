@@ -175,6 +175,45 @@ const createRepo = () => {
         posts.push(row);
         return row;
       },
+      updatePostById: async (postId: string, input: any) => {
+        const index = posts.findIndex((post) => post.id === postId);
+        if (index < 0) {
+          return null;
+        }
+
+        const row = createPostRow({
+          ...posts[index],
+          author_user_id: input.author_user_id,
+          author_public_nickname: input.author_public_nickname,
+          post_type: input.post_type,
+          caption: input.caption,
+          image_url: input.image_url,
+          image_storage_bucket: input.image_storage_bucket,
+          image_storage_path: input.image_storage_path,
+          image_mime_type: input.image_mime_type,
+          image_size_bytes: input.image_size_bytes,
+          image_alt_text: input.image_alt_text,
+          moderation_status: input.moderation_status,
+          moderation_model: input.moderation_model,
+          moderation_flagged: input.moderation_flagged,
+          moderation_categories: input.moderation_categories,
+          moderation_category_scores: input.moderation_category_scores,
+          moderation_applied_input_types: input.moderation_applied_input_types,
+          moderation_raw: input.moderation_raw,
+          moderated_at: input.moderated_at,
+          moderation_error: input.moderation_error,
+          moderation_policy_version: input.moderation_policy_version,
+          gate2_status: input.gate2_status,
+          gate2_model: input.gate2_model,
+          gate2_result: input.gate2_result,
+          human_review_status: input.human_review_status,
+          human_review_decision: input.human_review_decision,
+          human_reviewed_at: input.human_reviewed_at,
+          updated_at: FIXED_TIME,
+        });
+        posts[index] = row;
+        return row;
+      },
       getLikedPostIds: async () => new Set<string>(),
       getLike: async () => null,
       insertLike: async () => undefined,
@@ -342,6 +381,135 @@ describe("discussionService", () => {
     expect(posts[0].image_storage_bucket).toBe("discussion-media");
     expect(posts[0].image_storage_path).toBe("discussions/ab/upload-1.jpg");
     expect(attachedUploads[0]).toEqual(["upload-1", "user-1", posts[0].id]);
+  });
+
+  it("lets the owner edit an unpublished post and re-runs moderation on the same row", async () => {
+    const { repo, posts } = createRepo();
+    const moderatedInputs: any[] = [];
+    posts.push(
+      createPostRow({
+        id: "post-1",
+        caption: "Old text",
+        moderation_status: "needs_edit",
+        human_review_status: "reviewed",
+        human_review_decision: "request_edit",
+        human_reviewed_at: FIXED_TIME,
+      }),
+    );
+    const service = createDiscussionService({
+      discussionRepositoryLike: repo as any,
+      userRepositoryLike: { getById: async () => createUser() },
+      verifiedIdentityRepositoryLike: { getByUserId: async () => verifiedIdentity },
+      moderationServiceLike: {
+        moderatePost: async (input) => {
+          moderatedInputs.push(input);
+          return createModerationResult();
+        },
+      },
+    });
+
+    const result = await service.updatePost(
+      "post-1",
+      { postType: "question", caption: "Can we add night buses?" },
+      "user-1",
+    );
+
+    expect(result.success).toBe(true);
+    expect(result.post?.id).toBe("post-1");
+    expect(result.post?.postType).toBe("question");
+    expect(result.post?.caption).toBe("Can we add night buses?");
+    expect(result.post?.moderationStatus).toBe("published");
+    expect(posts).toHaveLength(1);
+    expect(posts[0]).toMatchObject({
+      id: "post-1",
+      caption: "Can we add night buses?",
+      moderation_status: "published",
+      human_review_status: null,
+      human_review_decision: null,
+      human_reviewed_at: null,
+    });
+    expect(moderatedInputs[0]).toMatchObject({
+      postId: "post-1",
+      body: "Can we add night buses?",
+    });
+  });
+
+  it("preserves an existing stored image during unpublished post edits", async () => {
+    const { repo, posts } = createRepo();
+    const moderatedInputs: any[] = [];
+    posts.push(
+      createPostRow({
+        id: "post-1",
+        moderation_status: "review_required",
+        image_url: null,
+        image_storage_bucket: "discussion-media",
+        image_storage_path: "discussions/ab/upload-1.jpg",
+        image_mime_type: "image/jpeg",
+        image_size_bytes: 12_000,
+        image_alt_text: "Old image alt text",
+      }),
+    );
+    const service = createDiscussionService({
+      discussionRepositoryLike: repo as any,
+      userRepositoryLike: { getById: async () => createUser() },
+      verifiedIdentityRepositoryLike: { getByUserId: async () => verifiedIdentity },
+      mediaServiceLike: {
+        resolveUploadedImageForModeration: async () => {
+          throw new Error("new upload should not be resolved");
+        },
+        createDisplayImageUrl: async () =>
+          "https://signed.example.test/object/display-token",
+        attachUploadToPost: async () => undefined,
+      },
+      moderationServiceLike: {
+        moderatePost: async (input) => {
+          moderatedInputs.push(input);
+          return createModerationResult();
+        },
+      },
+    });
+
+    const result = await service.updatePost(
+      "post-1",
+      { postType: "discussion", caption: "Updated text without a new image" },
+      "user-1",
+    );
+
+    expect(result.success).toBe(true);
+    expect(result.post?.imageUrl).toBe(
+      "https://signed.example.test/object/display-token",
+    );
+    expect(posts[0].image_storage_bucket).toBe("discussion-media");
+    expect(posts[0].image_storage_path).toBe("discussions/ab/upload-1.jpg");
+    expect(moderatedInputs[0]).toMatchObject({
+      imageUrl: "https://signed.example.test/object/display-token",
+      imageAltText: "Old image alt text",
+    });
+  });
+
+  it("rejects edits to published discussion posts", async () => {
+    const { repo, posts } = createRepo();
+    posts.push(createPostRow({ moderation_status: "published" }));
+    const service = createDiscussionService({
+      discussionRepositoryLike: repo as any,
+      userRepositoryLike: { getById: async () => createUser() },
+      verifiedIdentityRepositoryLike: { getByUserId: async () => verifiedIdentity },
+      moderationServiceLike: {
+        moderatePost: async () => createModerationResult(),
+      },
+    });
+
+    const result = await service.updatePost(
+      "post-1",
+      { postType: "discussion", caption: "Updated published text" },
+      "user-1",
+    );
+
+    expect(result).toMatchObject({
+      success: false,
+      errorCode: "POST_NOT_EDITABLE",
+    });
+    expect(posts[0].caption).toBe("A clean discussion");
   });
 
   it("stores moderated comments individually and hides held comments from public lists", async () => {

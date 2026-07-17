@@ -41,6 +41,7 @@ const createDiscussionPostSchema = z
     postType: discussionPostTypeSchema.default("discussion"),
     caption: z.string().nullable().optional(),
     image: discussionImageSchema.nullable().optional(),
+    imageAltText: z.string().trim().nullable().optional(),
   })
   .strict();
 
@@ -54,6 +55,7 @@ const mutationErrorStatusMap: Record<DiscussionMutationErrorCode, number> = {
   USER_NOT_FOUND: 401,
   VERIFIED_IDENTITY_REQUIRED: 403,
   POST_NOT_FOUND: 404,
+  POST_NOT_EDITABLE: 409,
   VALIDATION_FAILED: 400,
   MODERATION_FAILED: 502,
 };
@@ -141,6 +143,59 @@ const createDiscussionRoute: RouteDefinition = {
       result,
       result.success
         ? 201
+        : mutationErrorStatusMap[result.errorCode || "VALIDATION_FAILED"] || 400,
+    );
+  },
+};
+
+const updateDiscussionRoute: RouteDefinition = {
+  method: "PATCH",
+  path: "/discussions/:id",
+  handler: async ({ request, params }) => {
+    const viewerResult = await requireViewer(request);
+    if (!viewerResult.ok) {
+      return viewerResult.response;
+    }
+
+    const postId = params.id?.trim() || "";
+    if (!postId) {
+      return json(
+        {
+          success: false,
+          errorCode: "POST_NOT_FOUND",
+          message: "The discussion post could not be found.",
+        },
+        404,
+      );
+    }
+
+    const bodyResult = await parseJsonBody(request);
+    if (!bodyResult.ok) {
+      return bodyResult.response;
+    }
+
+    const parsed = createDiscussionPostSchema.safeParse(bodyResult.body);
+    if (!parsed.success) {
+      return json(
+        {
+          success: false,
+          errorCode: "VALIDATION_FAILED",
+          message: "Discussion post request body is invalid.",
+        },
+        400,
+      );
+    }
+
+    const result = await discussionService.updatePost(
+      postId,
+      parsed.data as CreateDiscussionPostRequestDto,
+      viewerResult.viewer.userId,
+    );
+
+    return json(
+      result,
+      result.success
+        ? 200
         : mutationErrorStatusMap[result.errorCode || "VALIDATION_FAILED"] || 400,
     );
   },
@@ -264,6 +319,7 @@ const unlikeDiscussionRoute: RouteDefinition = {
 export const discussionRoutes: RouteDefinition[] = [
   getDiscussionsRoute,
   createDiscussionRoute,
+  updateDiscussionRoute,
   getDiscussionCommentsRoute,
   createDiscussionCommentRoute,
   likeDiscussionRoute,

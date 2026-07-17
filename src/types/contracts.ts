@@ -196,6 +196,7 @@ export type CreateDiscussionPostRequestDto = {
   postType: DiscussionPostType;
   caption?: string | null;
   image?: DiscussionImageInputDto | null;
+  imageAltText?: string | null;
 };
 
 export type DiscussionPostDto = {
@@ -258,6 +259,7 @@ export type DiscussionMutationErrorCode =
   | "USER_NOT_FOUND"
   | "VERIFIED_IDENTITY_REQUIRED"
   | "POST_NOT_FOUND"
+  | "POST_NOT_EDITABLE"
   | "VALIDATION_FAILED"
   | "MODERATION_FAILED";
 
