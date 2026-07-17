@@ -2,7 +2,9 @@ import OpenAI from "openai";
 import type { JsonValue } from "../types/json";
 
 export const OPENAI_MODERATION_MODEL = "omni-moderation-latest" as const;
-export const MODERATION_POLICY_VERSION = "gate1-v1" as const;
+export const MODERATION_POLICY_VERSION = "gate1-v2" as const;
+export const LOCAL_WEAPONS_TRANSACTION_CATEGORY =
+  "civicos/weapons_transaction" as const;
 
 export type PollModerationStatus =
   | "draft"
@@ -80,7 +82,14 @@ const SCORE_REVIEW_THRESHOLDS: Record<string, number> = {
   "self-harm/instructions": 0.2,
   illicit: 0.6,
   "illicit/violent": 0.25,
+  [LOCAL_WEAPONS_TRANSACTION_CATEGORY]: 1,
 };
+
+const WEAPON_TERM_PATTERN =
+  /\b(?:ak[-\s]?47s?|ar[-\s]?15s?|kalashnikovs?|glocks?|uzis?|firearms?|guns?|rifles?|pistols?|handguns?|revolvers?|shotguns?|ammunition|ammo|bullets?)\b/iu;
+
+const WEAPON_TRANSACTION_PATTERN =
+  /\b(?:for sale|selling|sell|sold|available for purchase|taking offers?|make an offer|best offer|bid(?:ding)?|cash only|pickup only|shipping available|ship it|dm me|message me|wtb|want to buy|looking to buy)\b/iu;
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   value !== null && typeof value === "object" && !Array.isArray(value);
@@ -142,6 +151,70 @@ export const buildModerationText = (input: ModeratePostInput): string => {
     optionText ? `Poll options:\n${optionText}` : null,
     input.imageAltText ? `Image alt text: ${input.imageAltText}` : null,
   ]);
+};
+
+export const evaluateLocalPolicySignals = (
+  moderationText: string,
+): {
+  categories: Record<string, boolean>;
+  categoryScores: Record<string, number>;
+  appliedInputTypes: Record<string, string[]>;
+} => {
+  if (
+    WEAPON_TERM_PATTERN.test(moderationText) &&
+    WEAPON_TRANSACTION_PATTERN.test(moderationText)
+  ) {
+    return {
+      categories: {
+        [LOCAL_WEAPONS_TRANSACTION_CATEGORY]: true,
+      },
+      categoryScores: {
+        [LOCAL_WEAPONS_TRANSACTION_CATEGORY]: 1,
+      },
+      appliedInputTypes: {
+        [LOCAL_WEAPONS_TRANSACTION_CATEGORY]: ["text"],
+      },
+    };
+  }
+
+  return {
+    categories: {},
+    categoryScores: {},
+    appliedInputTypes: {},
+  };
+};
+
+const mergeBooleanRecords = (
+  left: Record<string, boolean>,
+  right: Record<string, boolean>,
+): Record<string, boolean> => {
+  const merged = { ...left };
+  for (const [key, value] of Object.entries(right)) {
+    merged[key] = Boolean(merged[key] || value);
+  }
+  return merged;
+};
+
+const mergeNumberRecords = (
+  left: Record<string, number>,
+  right: Record<string, number>,
+): Record<string, number> => {
+  const merged = { ...left };
+  for (const [key, value] of Object.entries(right)) {
+    merged[key] = Math.max(merged[key] ?? 0, value);
+  }
+  return merged;
+};
+
+const mergeAppliedInputTypes = (
+  left: Record<string, string[]>,
+  right: Record<string, string[]>,
+): Record<string, string[]> => {
+  const merged = { ...left };
+  for (const [key, inputTypes] of Object.entries(right)) {
+    merged[key] = Array.from(new Set([...(merged[key] || []), ...inputTypes]));
+  }
+  return merged;
 };
 
 export const decideModerationResult = (input: {
@@ -237,6 +310,7 @@ export const createContentModerationService = (
       }
 
       const text = buildModerationText(input);
+      const localPolicySignals = evaluateLocalPolicySignals(text);
       if (!text && !input.imageUrl) {
         return createErrorResult("empty_moderation_input", moderatedAt);
       }
@@ -272,10 +346,17 @@ export const createContentModerationService = (
           : [];
         const firstResult = readRecord(results[0]);
         const flagged = readFlagged(firstResult.flagged);
-        const categories = readBooleanRecord(firstResult.categories);
-        const categoryScores = readNumberRecord(firstResult.category_scores);
-        const appliedInputTypes = readAppliedInputTypes(
-          firstResult.category_applied_input_types,
+        const categories = mergeBooleanRecords(
+          readBooleanRecord(firstResult.categories),
+          localPolicySignals.categories,
+        );
+        const categoryScores = mergeNumberRecords(
+          readNumberRecord(firstResult.category_scores),
+          localPolicySignals.categoryScores,
+        );
+        const appliedInputTypes = mergeAppliedInputTypes(
+          readAppliedInputTypes(firstResult.category_applied_input_types),
+          localPolicySignals.appliedInputTypes,
         );
 
         if (flagged === null) {

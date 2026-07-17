@@ -3,6 +3,7 @@ import {
   buildModerationText,
   createContentModerationService,
   decideModerationResult,
+  evaluateLocalPolicySignals,
 } from "./contentModerationService";
 
 describe("contentModerationService", () => {
@@ -78,6 +79,84 @@ describe("contentModerationService", () => {
     ).toBe("review_required");
   });
 
+  it("adds a local policy signal for explicit firearm sale language", () => {
+    const signals = evaluateLocalPolicySignals(
+      "Body: I have AK-47 for sale. Bid your offer.",
+    );
+
+    expect(signals).toMatchObject({
+      categories: {
+        "civicos/weapons_transaction": true,
+      },
+      categoryScores: {
+        "civicos/weapons_transaction": 1,
+      },
+      appliedInputTypes: {
+        "civicos/weapons_transaction": ["text"],
+      },
+    });
+  });
+
+  it("does not add the firearm transaction signal for policy discussion text", () => {
+    const signals = evaluateLocalPolicySignals(
+      "Body: Should AK-47 sales be banned by national law?",
+    );
+
+    expect(signals.categories).toEqual({});
+    expect(signals.categoryScores).toEqual({});
+  });
+
+  it("requires review for explicit firearm sale even when model scores are low", async () => {
+    const service = createContentModerationService({
+      now: () => new Date("2026-07-17T10:00:00.000Z"),
+      client: {
+        moderations: {
+          create: async () => ({
+            model: "omni-moderation-latest",
+            results: [
+              {
+                flagged: false,
+                categories: {
+                  illicit: false,
+                  "illicit/violent": false,
+                  violence: false,
+                },
+                category_scores: {
+                  illicit: 0.01,
+                  "illicit/violent": 0.01,
+                  violence: 0.01,
+                },
+                category_applied_input_types: {
+                  illicit: ["text"],
+                  "illicit/violent": ["text"],
+                  violence: ["image"],
+                },
+              },
+            ],
+          }),
+        },
+      },
+    });
+
+    const result = await service.moderatePost({
+      postId: "post-1",
+      body: "I have AK-47 for sale. Bid your offer.",
+      imageUrl: "https://example.test/ak47.jpg",
+    });
+
+    expect(result).toMatchObject({
+      decision: "review_required",
+      moderationStatus: "review_required",
+      categories: {
+        "civicos/weapons_transaction": true,
+      },
+      categoryScores: {
+        "civicos/weapons_transaction": 1,
+      },
+      policyVersion: "gate1-v2",
+    });
+  });
+
   it("normalizes OpenAI moderation responses", async () => {
     const calls: unknown[] = [];
     const service = createContentModerationService({
@@ -130,7 +209,7 @@ describe("contentModerationService", () => {
         harassment: ["text"],
       },
       error: null,
-      policyVersion: "gate1-v1",
+      policyVersion: "gate1-v2",
       moderatedAt: "2026-07-17T10:00:00.000Z",
     });
   });

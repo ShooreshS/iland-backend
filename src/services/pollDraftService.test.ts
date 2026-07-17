@@ -87,7 +87,7 @@ const createModerationResult = (
   appliedInputTypes: {},
   raw: null,
   error: null,
-  policyVersion: "gate1-v1",
+  policyVersion: "gate1-v2",
   moderatedAt: FIXED_TIME,
   ...overrides,
 });
