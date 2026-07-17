@@ -11,7 +11,7 @@ values (
   'discussion-media',
   'discussion-media',
   false,
-  20971520,
+  5242880,
   array['image/jpeg', 'image/png', 'image/webp', 'image/gif']
 )
 on conflict (id) do update
@@ -29,7 +29,7 @@ create table if not exists public.discussion_media_uploads (
   mime_type text not null
     check (mime_type in ('image/jpeg', 'image/png', 'image/webp', 'image/gif')),
   size_bytes bigint not null
-    check (size_bytes > 0 and size_bytes <= 20971520),
+    check (size_bytes > 0 and size_bytes <= 5242880),
   upload_status text not null default 'signed'
     check (upload_status in ('signed', 'uploaded', 'attached', 'abandoned')),
   attached_post_id uuid references public.discussion_posts(id) on delete set null,

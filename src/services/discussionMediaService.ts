@@ -131,7 +131,7 @@ const validateUploadMetadata = (
   if (sizeBytes > GATE0_IMAGE_LIMITS.maxImageBytes) {
     return {
       ok: false,
-      message: "Image file size must be 20 MB or smaller.",
+      message: "Image file size must be 5 MB or smaller.",
     };
   }
 

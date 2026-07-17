@@ -76,6 +76,34 @@ const createUploadRow = (
 });
 
 describe("discussionMediaService", () => {
+  it("rejects discussion image uploads above 5 MB", async () => {
+    const service = createDiscussionMediaService({
+      repositoryLike: {
+        insertUpload: async () => {
+          throw new Error("insert should not run");
+        },
+      } as any,
+      userRepositoryLike: { getById: async () => user },
+      verifiedIdentityRepositoryLike: { getByUserId: async () => verifiedIdentity },
+      storageBucketFactory: () => ({}) as any,
+    });
+
+    const result = await service.createImageUpload(
+      {
+        fileName: "too-large.jpg",
+        mimeType: "image/jpeg",
+        sizeBytes: 5 * 1024 * 1024 + 1,
+      },
+      "user-1",
+    );
+
+    expect(result).toMatchObject({
+      success: false,
+      errorCode: "VALIDATION_FAILED",
+    });
+    expect(result.message).toContain("5 MB");
+  });
+
   it("creates a signed upload for verified users", async () => {
     const uploads: DiscussionMediaUploadRow[] = [];
     const service = createDiscussionMediaService({

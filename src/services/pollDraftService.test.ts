@@ -528,7 +528,7 @@ describe("pollDraftService ZKP audit material", () => {
             imageUrl: "https://example.test/signed-poll-image.webp",
             imageId: "poll-image-1",
             mimeType: "image/webp",
-            sizeBytes: 20 * 1024 * 1024,
+            sizeBytes: 5 * 1024 * 1024,
             altText: "Residents boarding a night bus",
           },
         },

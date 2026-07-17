@@ -7,7 +7,7 @@ export const GATE0_TEXT_LIMITS = Object.freeze({
 });
 
 export const GATE0_IMAGE_LIMITS = Object.freeze({
-  maxImageBytes: 20 * 1024 * 1024,
+  maxImageBytes: 5 * 1024 * 1024,
   allowedMimeTypes: ["image/jpeg", "image/png", "image/webp", "image/gif"],
 });
 
@@ -172,7 +172,7 @@ export const validateModerationGate0 = (
     return {
       ok: false,
       reasonCode: "IMAGE_TOO_LARGE",
-      message: "Image file size must be 20 MB or smaller.",
+      message: "Image file size must be 5 MB or smaller.",
     };
   }
 
