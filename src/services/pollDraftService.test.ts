@@ -28,6 +28,7 @@ const voteRepository = (await import("../repositories/voteRepository")).default;
 const contentModerationService =
   (await import("./contentModerationService")).default;
 const { pollDraftService } = await import("./pollDraftService");
+type ModeratePostInput = import("./contentModerationService").ModeratePostInput;
 type ModeratePostResult = import("./contentModerationService").ModeratePostResult;
 
 const FIXED_TIME = "2026-07-04T12:00:00.000Z";
@@ -389,6 +390,163 @@ describe("pollDraftService ZKP audit material", () => {
       expect(finalizedPayload.moderation_categories).toEqual({
         "hate/threatening": true,
       });
+    } finally {
+      restoreFns.reverse().forEach((restore) => restore());
+    }
+  });
+
+  it("rejects overlong poll text before database writes or moderation", async () => {
+    let insertCalled = false;
+    let moderationCalled = false;
+
+    const restoreFns = [
+      patchMethod(pollRepository, "insert", async (input: NewPollRow) => {
+        insertCalled = true;
+        return rowFromNewPoll(input);
+      }),
+      patchMethod(contentModerationService, "moderatePost", async () => {
+        moderationCalled = true;
+        return createModerationResult();
+      }),
+    ];
+
+    try {
+      const result = await pollDraftService.createPoll(
+        {
+          title: "x".repeat(281),
+          options: ["Yes", "No"],
+          pollEncryptionKeyId: "poll-key-1",
+          eligibilityRule: {
+            requiresVerifiedIdentity: true,
+          },
+        },
+        "creator-1",
+      );
+
+      expect(result).toMatchObject({
+        success: false,
+        errorCode: "VALIDATION_FAILED",
+      });
+      expect(result.message).toContain("Poll title");
+      expect(insertCalled).toBe(false);
+      expect(moderationCalled).toBe(false);
+    } finally {
+      restoreFns.reverse().forEach((restore) => restore());
+    }
+  });
+
+  it("rejects unsupported poll images before database writes or moderation", async () => {
+    let insertCalled = false;
+    let moderationCalled = false;
+
+    const restoreFns = [
+      patchMethod(pollRepository, "insert", async (input: NewPollRow) => {
+        insertCalled = true;
+        return rowFromNewPoll(input);
+      }),
+      patchMethod(contentModerationService, "moderatePost", async () => {
+        moderationCalled = true;
+        return createModerationResult();
+      }),
+    ];
+
+    try {
+      const result = await pollDraftService.createPoll(
+        {
+          title: "Direct active poll",
+          options: ["Yes", "No"],
+          pollEncryptionKeyId: "poll-key-1",
+          eligibilityRule: {
+            requiresVerifiedIdentity: true,
+          },
+          image: {
+            imageUrl: "https://example.test/poll.svg",
+            mimeType: "image/svg+xml",
+            sizeBytes: 10_000,
+          },
+        },
+        "creator-1",
+      );
+
+      expect(result).toMatchObject({
+        success: false,
+        errorCode: "VALIDATION_FAILED",
+      });
+      expect(result.message).toContain("file type");
+      expect(insertCalled).toBe(false);
+      expect(moderationCalled).toBe(false);
+    } finally {
+      restoreFns.reverse().forEach((restore) => restore());
+    }
+  });
+
+  it("passes a valid poll image to moderation without storing the signed URL", async () => {
+    let moderationInput: ModeratePostInput | null = null;
+    let finalizedPoll: NewPollRow | null = null;
+
+    const restoreFns = [
+      patchMethod(pollRepository, "insert", async (input: NewPollRow) =>
+        rowFromNewPoll(input),
+      ),
+      patchMethod(
+        pollRepository,
+        "insertOptions",
+        async (options: NewPollOptionRow[]) =>
+          options.map((option, index) =>
+            createOption({
+              id: option.id || `option-${index + 1}`,
+              poll_id: option.poll_id,
+              label: option.label,
+              description: option.description,
+              color: option.color,
+              display_order: option.display_order,
+              is_active: option.is_active,
+              created_at: option.created_at || FIXED_TIME,
+            }),
+          ),
+      ),
+      patchMethod(pollRepository, "updateById", async (_pollId, input) => {
+        finalizedPoll = input;
+        return rowFromNewPoll(input);
+      }),
+      patchMethod(contentModerationService, "moderatePost", async (input) => {
+        moderationInput = input;
+        return createModerationResult();
+      }),
+    ];
+
+    try {
+      const result = await pollDraftService.createPoll(
+        {
+          title: "Direct active poll",
+          options: ["Yes", "No"],
+          pollEncryptionKeyId: "poll-key-1",
+          eligibilityRule: {
+            requiresVerifiedIdentity: true,
+          },
+          image: {
+            imageUrl: "https://example.test/signed-poll-image.webp",
+            imageId: "poll-image-1",
+            mimeType: "image/webp",
+            sizeBytes: 20 * 1024 * 1024,
+            altText: "Residents boarding a night bus",
+          },
+        },
+        "creator-1",
+      );
+
+      expect(result.success).toBe(true);
+      expect(moderationInput).toMatchObject({
+        imageUrl: "https://example.test/signed-poll-image.webp",
+        imageAltText: "Residents boarding a night bus",
+      });
+      const finalizedPayload = finalizedPoll as NewPollRow | null;
+      if (!finalizedPayload) {
+        throw new Error("Expected finalized poll payload.");
+      }
+      expect(JSON.stringify(finalizedPayload)).not.toContain(
+        "signed-poll-image",
+      );
     } finally {
       restoreFns.reverse().forEach((restore) => restore());
     }

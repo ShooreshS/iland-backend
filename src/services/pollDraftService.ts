@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import pollRepository from "../repositories/pollRepository";
 import voteRepository from "../repositories/voteRepository";
 import contentModerationService from "./contentModerationService";
+import { validateModerationGate0 } from "./contentModerationGate0Service";
 import {
   buildPollAuditMaterial,
   hashPollOptionSet,
@@ -10,6 +11,7 @@ import type {
   CreatePollRequestDto,
   CreatePollResultDto,
   DraftPollEditorResultDto,
+  PollImageInputDto,
   PollDto,
   PollEditabilityResultDto,
   PollEligibilityRule,
@@ -86,6 +88,15 @@ type NormalizedPollMutationInput = {
   pollEncryptionKeyId: string | null;
   startsAt: string | null;
   endsAt: string | null;
+  image: NormalizedPollImageInput | null;
+};
+
+type NormalizedPollImageInput = {
+  imageUrl: string;
+  imageId: string | null;
+  mimeType: string;
+  sizeBytes: number;
+  altText: string | null;
 };
 
 const slugify = (value: string): string =>
@@ -105,6 +116,41 @@ const toArray = (value: string[] | null | undefined): string[] =>
 const normalizeOptionalString = (value: string | null | undefined): string | null => {
   const normalized = typeof value === "string" ? value.trim() : "";
   return normalized.length > 0 ? normalized : null;
+};
+
+const normalizePollImageInput = (
+  image: PollImageInputDto | null | undefined,
+): NormalizedPollImageInput | null => {
+  if (!image) {
+    return null;
+  }
+
+  const imageUrl = normalizeOptionalString(image.imageUrl);
+  const imageId = normalizeOptionalString(image.imageId);
+  const mimeType = normalizeOptionalString(image.mimeType)?.toLowerCase() ?? null;
+  const altText = normalizeOptionalString(image.altText);
+  const sizeBytes = image.sizeBytes;
+
+  if (
+    !imageUrl &&
+    !imageId &&
+    !mimeType &&
+    !altText &&
+    (sizeBytes === undefined || sizeBytes === null)
+  ) {
+    return null;
+  }
+
+  return {
+    imageUrl: imageUrl ?? "",
+    imageId,
+    mimeType: mimeType ?? "",
+    sizeBytes:
+      typeof sizeBytes === "number" && Number.isFinite(sizeBytes)
+        ? Math.trunc(sizeBytes)
+        : Number.NaN,
+    altText,
+  };
 };
 
 const normalizeOptionalTimestamp = (
@@ -250,6 +296,9 @@ const normalizeMutationInput = (
 ): { data?: NormalizedPollMutationInput; error?: CreatePollResultDto } => {
   const title = typeof input.title === "string" ? input.title.trim() : "";
   const normalizedOptions = normalizeOptions(input.options || []);
+  const description =
+    typeof input.description === "string" ? input.description.trim() || null : null;
+  const image = normalizePollImageInput(input.image);
   const jurisdictionType = input.jurisdictionType ?? "global";
   const jurisdictionCountryCode = input.jurisdictionCountryCode ?? null;
   const jurisdictionAreaIds = (input.jurisdictionAreaIds || []).filter(Boolean);
@@ -266,6 +315,41 @@ const normalizeMutationInput = (
       error: createFailureResult(
         "VALIDATION_FAILED",
         "At least two non-empty options are required.",
+      ),
+    };
+  }
+
+  const gate0 = validateModerationGate0({
+    title,
+    body: description,
+    pollQuestion: title,
+    pollOptions: normalizedOptions.map((option) =>
+      [option.label, option.description]
+        .map((value) => (typeof value === "string" ? value.trim() : ""))
+        .filter(Boolean)
+        .join(" - "),
+    ),
+    image: image
+      ? {
+          imageUrl: image.imageUrl,
+          mimeType: image.mimeType,
+          sizeBytes: image.sizeBytes,
+          altText: image.altText,
+        }
+      : null,
+  });
+  if (!gate0.ok) {
+    return {
+      error: createFailureResult("VALIDATION_FAILED", gate0.message),
+    };
+  }
+
+  const requestedStatus = (input.status || "active") as PollStatus;
+  if (requestedStatus === "draft" && image) {
+    return {
+      error: createFailureResult(
+        "VALIDATION_FAILED",
+        "Images on draft polls are not supported until image storage is available.",
       ),
     };
   }
@@ -411,13 +495,14 @@ const normalizeMutationInput = (
       jurisdictionCountryCode,
       jurisdictionAreaIds,
       jurisdictionLandIds,
-      status: (input.status || "active") as PollStatus,
+      status: requestedStatus,
       eligibilityRule,
       votePrivacyMode,
       resultPublicationMode,
       pollEncryptionKeyId,
       startsAt,
       endsAt,
+      image,
     },
   };
 };
@@ -676,6 +761,7 @@ const applyModerationResultToPayload = (
 const moderatePollPayload = async (
   payload: NewPollRow,
   options: Array<Pick<NewPollOptionRow | PollOptionRow, "label" | "description">>,
+  image: NormalizedPollImageInput | null,
 ): Promise<ModeratePostResult> =>
   contentModerationService.moderatePost({
     postId: payload.id ?? "",
@@ -683,6 +769,8 @@ const moderatePollPayload = async (
     body: payload.description,
     pollQuestion: payload.title,
     pollOptions: buildModerationPollOptions(options),
+    imageUrl: image?.imageUrl ?? null,
+    imageAltText: image?.altText ?? null,
   });
 
 const createDraftFailure = (
@@ -757,7 +845,11 @@ export const pollDraftService = {
     let createdPoll = stagedPoll;
     let moderationMessage: string | null = null;
     if (finalPollPayload.status !== "draft") {
-      const moderation = await moderatePollPayload(finalPollPayload, optionRows);
+      const moderation = await moderatePollPayload(
+        finalPollPayload,
+        optionRows,
+        normalized.data.image,
+      );
       moderationMessage = MODERATION_USER_MESSAGES[moderation.decision];
       createdPoll = (await pollRepository.updateById(
         pollId,
@@ -900,7 +992,7 @@ export const pollDraftService = {
     const moderation =
       updatedPayload.status === "draft"
         ? null
-        : await moderatePollPayload(updatedPayload, optionRows);
+        : await moderatePollPayload(updatedPayload, optionRows, normalized.data.image);
     const finalUpdatedPayload = moderation
       ? applyModerationResultToPayload(updatedPayload, moderation)
       : updatedPayload;
@@ -1012,6 +1104,7 @@ export const pollDraftService = {
         pollEncryptionKeyId,
         startsAt: existingPoll.starts_at || now,
         endsAt: existingPoll.ends_at,
+        image: null,
       },
       existingPoll.created_by_user_id || viewerUserId,
       existingPoll.slug,
@@ -1024,7 +1117,11 @@ export const pollDraftService = {
       status: "draft",
       moderation_status: "moderation_pending",
     });
-    const moderation = await moderatePollPayload(publishPayload, existingOptions);
+    const moderation = await moderatePollPayload(
+      publishPayload,
+      existingOptions,
+      null,
+    );
     const publishedPoll = await pollRepository.updateById(
       existingPoll.id,
       applyModerationResultToPayload(publishPayload, moderation),

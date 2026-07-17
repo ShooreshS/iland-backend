@@ -261,6 +261,16 @@ const optionInputSchema = z.union([
   }),
 ]);
 
+const pollImageInputSchema = z
+  .object({
+    imageUrl: z.string().trim().url().nullable().optional(),
+    imageId: z.string().trim().min(1).max(256).nullable().optional(),
+    mimeType: z.string().trim().min(1).max(128).nullable().optional(),
+    sizeBytes: z.number().int().nonnegative().nullable().optional(),
+    altText: z.string().nullable().optional(),
+  })
+  .strict();
+
 const createPollRequestSchema = z.object({
   title: z.string(),
   description: z.string().nullable().optional(),
@@ -289,6 +299,8 @@ const createPollRequestSchema = z.object({
   pollEncryptionKeyId: pollEncryptionKeyIdSchema,
   startsAt: optionalTimestampSchema,
   endsAt: optionalTimestampSchema,
+  image: pollImageInputSchema.nullable().optional(),
+  images: z.never().optional(),
 });
 
 const updateDraftRequestSchema = createPollRequestSchema.extend({

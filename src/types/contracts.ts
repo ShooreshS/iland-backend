@@ -609,6 +609,14 @@ export type PollOptionInputDto =
       color?: string | null;
     };
 
+export type PollImageInputDto = {
+  imageUrl?: string | null;
+  imageId?: string | null;
+  mimeType?: string | null;
+  sizeBytes?: number | null;
+  altText?: string | null;
+};
+
 export type CreatePollRequestDto = {
   title: string;
   description?: string | null;
@@ -624,6 +632,7 @@ export type CreatePollRequestDto = {
   pollEncryptionKeyId?: string | null;
   startsAt?: string | null;
   endsAt?: string | null;
+  image?: PollImageInputDto | null;
 };
 
 export type UpdateDraftPollRequestDto = {
@@ -642,6 +651,7 @@ export type UpdateDraftPollRequestDto = {
   pollEncryptionKeyId?: string | null;
   startsAt?: string | null;
   endsAt?: string | null;
+  image?: PollImageInputDto | null;
 };
 
 export type PollManagementErrorCode =
