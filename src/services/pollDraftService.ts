@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import pollRepository from "../repositories/pollRepository";
 import voteRepository from "../repositories/voteRepository";
+import contentModerationService from "./contentModerationService";
 import {
   buildPollAuditMaterial,
   hashPollOptionSet,
@@ -28,6 +29,7 @@ import type {
   PollOptionRow,
   PollRow,
 } from "../types/db";
+import type { ModeratePostResult } from "./contentModerationService";
 
 const OPTION_COLOR_PALETTE = [
   "#3B82F6",
@@ -51,6 +53,18 @@ const KNOWN_RESULT_PUBLICATION_MODES = new Set<PollResultPublicationMode>([
   "auto_on_close",
   "creator_managed",
 ]);
+
+const MODERATION_USER_MESSAGES: Record<
+  ModeratePostResult["decision"],
+  string | null
+> = {
+  allow: null,
+  review_required: "Your post needs additional review before it can be published.",
+  blocked:
+    "This post could not be published because it appears to violate CivicOS safety rules.",
+  moderation_error:
+    "We could not complete moderation. The post has not been published.",
+};
 
 type NormalizedPollMutationInput = {
   title: string;
@@ -137,6 +151,12 @@ const mapPoll = (row: PollRow): PollDto => {
     title: row.title,
     description: row.description,
     status: row.status,
+    moderationStatus:
+      row.moderation_status ?? (row.status === "draft" ? "draft" : "published"),
+    moderationModel: row.moderation_model ?? null,
+    moderationFlagged: row.moderation_flagged ?? null,
+    moderatedAt: row.moderated_at ?? null,
+    moderationPolicyVersion: row.moderation_policy_version ?? null,
     jurisdictionType: row.jurisdiction_type,
     jurisdictionCountryCode: row.jurisdiction_country_code,
     jurisdictionAreaIds: toArray(row.jurisdiction_area_ids),
@@ -593,6 +613,22 @@ const buildPollInsertPayload = (
     result_publication_mode: data.resultPublicationMode,
     option_set_hash: optionSetHash,
     poll_encryption_key_id: data.pollEncryptionKeyId,
+    moderation_status: data.status === "draft" ? "draft" : "moderation_pending",
+    moderation_model: null,
+    moderation_flagged: null,
+    moderation_categories: null,
+    moderation_category_scores: null,
+    moderation_applied_input_types: null,
+    moderation_raw: null,
+    moderated_at: null,
+    moderation_error: null,
+    moderation_policy_version: null,
+    gate2_status: null,
+    gate2_model: null,
+    gate2_result: null,
+    human_review_status: null,
+    human_review_decision: null,
+    human_reviewed_at: null,
   };
 };
 
@@ -606,6 +642,48 @@ const countPublishableOptions = (options: PollOptionRow[]): number =>
   options.filter(
     (option) => option.is_active && option.label.trim().length > 0,
   ).length;
+
+const buildModerationPollOptions = (
+  options: Array<Pick<NewPollOptionRow | PollOptionRow, "label" | "description">>,
+): string[] =>
+  options
+    .map((option) =>
+      [option.label, option.description]
+        .map((value) => (typeof value === "string" ? value.trim() : ""))
+        .filter(Boolean)
+        .join(" - "),
+    )
+    .filter(Boolean);
+
+const applyModerationResultToPayload = (
+  payload: NewPollRow,
+  moderation: ModeratePostResult,
+): NewPollRow => ({
+  ...payload,
+  status: moderation.decision === "allow" ? payload.status : "draft",
+  moderation_status: moderation.moderationStatus,
+  moderation_model: moderation.model,
+  moderation_flagged: moderation.flagged,
+  moderation_categories: moderation.categories,
+  moderation_category_scores: moderation.categoryScores,
+  moderation_applied_input_types: moderation.appliedInputTypes,
+  moderation_raw: moderation.raw,
+  moderated_at: moderation.moderatedAt,
+  moderation_error: moderation.error,
+  moderation_policy_version: moderation.policyVersion,
+});
+
+const moderatePollPayload = async (
+  payload: NewPollRow,
+  options: Array<Pick<NewPollOptionRow | PollOptionRow, "label" | "description">>,
+): Promise<ModeratePostResult> =>
+  contentModerationService.moderatePost({
+    postId: payload.id ?? "",
+    title: payload.title,
+    body: payload.description,
+    pollQuestion: payload.title,
+    pollOptions: buildModerationPollOptions(options),
+  });
 
 const createDraftFailure = (
   editability: PollEditabilityResultDto,
@@ -676,10 +754,16 @@ export const pollDraftService = {
     );
 
     const createdOptions = await pollRepository.insertOptions(optionRows);
-    const createdPoll =
-      finalPollPayload.status === "draft"
-        ? stagedPoll
-        : await pollRepository.updateById(pollId, finalPollPayload);
+    let createdPoll = stagedPoll;
+    let moderationMessage: string | null = null;
+    if (finalPollPayload.status !== "draft") {
+      const moderation = await moderatePollPayload(finalPollPayload, optionRows);
+      moderationMessage = MODERATION_USER_MESSAGES[moderation.decision];
+      createdPoll = (await pollRepository.updateById(
+        pollId,
+        applyModerationResultToPayload(finalPollPayload, moderation),
+      )) as PollRow;
+    }
 
     if (!createdPoll) {
       return {
@@ -693,6 +777,7 @@ export const pollDraftService = {
       success: true,
       poll: mapPoll(createdPoll),
       options: createdOptions.map(mapOption),
+      ...(moderationMessage ? { message: moderationMessage } : null),
     };
   },
 
@@ -803,17 +888,26 @@ export const pollDraftService = {
       return contractFailure as UpdateDraftPollResultDto;
     }
 
+    const updatedPayload = buildPollInsertPayload(
+      existingPoll.id,
+      normalized.data,
+      existingPoll.created_by_user_id || viewerUserId,
+      existingPoll.slug,
+      normalized.data.startsAt || existingPoll.starts_at,
+      input.endsAt === undefined ? existingPoll.ends_at : normalized.data.endsAt,
+      optionSetHash,
+    );
+    const moderation =
+      updatedPayload.status === "draft"
+        ? null
+        : await moderatePollPayload(updatedPayload, optionRows);
+    const finalUpdatedPayload = moderation
+      ? applyModerationResultToPayload(updatedPayload, moderation)
+      : updatedPayload;
+
     const updatedPoll = await pollRepository.updateById(
       existingPoll.id,
-      buildPollInsertPayload(
-        existingPoll.id,
-        normalized.data,
-        existingPoll.created_by_user_id || viewerUserId,
-        existingPoll.slug,
-        normalized.data.startsAt || existingPoll.starts_at,
-        input.endsAt === undefined ? existingPoll.ends_at : normalized.data.endsAt,
-        optionSetHash,
-      ),
+      finalUpdatedPayload,
     );
 
     if (!updatedPoll) {
@@ -833,6 +927,9 @@ export const pollDraftService = {
       success: true,
       poll: mapPoll(updatedPoll),
       options: updatedOptions.map(mapOption),
+      ...(moderation && MODERATION_USER_MESSAGES[moderation.decision]
+        ? { message: MODERATION_USER_MESSAGES[moderation.decision] as string }
+        : null),
     };
   },
 
@@ -889,41 +986,48 @@ export const pollDraftService = {
       return contractFailure as PublishDraftPollResultDto;
     }
 
+    const publishPayload = buildPollInsertPayload(
+      existingPoll.id,
+      {
+        title: existingPoll.title,
+        description: existingPoll.description,
+        options: [],
+        jurisdictionType: existingPoll.jurisdiction_type,
+        jurisdictionCountryCode: existingPoll.jurisdiction_country_code,
+        jurisdictionAreaIds: existingPoll.jurisdiction_area_ids || [],
+        jurisdictionLandIds: existingPoll.jurisdiction_land_ids || [],
+        status: "active",
+        eligibilityRule: {
+          requiresVerifiedIdentity: existingPoll.requires_verified_identity,
+          allowedDocumentCountryCodes:
+            existingPoll.allowed_document_country_codes || [],
+          allowedHomeAreaIds: existingPoll.allowed_home_area_ids || [],
+          allowedLandIds: existingPoll.allowed_land_ids || [],
+          minimumAge: existingPoll.minimum_age,
+        },
+        votePrivacyMode,
+        resultPublicationMode:
+          existingPoll.result_publication_mode ??
+          DEFAULT_RESULT_PUBLICATION_MODE,
+        pollEncryptionKeyId,
+        startsAt: existingPoll.starts_at || now,
+        endsAt: existingPoll.ends_at,
+      },
+      existingPoll.created_by_user_id || viewerUserId,
+      existingPoll.slug,
+      existingPoll.starts_at || now,
+      existingPoll.ends_at,
+      optionSetHash,
+    );
+    await pollRepository.updateById(existingPoll.id, {
+      ...publishPayload,
+      status: "draft",
+      moderation_status: "moderation_pending",
+    });
+    const moderation = await moderatePollPayload(publishPayload, existingOptions);
     const publishedPoll = await pollRepository.updateById(
       existingPoll.id,
-      buildPollInsertPayload(
-        existingPoll.id,
-        {
-          title: existingPoll.title,
-          description: existingPoll.description,
-          options: [],
-          jurisdictionType: existingPoll.jurisdiction_type,
-          jurisdictionCountryCode: existingPoll.jurisdiction_country_code,
-          jurisdictionAreaIds: existingPoll.jurisdiction_area_ids || [],
-          jurisdictionLandIds: existingPoll.jurisdiction_land_ids || [],
-          status: "active",
-          eligibilityRule: {
-            requiresVerifiedIdentity: existingPoll.requires_verified_identity,
-            allowedDocumentCountryCodes:
-              existingPoll.allowed_document_country_codes || [],
-            allowedHomeAreaIds: existingPoll.allowed_home_area_ids || [],
-            allowedLandIds: existingPoll.allowed_land_ids || [],
-            minimumAge: existingPoll.minimum_age,
-          },
-          votePrivacyMode,
-          resultPublicationMode:
-            existingPoll.result_publication_mode ??
-            DEFAULT_RESULT_PUBLICATION_MODE,
-          pollEncryptionKeyId,
-          startsAt: existingPoll.starts_at || now,
-          endsAt: existingPoll.ends_at,
-        },
-        existingPoll.created_by_user_id || viewerUserId,
-        existingPoll.slug,
-        existingPoll.starts_at || now,
-        existingPoll.ends_at,
-        optionSetHash,
-      ),
+      applyModerationResultToPayload(publishPayload, moderation),
     );
 
     if (!publishedPoll) {
@@ -938,6 +1042,9 @@ export const pollDraftService = {
       success: true,
       poll: mapPoll(publishedPoll),
       options: existingOptions.map(mapOption),
+      ...(MODERATION_USER_MESSAGES[moderation.decision]
+        ? { message: MODERATION_USER_MESSAGES[moderation.decision] as string }
+        : null),
     };
   },
 };

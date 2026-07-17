@@ -21,10 +21,14 @@ process.env.AUTH_ANDROID_GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY = googleOAuthPrivate
   .toString();
 process.env.AUTH_ANDROID_ALLOWED_SIGNING_CERT_DIGESTS =
   "23e31a67fd079259091c31ab079846a30d07f18e66ae675863b18a0a77e66763";
+process.env.SOLANA_AUDIT_TRANSACTIONS_ENABLED = "false";
 
 const pollRepository = (await import("../repositories/pollRepository")).default;
 const voteRepository = (await import("../repositories/voteRepository")).default;
+const contentModerationService =
+  (await import("./contentModerationService")).default;
 const { pollDraftService } = await import("./pollDraftService");
+type ModeratePostResult = import("./contentModerationService").ModeratePostResult;
 
 const FIXED_TIME = "2026-07-04T12:00:00.000Z";
 
@@ -70,6 +74,23 @@ const createOption = (
   ...overrides,
 });
 
+const createModerationResult = (
+  overrides: Partial<ModeratePostResult> = {},
+): ModeratePostResult => ({
+  decision: "allow",
+  moderationStatus: "published",
+  model: "omni-moderation-latest",
+  flagged: false,
+  categories: {},
+  categoryScores: {},
+  appliedInputTypes: {},
+  raw: null,
+  error: null,
+  policyVersion: "gate1-v1",
+  moderatedAt: FIXED_TIME,
+  ...overrides,
+});
+
 const rowFromNewPoll = (input: NewPollRow): PollRow =>
   createPoll({
     id: input.id || "poll-1",
@@ -94,6 +115,16 @@ const rowFromNewPoll = (input: NewPollRow): PollRow =>
     credential_schema_json: input.credential_schema_json,
     credential_schema_hash: input.credential_schema_hash,
     vote_privacy_mode: input.vote_privacy_mode,
+    moderation_status: input.moderation_status,
+    moderation_model: input.moderation_model,
+    moderation_flagged: input.moderation_flagged,
+    moderation_categories: input.moderation_categories,
+    moderation_category_scores: input.moderation_category_scores,
+    moderation_applied_input_types: input.moderation_applied_input_types,
+    moderation_raw: input.moderation_raw,
+    moderated_at: input.moderated_at,
+    moderation_error: input.moderation_error,
+    moderation_policy_version: input.moderation_policy_version,
     option_set_hash: input.option_set_hash,
     poll_encryption_key_id: input.poll_encryption_key_id,
   });
@@ -244,6 +275,11 @@ describe("pollDraftService ZKP audit material", () => {
         finalizedPoll = input;
         return rowFromNewPoll(input);
       }),
+      patchMethod(
+        contentModerationService,
+        "moderatePost",
+        async () => createModerationResult(),
+      ),
     ];
 
     try {
@@ -268,11 +304,91 @@ describe("pollDraftService ZKP audit material", () => {
       }
       expect(stagedPayload.status).toBe("draft");
       expect(finalizedPayload.status).toBe("active");
+      expect(finalizedPayload.moderation_status).toBe("published");
+      expect(finalizedPayload.moderation_model).toBe("omni-moderation-latest");
+      expect(finalizedPayload.moderation_flagged).toBe(false);
       expect(stagedPayload.poll_policy_hash).toBe(
         finalizedPayload.poll_policy_hash,
       );
       expect(stagedPayload.option_set_hash).toBe(finalizedPayload.option_set_hash);
       expect(result.poll?.status).toBe("active");
+    } finally {
+      restoreFns.reverse().forEach((restore) => restore());
+    }
+  });
+
+  it("does not publish direct active poll creation when moderation blocks it", async () => {
+    let finalizedPoll: NewPollRow | null = null;
+
+    const restoreFns = [
+      patchMethod(pollRepository, "insert", async (input: NewPollRow) =>
+        rowFromNewPoll(input),
+      ),
+      patchMethod(
+        pollRepository,
+        "insertOptions",
+        async (options: NewPollOptionRow[]) =>
+          options.map((option, index) =>
+            createOption({
+              id: option.id || `option-${index + 1}`,
+              poll_id: option.poll_id,
+              label: option.label,
+              description: option.description,
+              color: option.color,
+              display_order: option.display_order,
+              is_active: option.is_active,
+              created_at: option.created_at || FIXED_TIME,
+            }),
+          ),
+      ),
+      patchMethod(pollRepository, "updateById", async (_pollId, input) => {
+        finalizedPoll = input;
+        return rowFromNewPoll(input);
+      }),
+      patchMethod(
+        contentModerationService,
+        "moderatePost",
+        async () =>
+          createModerationResult({
+            decision: "blocked",
+            moderationStatus: "blocked",
+            flagged: true,
+            categories: {
+              "hate/threatening": true,
+            },
+            categoryScores: {
+              "hate/threatening": 0.99,
+            },
+          }),
+      ),
+    ];
+
+    try {
+      const result = await pollDraftService.createPoll(
+        {
+          title: "Direct active poll",
+          options: ["Yes", "No"],
+          pollEncryptionKeyId: "poll-key-1",
+          eligibilityRule: {
+            requiresVerifiedIdentity: true,
+          },
+        },
+        "creator-1",
+      );
+
+      expect(result.success).toBe(true);
+      expect(result.message).toContain("could not be published");
+      expect(result.poll?.status).toBe("draft");
+      expect(result.poll?.moderationStatus).toBe("blocked");
+      const finalizedPayload = finalizedPoll as NewPollRow | null;
+      if (!finalizedPayload) {
+        throw new Error("Expected finalized poll payload.");
+      }
+      expect(finalizedPayload.status).toBe("draft");
+      expect(finalizedPayload.moderation_status).toBe("blocked");
+      expect(finalizedPayload.moderation_categories).toEqual({
+        "hate/threatening": true,
+      });
     } finally {
       restoreFns.reverse().forEach((restore) => restore());
     }
@@ -389,6 +505,11 @@ describe("pollDraftService ZKP audit material", () => {
         updatedPoll = input;
         return rowFromNewPoll(input);
       }),
+      patchMethod(
+        contentModerationService,
+        "moderatePost",
+        async () => createModerationResult(),
+      ),
     ];
 
     try {

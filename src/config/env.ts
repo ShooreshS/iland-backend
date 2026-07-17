@@ -147,6 +147,7 @@ const parsed = z
     WALLET_ISSUER_ID: z.string().min(1).optional(),
     WALLET_ISSUER_SIGNING_SECRET: z.string().min(1).optional(),
     VERIFIED_IDENTITY_PEPPER: z.string().min(1).optional(),
+    OPENAI_API_KEY: z.string().min(1).optional(),
     POLL_MAP_REFRESH_WORKER_ENABLED: z.string().optional(),
     POLL_MAP_REFRESH_INTERVAL_MS: z.coerce.number().int().min(250).optional(),
     POLL_MAP_REFRESH_PENDING_THRESHOLD: z.coerce.number().int().min(1).optional(),
@@ -250,6 +251,19 @@ const parsed = z
         message:
           "AUTH_ENABLE_TRANSITIONAL_CRYPTO_BYPASS must be false in production.",
         path: ["AUTH_ENABLE_TRANSITIONAL_CRYPTO_BYPASS"],
+      });
+    }
+
+    if (
+      !skipServerOnlyAuthValidation &&
+      input.NODE_ENV === "production" &&
+      !input.OPENAI_API_KEY
+    ) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        message:
+          "OPENAI_API_KEY is required in production because poll publishing uses backend moderation.",
+        path: ["OPENAI_API_KEY"],
       });
     }
 
@@ -724,6 +738,7 @@ const parsed = z
       process.env.WALLET_ISSUER_SIGNING_SECRET,
     ),
     VERIFIED_IDENTITY_PEPPER: emptyToUndefined(process.env.VERIFIED_IDENTITY_PEPPER),
+    OPENAI_API_KEY: emptyToUndefined(process.env.OPENAI_API_KEY),
     POLL_MAP_REFRESH_WORKER_ENABLED: emptyToUndefined(
       process.env.POLL_MAP_REFRESH_WORKER_ENABLED,
     ),
@@ -1083,6 +1098,9 @@ export const env = Object.freeze({
   }),
   verifiedIdentity: Object.freeze({
     pepper: verifiedIdentityPepper,
+  }),
+  openai: Object.freeze({
+    apiKeyConfigured: Boolean(parsed.OPENAI_API_KEY),
   }),
   pollMapRefreshWorker: Object.freeze({
     enabled: pollMapRefreshWorkerEnabled,

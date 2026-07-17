@@ -98,6 +98,12 @@ const mapPoll = (row: PollRow): PollDto => {
     title: row.title,
     description: row.description,
     status: resolveEffectivePollStatus(row),
+    moderationStatus:
+      row.moderation_status ?? (row.status === "draft" ? "draft" : "published"),
+    moderationModel: row.moderation_model ?? null,
+    moderationFlagged: row.moderation_flagged ?? null,
+    moderatedAt: row.moderated_at ?? null,
+    moderationPolicyVersion: row.moderation_policy_version ?? null,
     jurisdictionType: row.jurisdiction_type,
     jurisdictionCountryCode: row.jurisdiction_country_code,
     jurisdictionAreaIds: toArray(row.jurisdiction_area_ids),
@@ -516,8 +522,13 @@ const sortSummaries = (summaries: PollSummaryDto[]): PollSummaryDto[] =>
     return right.poll.createdAt.localeCompare(left.poll.createdAt);
   });
 
+const isPollModerationPublished = (poll: PollRow): boolean =>
+  (poll.moderation_status ??
+    (poll.status === "draft" ? "draft" : "published")) === "published";
+
 const isPollVisibleToViewer = (poll: PollRow, viewerUserId: string): boolean =>
-  poll.status !== "draft" || poll.created_by_user_id === viewerUserId;
+  (poll.status !== "draft" && isPollModerationPublished(poll)) ||
+  poll.created_by_user_id === viewerUserId;
 
 const buildResults = (
   poll: PollDto,
@@ -973,7 +984,10 @@ export const createPollVotingService = (
       );
     }
 
-    if (resolveEffectivePollStatus(poll, submittedAt) !== "active") {
+    if (
+      !isPollModerationPublished(poll) ||
+      resolveEffectivePollStatus(poll, submittedAt) !== "active"
+    ) {
       return rejectProductionVote(
         ZKP_AUDIT_REJECTION_REASON_CODES.pollNotActive,
         "POLL_NOT_ACTIVE",

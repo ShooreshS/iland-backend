@@ -1,6 +1,17 @@
 export const VOTING_CONTRACT_VERSION = "0.0.86" as const;
 
 export type PollStatus = "draft" | "scheduled" | "active" | "closed" | "archived";
+export type PollModerationStatus =
+  | "draft"
+  | "moderation_pending"
+  | "published"
+  | "review_required"
+  | "needs_edit"
+  | "blocked"
+  | "moderation_error"
+  | "appeal_pending"
+  | "appeal_approved"
+  | "appeal_rejected";
 
 export type PollJurisdictionType =
   | "global"
@@ -32,6 +43,11 @@ export type PollDto = {
   title: string;
   description: string | null;
   status: PollStatus;
+  moderationStatus: PollModerationStatus;
+  moderationModel: string | null;
+  moderationFlagged: boolean | null;
+  moderatedAt: string | null;
+  moderationPolicyVersion: string | null;
   jurisdictionType: PollJurisdictionType;
   jurisdictionCountryCode: string | null;
   jurisdictionAreaIds: string[];
@@ -632,6 +648,7 @@ export type PollManagementErrorCode =
   | "USER_NOT_FOUND"
   | "POLL_NOT_OWNED"
   | "VALIDATION_FAILED"
+  | "MODERATION_FAILED"
   | "POLL_NOT_FOUND"
   | "POLL_NOT_EDITABLE"
   | "POLL_ALREADY_HAS_VOTES";

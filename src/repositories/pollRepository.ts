@@ -14,7 +14,9 @@ const BASE_POLL_COLUMNS =
   "id,slug,created_by_user_id,title,description,status,jurisdiction_type,jurisdiction_country_code,jurisdiction_area_ids,jurisdiction_land_ids,requires_verified_identity,allowed_document_country_codes,allowed_home_area_ids,allowed_land_ids,minimum_age,starts_at,ends_at,poll_policy_json,poll_policy_hash,credential_schema_json,credential_schema_hash,created_at,updated_at";
 const POLL_CONTRACT_COLUMNS =
   "vote_privacy_mode,result_publication_mode,option_set_hash,poll_encryption_key_id";
-const POLL_COLUMNS = `${BASE_POLL_COLUMNS},${POLL_CONTRACT_COLUMNS}`;
+const POLL_MODERATION_COLUMNS =
+  "moderation_status,moderation_model,moderation_flagged,moderation_categories,moderation_category_scores,moderation_applied_input_types,moderation_raw,moderated_at,moderation_error,moderation_policy_version,gate2_status,gate2_model,gate2_result,human_review_status,human_review_decision,human_reviewed_at";
+const POLL_COLUMNS = `${BASE_POLL_COLUMNS},${POLL_CONTRACT_COLUMNS},${POLL_MODERATION_COLUMNS}`;
 
 const POLL_OPTION_COLUMNS =
   "id,poll_id,label,description,color,display_order,is_active,created_at,updated_at";
@@ -24,6 +26,24 @@ const POLL_CONTRACT_COLUMN_NAMES = [
   "result_publication_mode",
   "option_set_hash",
   "poll_encryption_key_id",
+] as const;
+const POLL_MODERATION_COLUMN_NAMES = [
+  "moderation_status",
+  "moderation_model",
+  "moderation_flagged",
+  "moderation_categories",
+  "moderation_category_scores",
+  "moderation_applied_input_types",
+  "moderation_raw",
+  "moderated_at",
+  "moderation_error",
+  "moderation_policy_version",
+  "gate2_status",
+  "gate2_model",
+  "gate2_result",
+  "human_review_status",
+  "human_review_decision",
+  "human_reviewed_at",
 ] as const;
 
 const KNOWN_POLL_VOTE_PRIVACY_MODES = new Set<PollVotePrivacyMode>([
@@ -46,7 +66,7 @@ type PartialPollRow = Omit<
     >
   >;
 
-const isMissingPollContractColumnError = (error: unknown): boolean => {
+const isMissingOptionalPollColumnError = (error: unknown): boolean => {
   if (!error || typeof error !== "object") {
     return false;
   }
@@ -71,8 +91,8 @@ const isMissingPollContractColumnError = (error: unknown): boolean => {
   }
 
   const normalized = message.toLowerCase();
-  return POLL_CONTRACT_COLUMN_NAMES.some((columnName) =>
-    normalized.includes(columnName),
+  return [...POLL_CONTRACT_COLUMN_NAMES, ...POLL_MODERATION_COLUMN_NAMES].some(
+    (columnName) => normalized.includes(columnName),
   );
 };
 
@@ -100,6 +120,24 @@ const withPollContractDefaults = (row: PartialPollRow): PollRow => ({
   result_publication_mode: resolveResultPublicationMode(row),
   option_set_hash: row.option_set_hash ?? null,
   poll_encryption_key_id: row.poll_encryption_key_id ?? null,
+  moderation_status:
+    row.moderation_status ?? (row.status === "draft" ? "draft" : "published"),
+  moderation_model: row.moderation_model ?? null,
+  moderation_flagged: row.moderation_flagged ?? null,
+  moderation_categories: row.moderation_categories ?? null,
+  moderation_category_scores: row.moderation_category_scores ?? null,
+  moderation_applied_input_types:
+    row.moderation_applied_input_types ?? null,
+  moderation_raw: row.moderation_raw ?? null,
+  moderated_at: row.moderated_at ?? null,
+  moderation_error: row.moderation_error ?? null,
+  moderation_policy_version: row.moderation_policy_version ?? null,
+  gate2_status: row.gate2_status ?? null,
+  gate2_model: row.gate2_model ?? null,
+  gate2_result: row.gate2_result ?? null,
+  human_review_status: row.human_review_status ?? null,
+  human_review_decision: row.human_review_decision ?? null,
+  human_reviewed_at: row.human_reviewed_at ?? null,
 });
 
 const buildPollInsertPayload = (input: NewPollRow) => ({
@@ -133,6 +171,55 @@ const buildPollContractPayload = (input: NewPollRow) => ({
   poll_encryption_key_id: input.poll_encryption_key_id ?? null,
 });
 
+const buildPollModerationPayload = (input: NewPollRow) => ({
+  ...(input.moderation_status !== undefined
+    ? { moderation_status: input.moderation_status }
+    : null),
+  ...(input.moderation_model !== undefined
+    ? { moderation_model: input.moderation_model }
+    : null),
+  ...(input.moderation_flagged !== undefined
+    ? { moderation_flagged: input.moderation_flagged }
+    : null),
+  ...(input.moderation_categories !== undefined
+    ? { moderation_categories: input.moderation_categories }
+    : null),
+  ...(input.moderation_category_scores !== undefined
+    ? { moderation_category_scores: input.moderation_category_scores }
+    : null),
+  ...(input.moderation_applied_input_types !== undefined
+    ? { moderation_applied_input_types: input.moderation_applied_input_types }
+    : null),
+  ...(input.moderation_raw !== undefined
+    ? { moderation_raw: input.moderation_raw }
+    : null),
+  ...(input.moderated_at !== undefined
+    ? { moderated_at: input.moderated_at }
+    : null),
+  ...(input.moderation_error !== undefined
+    ? { moderation_error: input.moderation_error }
+    : null),
+  ...(input.moderation_policy_version !== undefined
+    ? { moderation_policy_version: input.moderation_policy_version }
+    : null),
+  ...(input.gate2_status !== undefined
+    ? { gate2_status: input.gate2_status }
+    : null),
+  ...(input.gate2_model !== undefined ? { gate2_model: input.gate2_model } : null),
+  ...(input.gate2_result !== undefined
+    ? { gate2_result: input.gate2_result }
+    : null),
+  ...(input.human_review_status !== undefined
+    ? { human_review_status: input.human_review_status }
+    : null),
+  ...(input.human_review_decision !== undefined
+    ? { human_review_decision: input.human_review_decision }
+    : null),
+  ...(input.human_reviewed_at !== undefined
+    ? { human_reviewed_at: input.human_reviewed_at }
+    : null),
+});
+
 const buildPollUpdatePayload = (input: NewPollRow) => {
   const { id: _id, ...payload } = buildPollInsertPayload(input);
   return payload;
@@ -158,12 +245,7 @@ const closeExpiredPolls = async (nowIso = new Date().toISOString()): Promise<voi
 
 const getByIdInternal = async (
   pollId: string,
-  options: { refreshStatus: boolean },
 ): Promise<PollRow | null> => {
-  if (options.refreshStatus) {
-    await closeExpiredPolls();
-  }
-
   const supabase = requireSupabaseAdminClient();
 
   const { data, error } = await supabase
@@ -172,7 +254,7 @@ const getByIdInternal = async (
     .eq("id", pollId)
     .maybeSingle<PollRow>();
 
-  if (error && isMissingPollContractColumnError(error)) {
+  if (error && isMissingOptionalPollColumnError(error)) {
     const fallback = await supabase
       .from("polls")
       .select(BASE_POLL_COLUMNS)
@@ -206,7 +288,7 @@ export const pollRepository = {
       .select(POLL_COLUMNS)
       .order("created_at", { ascending: false });
 
-    if (error && isMissingPollContractColumnError(error)) {
+    if (error && isMissingOptionalPollColumnError(error)) {
       const fallback = await supabase
         .from("polls")
         .select(BASE_POLL_COLUMNS)
@@ -229,11 +311,12 @@ export const pollRepository = {
   },
 
   async getById(pollId: string): Promise<PollRow | null> {
-    return getByIdInternal(pollId, { refreshStatus: true });
+    await closeExpiredPolls();
+    return getByIdInternal(pollId);
   },
 
   async getByIdWithoutStatusRefresh(pollId: string): Promise<PollRow | null> {
-    return getByIdInternal(pollId, { refreshStatus: false });
+    return getByIdInternal(pollId);
   },
 
   async getOptionsByPollId(pollId: string): Promise<PollOptionRow[]> {
@@ -312,11 +395,12 @@ export const pollRepository = {
       .insert({
         ...buildPollInsertPayload(input),
         ...buildPollContractPayload(input),
+        ...buildPollModerationPayload(input),
       })
       .select(POLL_COLUMNS)
       .single<PollRow>();
 
-    if (error && isMissingPollContractColumnError(error)) {
+    if (error && isMissingOptionalPollColumnError(error)) {
       const fallback = await supabase
         .from("polls")
         .insert(buildPollInsertPayload(input))
@@ -345,12 +429,13 @@ export const pollRepository = {
       .update({
         ...buildPollUpdatePayload(input),
         ...buildPollContractPayload(input),
+        ...buildPollModerationPayload(input),
       })
       .eq("id", pollId)
       .select(POLL_COLUMNS)
       .maybeSingle<PollRow>();
 
-    if (error && isMissingPollContractColumnError(error)) {
+    if (error && isMissingOptionalPollColumnError(error)) {
       const fallback = await supabase
         .from("polls")
         .update(buildPollUpdatePayload(input))

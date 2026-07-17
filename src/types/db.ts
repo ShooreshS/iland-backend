@@ -1,5 +1,6 @@
 import type {
   PollJurisdictionType,
+  PollModerationStatus,
   PollResultPublicationMode,
   PollStatus,
   PollVotePrivacyMode,
@@ -454,6 +455,22 @@ export type PollRow = {
   title: string;
   description: string | null;
   status: PollStatus;
+  moderation_status?: PollModerationStatus;
+  moderation_model?: string | null;
+  moderation_flagged?: boolean | null;
+  moderation_categories?: JsonValue | null;
+  moderation_category_scores?: JsonValue | null;
+  moderation_applied_input_types?: JsonValue | null;
+  moderation_raw?: JsonValue | null;
+  moderated_at?: string | null;
+  moderation_error?: string | null;
+  moderation_policy_version?: string | null;
+  gate2_status?: string | null;
+  gate2_model?: string | null;
+  gate2_result?: JsonValue | null;
+  human_review_status?: string | null;
+  human_review_decision?: string | null;
+  human_reviewed_at?: string | null;
   jurisdiction_type: PollJurisdictionType;
   jurisdiction_country_code: string | null;
   jurisdiction_area_ids: string[] | null;
@@ -496,6 +513,22 @@ export type NewPollRow = {
   title: string;
   description: string | null;
   status: PollStatus;
+  moderation_status?: PollModerationStatus;
+  moderation_model?: string | null;
+  moderation_flagged?: boolean | null;
+  moderation_categories?: JsonValue | null;
+  moderation_category_scores?: JsonValue | null;
+  moderation_applied_input_types?: JsonValue | null;
+  moderation_raw?: JsonValue | null;
+  moderated_at?: string | null;
+  moderation_error?: string | null;
+  moderation_policy_version?: string | null;
+  gate2_status?: string | null;
+  gate2_model?: string | null;
+  gate2_result?: JsonValue | null;
+  human_review_status?: string | null;
+  human_review_decision?: string | null;
+  human_reviewed_at?: string | null;
   jurisdiction_type: PollJurisdictionType;
   jurisdiction_country_code: string | null;
   jurisdiction_area_ids: string[];
