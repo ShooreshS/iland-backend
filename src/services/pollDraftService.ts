@@ -36,10 +36,12 @@ import type { ModeratePostResult } from "./contentModerationService";
 const OPTION_COLOR_PALETTE = [
   "#3B82F6",
   "#EF4444",
-  "#10B981",
+  "#0ecd8d",
   "#F59E0B",
   "#8B5CF6",
-  "#14B8A6",
+  "#ef8ba1",
+  "#791127",
+  "#115f2e",
 ];
 const MIN_PUBLISHABLE_ACTIVE_OPTIONS = 2;
 const PRODUCTION_ZKP_MAX_OPTIONS = 8;
@@ -61,11 +63,11 @@ const MODERATION_USER_MESSAGES: Record<
   string | null
 > = {
   allow: null,
-  review_required: "Your post needs additional review before it can be published.",
+  review_required: "Your poll needs additional review before it can be published.",
   blocked:
-    "This post could not be published because it appears to violate CivicOS safety rules.",
+    "This poll could not be published because it appears to violate CivicOS safety rules.",
   moderation_error:
-    "We could not complete moderation. The post has not been published.",
+    "We could not complete moderation. The poll has not been published.",
 };
 
 type NormalizedPollMutationInput = {
