@@ -28,6 +28,7 @@
     "@supabase/supabase-js": "^2.57.4",
     "cbor-x": "^1.6.4",
     "circomlibjs": "^0.1.7",
+    "openai": "^6.48.0",
     "qrcode": "^1.5.4",
     "reflect-metadata": "^0.2.2",
     "snarkjs": "^0.7.6",

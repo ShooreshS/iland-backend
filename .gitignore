@@ -28,3 +28,7 @@ scripts/human-ceremony/**/*.ptau
 scripts/human-ceremony/*.zip
 scripts/human-ceremony/contributor*/
 scripts/human-ceremony/final/
+
+# Content modration
+moderation/policy.json
+moderation/openai-api-key.txt
