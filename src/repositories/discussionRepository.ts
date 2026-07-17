@@ -8,7 +8,7 @@ import type {
 } from "../types/db";
 
 const POST_COLUMNS =
-  "id,author_user_id,author_public_nickname,post_type,caption,image_url,image_mime_type,image_size_bytes,image_alt_text,moderation_status,moderation_model,moderation_flagged,moderation_categories,moderation_category_scores,moderation_applied_input_types,moderation_raw,moderated_at,moderation_error,moderation_policy_version,gate2_status,gate2_model,gate2_result,human_review_status,human_review_decision,human_reviewed_at,like_count,comment_count,feed_score,deliberation_id,created_at,updated_at";
+  "id,author_user_id,author_public_nickname,post_type,caption,image_url,image_storage_bucket,image_storage_path,image_mime_type,image_size_bytes,image_alt_text,moderation_status,moderation_model,moderation_flagged,moderation_categories,moderation_category_scores,moderation_applied_input_types,moderation_raw,moderated_at,moderation_error,moderation_policy_version,gate2_status,gate2_model,gate2_result,human_review_status,human_review_decision,human_reviewed_at,like_count,comment_count,feed_score,deliberation_id,created_at,updated_at";
 
 const COMMENT_COLUMNS =
   "id,post_id,author_user_id,author_public_nickname,body,moderation_status,moderation_model,moderation_flagged,moderation_categories,moderation_category_scores,moderation_applied_input_types,moderation_raw,moderated_at,moderation_error,moderation_policy_version,created_at,updated_at";
@@ -20,6 +20,8 @@ const buildPostPayload = (input: NewDiscussionPostRow) => ({
   post_type: input.post_type,
   caption: input.caption ?? null,
   image_url: input.image_url ?? null,
+  image_storage_bucket: input.image_storage_bucket ?? null,
+  image_storage_path: input.image_storage_path ?? null,
   image_mime_type: input.image_mime_type ?? null,
   image_size_bytes: input.image_size_bytes ?? null,
   image_alt_text: input.image_alt_text ?? null,

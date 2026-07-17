@@ -18,12 +18,23 @@ const discussionPostTypeSchema = z.enum([
 
 const discussionImageSchema = z
   .object({
-    imageUrl: z.string().trim().min(1),
+    imageUrl: z.string().trim().min(1).nullable().optional(),
+    storageBucket: z.string().trim().min(1).nullable().optional(),
+    storagePath: z.string().trim().min(1).nullable().optional(),
+    uploadId: z.string().trim().min(1).nullable().optional(),
     mimeType: z.string().trim().min(1).nullable().optional(),
     sizeBytes: z.number().int().positive().nullable().optional(),
     altText: z.string().trim().nullable().optional(),
   })
-  .strict();
+  .strict()
+  .refine(
+    (image) =>
+      Boolean(image.imageUrl) ||
+      Boolean(image.storageBucket && image.storagePath && image.uploadId),
+    {
+      message: "Image URL or completed upload reference is required.",
+    },
+  );
 
 const createDiscussionPostSchema = z
   .object({

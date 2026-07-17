@@ -569,6 +569,8 @@ export type DiscussionPostRow = {
   post_type: DiscussionPostType;
   caption: string | null;
   image_url: string | null;
+  image_storage_bucket: string | null;
+  image_storage_path: string | null;
   image_mime_type: string | null;
   image_size_bytes: number | null;
   image_alt_text: string | null;
@@ -603,6 +605,8 @@ export type NewDiscussionPostRow = {
   post_type: DiscussionPostType;
   caption?: string | null;
   image_url?: string | null;
+  image_storage_bucket?: string | null;
+  image_storage_path?: string | null;
   image_mime_type?: string | null;
   image_size_bytes?: number | null;
   image_alt_text?: string | null;
@@ -667,6 +671,40 @@ export type DiscussionPostLikeRow = {
   post_id: string;
   user_id: string;
   created_at: string;
+};
+
+export type DiscussionMediaUploadStatus =
+  | "signed"
+  | "uploaded"
+  | "attached"
+  | "abandoned";
+
+export type DiscussionMediaUploadRow = {
+  id: string;
+  uploader_user_id: string;
+  storage_bucket: string;
+  storage_path: string;
+  original_file_name: string | null;
+  mime_type: string;
+  size_bytes: number;
+  upload_status: DiscussionMediaUploadStatus;
+  attached_post_id: string | null;
+  signed_at: string;
+  completed_at: string | null;
+  attached_at: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type NewDiscussionMediaUploadRow = {
+  id?: string;
+  uploader_user_id: string;
+  storage_bucket: string;
+  storage_path: string;
+  original_file_name?: string | null;
+  mime_type: string;
+  size_bytes: number;
+  upload_status?: DiscussionMediaUploadStatus;
 };
 
 export type PollEncryptionKeyRow = {

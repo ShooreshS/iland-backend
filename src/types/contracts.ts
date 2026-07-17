@@ -142,10 +142,54 @@ export type ViewerVoteSummaryDto = {
 };
 
 export type DiscussionImageInputDto = {
-  imageUrl: string;
+  imageUrl?: string | null;
+  storageBucket?: string | null;
+  storagePath?: string | null;
+  uploadId?: string | null;
   mimeType?: string | null;
   sizeBytes?: number | null;
   altText?: string | null;
+};
+
+export type DiscussionImageUploadDto = {
+  id: string;
+  uploadUrl: string;
+  storageBucket: string;
+  storagePath: string;
+  mimeType: string;
+  sizeBytes: number;
+  expiresInSeconds: number;
+  maxSizeBytes: number;
+  allowedMimeTypes: string[];
+};
+
+export type CreateDiscussionImageUploadRequestDto = {
+  fileName?: string | null;
+  mimeType: string;
+  sizeBytes: number;
+};
+
+export type DiscussionImageUploadErrorCode =
+  | "USER_NOT_FOUND"
+  | "VERIFIED_IDENTITY_REQUIRED"
+  | "VALIDATION_FAILED"
+  | "STORAGE_NOT_CONFIGURED"
+  | "STORAGE_FAILED"
+  | "UPLOAD_NOT_FOUND"
+  | "UPLOAD_NOT_READY";
+
+export type CreateDiscussionImageUploadResultDto = {
+  success: boolean;
+  upload?: DiscussionImageUploadDto;
+  errorCode?: DiscussionImageUploadErrorCode;
+  message?: string;
+};
+
+export type CompleteDiscussionImageUploadResultDto = {
+  success: boolean;
+  image?: DiscussionImageInputDto;
+  errorCode?: DiscussionImageUploadErrorCode;
+  message?: string;
 };
 
 export type CreateDiscussionPostRequestDto = {
@@ -161,6 +205,8 @@ export type DiscussionPostDto = {
   postType: DiscussionPostType;
   caption: string | null;
   imageUrl: string | null;
+  imageStorageBucket: string | null;
+  imageStoragePath: string | null;
   imageMimeType: string | null;
   imageSizeBytes: number | null;
   imageAltText: string | null;

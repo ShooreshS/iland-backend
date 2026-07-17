@@ -7,6 +7,10 @@ import {
   type ModeratePostResult,
 } from "./contentModerationService";
 import { validateModerationGate0 } from "./contentModerationGate0Service";
+import {
+  discussionMediaService,
+  type DiscussionImageResolutionResult,
+} from "./discussionMediaService";
 import type {
   CreateDiscussionCommentRequestDto,
   CreateDiscussionCommentResultDto,
@@ -68,13 +72,20 @@ const COMMENT_MODERATION_USER_MESSAGES: Record<
 
 type ImageResolver = (
   input: DiscussionImageInputDto | null,
-) => Promise<DiscussionImageInputDto | null>;
+  viewerUserId: string,
+) => Promise<DiscussionImageResolutionResult>;
 
 type DiscussionServiceDependencies = {
   discussionRepositoryLike?: typeof discussionRepository;
   userRepositoryLike?: Pick<typeof userRepository, "getById">;
   verifiedIdentityRepositoryLike?: Pick<typeof verifiedIdentityRepository, "getByUserId">;
   moderationServiceLike?: Pick<typeof contentModerationService, "moderatePost">;
+  mediaServiceLike?: Pick<
+    typeof discussionMediaService,
+    | "resolveUploadedImageForModeration"
+    | "createDisplayImageUrl"
+    | "attachUploadToPost"
+  >;
   imageResolver?: ImageResolver;
 };
 
@@ -117,10 +128,19 @@ const createFailure = <T extends { success: boolean }>(
     message,
   }) as unknown as T;
 
-const resolveImageMetadataFromUrl: ImageResolver = async (input) => {
+const hasUploadedImageReference = (input: DiscussionImageInputDto | null): boolean =>
+  Boolean(
+    normalizeText(input?.uploadId) ||
+      normalizeText(input?.storageBucket) ||
+      normalizeText(input?.storagePath),
+  );
+
+const resolveImageMetadataFromUrl = async (
+  input: DiscussionImageInputDto | null,
+): Promise<DiscussionImageResolutionResult> => {
   const imageUrl = normalizeText(input?.imageUrl);
   if (!imageUrl) {
-    return null;
+    return { ok: true, image: null };
   }
 
   let mimeType = normalizeText(input?.mimeType)?.toLowerCase() || null;
@@ -147,23 +167,33 @@ const resolveImageMetadataFromUrl: ImageResolver = async (input) => {
   }
 
   return {
-    imageUrl,
-    mimeType,
-    sizeBytes,
-    altText: normalizeText(input?.altText),
+    ok: true,
+    image: {
+      moderationImageUrl: imageUrl,
+      storedImageUrl: imageUrl,
+      storageBucket: null,
+      storagePath: null,
+      uploadId: null,
+      mimeType: mimeType || "",
+      sizeBytes: sizeBytes || 0,
+      altText: normalizeText(input?.altText),
+    },
   };
 };
 
 const mapPost = (
   row: DiscussionPostRow,
   viewerLikedPostIds = new Set<string>(),
+  displayImageUrl: string | null = row.image_url,
 ): DiscussionPostDto => ({
   id: row.id,
   authorUserId: row.author_user_id,
   authorNickname: row.author_public_nickname,
   postType: row.post_type,
   caption: row.caption,
-  imageUrl: row.image_url,
+  imageUrl: displayImageUrl,
+  imageStorageBucket: row.image_storage_bucket,
+  imageStoragePath: row.image_storage_path,
   imageMimeType: row.image_mime_type,
   imageSizeBytes: row.image_size_bytes,
   imageAltText: row.image_alt_text,
@@ -217,7 +247,36 @@ export const createDiscussionService = (
     dependencies.verifiedIdentityRepositoryLike || verifiedIdentityRepository;
   const moderationService =
     dependencies.moderationServiceLike || contentModerationService;
-  const imageResolver = dependencies.imageResolver || resolveImageMetadataFromUrl;
+  const mediaService = dependencies.mediaServiceLike || discussionMediaService;
+  const imageResolver =
+    dependencies.imageResolver ||
+    (async (input: DiscussionImageInputDto | null, viewerUserId: string) => {
+      if (!input) {
+        return { ok: true, image: null };
+      }
+
+      if (hasUploadedImageReference(input)) {
+        return mediaService.resolveUploadedImageForModeration(
+          input,
+          viewerUserId,
+        );
+      }
+
+      return resolveImageMetadataFromUrl(input);
+    });
+
+  const resolveDisplayImageUrl = async (
+    row: DiscussionPostRow,
+  ): Promise<string | null> => {
+    if (row.image_url) {
+      return row.image_url;
+    }
+
+    return mediaService.createDisplayImageUrl(
+      row.image_storage_bucket,
+      row.image_storage_path,
+    );
+  };
 
   const requireVerifiedCreator = async (
     viewerUserId: string,
@@ -262,9 +321,13 @@ export const createDiscussionService = (
         rows.map((row) => row.id),
       );
 
-      return {
-        posts: rows.map((row) => mapPost(row, likedPostIds)),
-      };
+      const posts = await Promise.all(
+        rows.map(async (row) =>
+          mapPost(row, likedPostIds, await resolveDisplayImageUrl(row)),
+        ),
+      );
+
+      return { posts };
     },
 
     async createPost(
@@ -281,12 +344,20 @@ export const createDiscussionService = (
 
       const postId = randomUUID();
       const caption = normalizeText(input.caption);
-      const image = await imageResolver(input.image ?? null);
+      const imageResult = await imageResolver(input.image ?? null, creator.user.id);
+      if (!imageResult.ok) {
+        return createFailure<CreateDiscussionPostResultDto>(
+          imageResult.errorCode,
+          imageResult.message,
+        );
+      }
+
+      const image = imageResult.image;
       const gate0 = validateModerationGate0({
         body: caption,
         image: image
           ? {
-              imageUrl: image.imageUrl,
+              imageUrl: image.moderationImageUrl,
               mimeType: image.mimeType,
               sizeBytes: image.sizeBytes,
               altText: image.altText,
@@ -304,7 +375,7 @@ export const createDiscussionService = (
       const moderation = await moderationService.moderatePost({
         postId,
         body: caption,
-        imageUrl: image?.imageUrl,
+        imageUrl: image?.moderationImageUrl,
         imageAltText: image?.altText,
       });
       const stored = await repo.insertPost({
@@ -313,16 +384,24 @@ export const createDiscussionService = (
         author_public_nickname: getAuthorNickname(creator.user),
         post_type: normalizePostType(input.postType),
         caption,
-        image_url: image?.imageUrl ?? null,
+        image_url: image?.storedImageUrl ?? null,
+        image_storage_bucket: image?.storageBucket ?? null,
+        image_storage_path: image?.storagePath ?? null,
         image_mime_type: image?.mimeType ?? null,
         image_size_bytes: image?.sizeBytes ?? null,
         image_alt_text: image?.altText ?? null,
         ...applyModeration(moderation),
       });
+      await mediaService.attachUploadToPost(
+        image?.uploadId ?? null,
+        creator.user.id,
+        stored.id,
+      );
+      const displayImageUrl = await resolveDisplayImageUrl(stored);
 
       return {
         success: true,
-        post: mapPost(stored),
+        post: mapPost(stored, new Set(), displayImageUrl),
         ...(MODERATION_USER_MESSAGES[moderation.decision]
           ? { message: MODERATION_USER_MESSAGES[moderation.decision] as string }
           : null),

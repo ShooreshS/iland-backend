@@ -10,6 +10,8 @@ create table if not exists public.discussion_posts (
     check (post_type in ('discussion', 'question', 'proposal', 'announcement')),
   caption text,
   image_url text,
+  image_storage_bucket text,
+  image_storage_path text,
   image_mime_type text,
   image_size_bytes bigint check (image_size_bytes is null or image_size_bytes > 0),
   image_alt_text text,
@@ -50,6 +52,7 @@ create table if not exists public.discussion_posts (
   check (
     nullif(btrim(coalesce(caption, '')), '') is not null
     or image_url is not null
+    or image_storage_path is not null
   )
 );
 
@@ -186,6 +189,10 @@ create index if not exists discussion_posts_feed_idx
 
 create index if not exists discussion_posts_author_created_idx
   on public.discussion_posts (author_user_id, created_at desc);
+
+create unique index if not exists discussion_posts_image_storage_path_idx
+  on public.discussion_posts (image_storage_bucket, image_storage_path)
+  where image_storage_path is not null;
 
 create index if not exists discussion_posts_moderation_idx
   on public.discussion_posts (moderation_status, moderated_at desc);

@@ -82,6 +82,8 @@ const createPostRow = (
   post_type: "discussion",
   caption: "A clean discussion",
   image_url: null,
+  image_storage_bucket: null,
+  image_storage_path: null,
   image_mime_type: null,
   image_size_bytes: null,
   image_alt_text: null,
@@ -153,6 +155,8 @@ const createRepo = () => {
           post_type: input.post_type,
           caption: input.caption,
           image_url: input.image_url,
+          image_storage_bucket: input.image_storage_bucket,
+          image_storage_path: input.image_storage_path,
           image_mime_type: input.image_mime_type,
           image_size_bytes: input.image_size_bytes,
           image_alt_text: input.image_alt_text,
@@ -228,7 +232,21 @@ describe("discussionService", () => {
       discussionRepositoryLike: repo as any,
       userRepositoryLike: { getById: async () => createUser() },
       verifiedIdentityRepositoryLike: { getByUserId: async () => verifiedIdentity },
-      imageResolver: async (image) => image,
+      imageResolver: async (image) => ({
+        ok: true,
+        image: image
+          ? {
+              moderationImageUrl: image.imageUrl as string,
+              storedImageUrl: image.imageUrl as string,
+              storageBucket: null,
+              storagePath: null,
+              uploadId: null,
+              mimeType: image.mimeType as string,
+              sizeBytes: image.sizeBytes as number,
+              altText: image.altText || null,
+            }
+          : null,
+      }),
       moderationServiceLike: {
         moderatePost: async (input) => {
           moderatedInputs.push(input);
@@ -260,6 +278,67 @@ describe("discussionService", () => {
       imageUrl: "https://example.test/bus.jpg",
       imageAltText: "A night bus",
     });
+  });
+
+  it("moderates uploaded discussion images through a signed URL without storing it", async () => {
+    const { repo, posts } = createRepo();
+    const attachedUploads: any[] = [];
+    const service = createDiscussionService({
+      discussionRepositoryLike: repo as any,
+      userRepositoryLike: { getById: async () => createUser() },
+      verifiedIdentityRepositoryLike: { getByUserId: async () => verifiedIdentity },
+      mediaServiceLike: {
+        resolveUploadedImageForModeration: async (image) => ({
+          ok: true,
+          image: {
+            moderationImageUrl: "https://signed.example.test/object/token",
+            storedImageUrl: null,
+            storageBucket: image.storageBucket as string,
+            storagePath: image.storagePath as string,
+            uploadId: image.uploadId as string,
+            mimeType: image.mimeType as string,
+            sizeBytes: image.sizeBytes as number,
+            altText: image.altText || null,
+          },
+        }),
+        createDisplayImageUrl: async () =>
+          "https://signed.example.test/object/display-token",
+        attachUploadToPost: async (...args) => {
+          attachedUploads.push(args);
+        },
+      },
+      moderationServiceLike: {
+        moderatePost: async (input) => {
+          expect(input.imageUrl).toBe("https://signed.example.test/object/token");
+          return createModerationResult();
+        },
+      },
+    });
+
+    const result = await service.createPost(
+      {
+        postType: "announcement",
+        caption: "Street closure map",
+        image: {
+          uploadId: "upload-1",
+          storageBucket: "discussion-media",
+          storagePath: "discussions/ab/upload-1.jpg",
+          mimeType: "image/jpeg",
+          sizeBytes: 12_000,
+          altText: "A street closure map",
+        },
+      },
+      "user-1",
+    );
+
+    expect(result.success).toBe(true);
+    expect(result.post?.imageUrl).toBe(
+      "https://signed.example.test/object/display-token",
+    );
+    expect(posts[0].image_url).toBeNull();
+    expect(posts[0].image_storage_bucket).toBe("discussion-media");
+    expect(posts[0].image_storage_path).toBe("discussions/ab/upload-1.jpg");
+    expect(attachedUploads[0]).toEqual(["upload-1", "user-1", posts[0].id]);
   });
 
   it("stores moderated comments individually and hides held comments from public lists", async () => {
