@@ -11,7 +11,7 @@ const POST_COLUMNS =
   "id,author_user_id,author_public_nickname,post_type,caption,image_url,image_storage_bucket,image_storage_path,image_mime_type,image_size_bytes,image_alt_text,moderation_status,moderation_model,moderation_flagged,moderation_categories,moderation_category_scores,moderation_applied_input_types,moderation_raw,moderated_at,moderation_error,moderation_policy_version,gate2_status,gate2_model,gate2_result,human_review_status,human_review_decision,human_reviewed_at,like_count,comment_count,feed_score,deliberation_id,created_at,updated_at";
 
 const COMMENT_COLUMNS =
-  "id,post_id,author_user_id,author_public_nickname,body,moderation_status,moderation_model,moderation_flagged,moderation_categories,moderation_category_scores,moderation_applied_input_types,moderation_raw,moderated_at,moderation_error,moderation_policy_version,created_at,updated_at";
+  "id,post_id,author_user_id,author_public_nickname,body,moderation_status,moderation_model,moderation_flagged,moderation_categories,moderation_category_scores,moderation_applied_input_types,moderation_raw,moderated_at,moderation_error,moderation_policy_version,human_review_status,human_review_decision,human_reviewed_at,created_at,updated_at";
 
 const buildPostPayload = (input: NewDiscussionPostRow) => ({
   ...(input.id ? { id: input.id } : null),
@@ -60,6 +60,9 @@ const buildCommentPayload = (input: NewDiscussionCommentRow) => ({
   moderated_at: input.moderated_at ?? null,
   moderation_error: input.moderation_error ?? null,
   moderation_policy_version: input.moderation_policy_version ?? null,
+  human_review_status: input.human_review_status ?? null,
+  human_review_decision: input.human_review_decision ?? null,
+  human_reviewed_at: input.human_reviewed_at ?? null,
 });
 
 export const discussionRepository = {

@@ -299,6 +299,39 @@ export type NewVerifiedIdentityRow = {
   verified_at: string;
 };
 
+export type AdminReviewerRole = "owner" | "reviewer" | "viewer";
+export type AdminReviewerStatus = "active" | "disabled";
+
+export type AdminReviewerRow = {
+  id: string;
+  verified_identity_id: string;
+  role: AdminReviewerRole;
+  status: AdminReviewerStatus;
+  created_at: string;
+  updated_at: string;
+};
+
+export type ModerationReviewContentType =
+  | "poll"
+  | "discussion_post"
+  | "discussion_comment";
+
+export type ModerationReviewAction = "approve" | "reject" | "request_edit";
+
+export type ModerationReviewActionRow = {
+  id: string;
+  content_type: ModerationReviewContentType;
+  content_id: string;
+  reviewer_verified_identity_id: string;
+  reviewer_user_id: string;
+  action: ModerationReviewAction;
+  previous_status: string;
+  new_status: string;
+  internal_note: string | null;
+  user_message: string | null;
+  created_at: string;
+};
+
 export type CredentialRegistryRow = {
   id: string;
   verified_identity_id: string;
@@ -645,6 +678,9 @@ export type DiscussionCommentRow = {
   moderated_at: string | null;
   moderation_error: string | null;
   moderation_policy_version: string | null;
+  human_review_status: string | null;
+  human_review_decision: string | null;
+  human_reviewed_at: string | null;
   created_at: string;
   updated_at: string;
 };
@@ -665,6 +701,9 @@ export type NewDiscussionCommentRow = {
   moderated_at?: string | null;
   moderation_error?: string | null;
   moderation_policy_version?: string | null;
+  human_review_status?: string | null;
+  human_review_decision?: string | null;
+  human_reviewed_at?: string | null;
 };
 
 export type DiscussionPostLikeRow = {

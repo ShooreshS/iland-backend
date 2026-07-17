@@ -1,4 +1,5 @@
 import { authRoutes } from "./auth";
+import { adminModerationRoutes } from "./adminModeration";
 import { discussionMediaRoutes } from "./discussionMedia";
 import { discussionRoutes } from "./discussions";
 import { healthRoutes } from "./health";
@@ -11,6 +12,7 @@ import { verificationRoutes } from "./verification";
 import type { ResolvedRoute, RouteDefinition } from "../types/http";
 
 export const routes: RouteDefinition[] = [
+  ...adminModerationRoutes,
   ...authRoutes,
   ...discussionMediaRoutes,
   ...discussionRoutes,

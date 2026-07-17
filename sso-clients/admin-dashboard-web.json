@@ -1,0 +1,12 @@
+{
+  "client_id": "admin-dashboard-web",
+  "client_name": "CivicOS Admin Dashboard",
+  "client_type": "confidential",
+  "application_type": "web",
+  "sector_identifier": "admin.codeiland.com",
+  "allowed_scopes": ["openid", "profile", "offline_access"],
+  "default_scopes": ["openid", "profile"],
+  "client_uri": "https://admin.codeiland.com/",
+  "redirect_uri": "https://admin.codeiland.com/auth/callback",
+  "post_logout_redirect_uri": "https://admin.codeiland.com/"
+}
