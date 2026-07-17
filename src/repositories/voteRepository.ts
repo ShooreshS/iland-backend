@@ -528,6 +528,26 @@ export const voteRepository = {
     });
   },
 
+  async countValidByPollIds(pollIds: string[]): Promise<number> {
+    if (pollIds.length === 0) {
+      return 0;
+    }
+
+    const supabase = requireSupabaseAdminClient();
+
+    const { count, error } = await supabase
+      .from("votes")
+      .select("id", { head: true, count: "exact" })
+      .in("poll_id", pollIds)
+      .eq("is_valid", true);
+
+    if (error) {
+      throw error;
+    }
+
+    return count || 0;
+  },
+
   async countValidWithSnapshotByPollId(pollId: string): Promise<number> {
     const supabase = requireSupabaseAdminClient();
 

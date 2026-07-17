@@ -3,6 +3,7 @@ import type {
   DiscussionCommentRow,
   DiscussionPostLikeRow,
   DiscussionPostRow,
+  ModerationReviewActionRow,
   NewDiscussionCommentRow,
   NewDiscussionPostRow,
 } from "../types/db";
@@ -12,6 +13,8 @@ const POST_COLUMNS =
 
 const COMMENT_COLUMNS =
   "id,post_id,author_user_id,author_public_nickname,body,moderation_status,moderation_model,moderation_flagged,moderation_categories,moderation_category_scores,moderation_applied_input_types,moderation_raw,moderated_at,moderation_error,moderation_policy_version,human_review_status,human_review_decision,human_reviewed_at,created_at,updated_at";
+const REVIEW_ACTION_COLUMNS =
+  "id,content_type,content_id,reviewer_verified_identity_id,reviewer_user_id,action,previous_status,new_status,internal_note,user_message,created_at";
 
 const buildPostPayload = (input: NewDiscussionPostRow) => ({
   ...(input.id ? { id: input.id } : null),
@@ -76,6 +79,80 @@ export const discussionRepository = {
       .order("created_at", { ascending: false })
       .order("id", { ascending: false })
       .limit(limit);
+
+    if (error) {
+      throw error;
+    }
+
+    return data || [];
+  },
+
+  async listPostsByAuthorUserId(
+    userId: string,
+    limit?: number | null,
+  ): Promise<DiscussionPostRow[]> {
+    const supabase = requireSupabaseAdminClient();
+    let query = supabase
+      .from("discussion_posts")
+      .select(POST_COLUMNS)
+      .eq("author_user_id", userId)
+      .order("created_at", { ascending: false })
+      .order("id", { ascending: false });
+
+    if (Number.isFinite(limit)) {
+      query = query.limit(Math.max(1, Math.trunc(limit as number)));
+    }
+
+    const { data, error } = await query;
+
+    if (error) {
+      throw error;
+    }
+
+    return data || [];
+  },
+
+  async getPostEngagementTotalsByAuthorUserId(userId: string): Promise<{
+    postCount: number;
+    likeCount: number;
+    commentCount: number;
+  }> {
+    const supabase = requireSupabaseAdminClient();
+    const { data, error } = await supabase
+      .from("discussion_posts")
+      .select("id,like_count,comment_count")
+      .eq("author_user_id", userId);
+
+    if (error) {
+      throw error;
+    }
+
+    return (data || []).reduce(
+      (totals, row) => ({
+        postCount: totals.postCount + 1,
+        likeCount: totals.likeCount + Math.max(0, Number(row.like_count) || 0),
+        commentCount:
+          totals.commentCount + Math.max(0, Number(row.comment_count) || 0),
+      }),
+      { postCount: 0, likeCount: 0, commentCount: 0 },
+    );
+  },
+
+  async listReviewActionsForDiscussionPosts(
+    postIds: string[],
+  ): Promise<ModerationReviewActionRow[]> {
+    if (postIds.length === 0) {
+      return [];
+    }
+
+    const supabase = requireSupabaseAdminClient();
+    const { data, error } = await supabase
+      .from("moderation_review_actions")
+      .select(REVIEW_ACTION_COLUMNS)
+      .eq("content_type", "discussion_post")
+      .in("content_id", postIds)
+      .order("created_at", { ascending: false })
+      .order("id", { ascending: false });
 
     if (error) {
       throw error;

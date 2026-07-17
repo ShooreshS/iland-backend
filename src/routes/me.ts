@@ -2,6 +2,7 @@ import { z } from "zod";
 import requireViewer from "../auth/requireViewer";
 import { json } from "../middleware/json";
 import verifiedIdentityBindService from "../services/verifiedIdentityBindService";
+import viewerContentService from "../services/viewerContentService";
 import viewerProfileService from "../services/viewerProfileService";
 import type {
   BindVerifiedIdentityResultDto,
@@ -75,6 +76,23 @@ const verifyIdentitySchema = z
   })
   .strict();
 
+const parseOptionalLimitQueryParam = (
+  request: Request,
+  max: number,
+): number | null => {
+  const value = new URL(request.url).searchParams.get("limit");
+  if (value === null) {
+    return null;
+  }
+
+  const numericValue = Number(value);
+  if (!Number.isFinite(numericValue)) {
+    return null;
+  }
+
+  return Math.min(max, Math.max(1, Math.trunc(numericValue)));
+};
+
 const selectionErrorStatusMap: Record<NonNullable<ViewerLandSelectionResultDto["errorCode"]>, number> = {
   USER_NOT_FOUND: 401,
   LAND_NOT_FOUND: 404,
@@ -144,6 +162,39 @@ const getCurrentViewerProfileRoute: RouteDefinition = {
     }
 
     return json(profile);
+  },
+};
+
+const getViewerDiscussionPostsRoute: RouteDefinition = {
+  method: "GET",
+  path: "/me/discussion-posts",
+  handler: async ({ request }) => {
+    const viewerResult = await requireViewer(request);
+    if (!viewerResult.ok) {
+      return viewerResult.response;
+    }
+
+    const posts = await viewerContentService.listDiscussionPosts(
+      viewerResult.viewer.userId,
+      parseOptionalLimitQueryParam(request, 100),
+    );
+
+    return json(posts);
+  },
+};
+
+const getViewerActivityOverviewRoute: RouteDefinition = {
+  method: "GET",
+  path: "/me/activity-overview",
+  handler: async ({ request }) => {
+    const viewerResult = await requireViewer(request);
+    if (!viewerResult.ok) {
+      return viewerResult.response;
+    }
+
+    return json(
+      await viewerContentService.getActivityOverview(viewerResult.viewer.userId),
+    );
   },
 };
 
@@ -529,6 +580,8 @@ const verifyIdentityRoute = createVerifyIdentityRoute();
 
 export const meRoutes: RouteDefinition[] = [
   getCurrentViewerProfileRoute,
+  getViewerDiscussionPostsRoute,
+  getViewerActivityOverviewRoute,
   updateViewerHomeLocationRoute,
   updateViewerPublicNicknameRoute,
   getViewerLandStateRoute,

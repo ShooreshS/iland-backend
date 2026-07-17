@@ -223,6 +223,22 @@ export type DiscussionPostDto = {
   updatedAt: string;
 };
 
+export type ModerationReviewActionDto = {
+  action: "approve" | "reject" | "request_edit";
+  previousStatus: string;
+  newStatus: string;
+  userMessage: string | null;
+  createdAt: string;
+};
+
+export type ViewerDiscussionPostDto = DiscussionPostDto & {
+  humanReviewStatus: string | null;
+  humanReviewDecision: string | null;
+  humanReviewedAt: string | null;
+  latestReviewAction: ModerationReviewActionDto | null;
+  latestReviewUserMessage: string | null;
+};
+
 export type DiscussionCommentDto = {
   id: string;
   postId: string;
@@ -247,6 +263,19 @@ export type DiscussionMutationErrorCode =
 
 export type DiscussionPostListDto = {
   posts: DiscussionPostDto[];
+};
+
+export type ViewerDiscussionPostListDto = {
+  posts: ViewerDiscussionPostDto[];
+};
+
+export type ViewerActivityOverviewDto = {
+  createdPostCount: number;
+  postLikesReceived: number;
+  postCommentsReceived: number;
+  postReactionsReceived: number;
+  createdPollCount: number;
+  pollVotesReceived: number;
 };
 
 export type CreateDiscussionPostResultDto = {

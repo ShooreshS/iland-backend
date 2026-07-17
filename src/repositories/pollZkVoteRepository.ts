@@ -151,6 +151,26 @@ export const pollZkVoteRepository = {
 
     return count || 0;
   },
+
+  async countAcceptedByPollIds(pollIds: string[]): Promise<number> {
+    if (pollIds.length === 0) {
+      return 0;
+    }
+
+    const supabase = requireSupabaseAdminClient();
+
+    const { count, error } = await supabase
+      .from("poll_zk_votes")
+      .select("id", { head: true, count: "exact" })
+      .in("poll_id", pollIds)
+      .eq("proof_verification_status", "verified");
+
+    if (error) {
+      throw error;
+    }
+
+    return count || 0;
+  },
 };
 
 export default pollZkVoteRepository;

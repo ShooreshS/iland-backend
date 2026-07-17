@@ -310,6 +310,42 @@ export const pollRepository = {
     return ((data || []) as PartialPollRow[]).map(withPollContractDefaults);
   },
 
+  async listByCreatedByUserId(userId: string): Promise<PollRow[]> {
+    await closeExpiredPolls();
+
+    const supabase = requireSupabaseAdminClient();
+
+    const { data, error } = await supabase
+      .from("polls")
+      .select(POLL_COLUMNS)
+      .eq("created_by_user_id", userId)
+      .order("created_at", { ascending: false })
+      .order("id", { ascending: false });
+
+    if (error && isMissingOptionalPollColumnError(error)) {
+      const fallback = await supabase
+        .from("polls")
+        .select(BASE_POLL_COLUMNS)
+        .eq("created_by_user_id", userId)
+        .order("created_at", { ascending: false })
+        .order("id", { ascending: false });
+
+      if (fallback.error) {
+        throw fallback.error;
+      }
+
+      return ((fallback.data || []) as PartialPollRow[]).map(
+        withPollContractDefaults,
+      );
+    }
+
+    if (error) {
+      throw error;
+    }
+
+    return ((data || []) as PartialPollRow[]).map(withPollContractDefaults);
+  },
+
   async getById(pollId: string): Promise<PollRow | null> {
     await closeExpiredPolls();
     return getByIdInternal(pollId);
