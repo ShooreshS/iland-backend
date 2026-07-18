@@ -19,6 +19,13 @@ type RequireViewerFailure = {
 
 export type RequireViewerResult = RequireViewerSuccess | RequireViewerFailure;
 
+type OptionalViewerSuccess = {
+  ok: true;
+  viewer: ViewerContext | null;
+};
+
+export type OptionalViewerResult = OptionalViewerSuccess | RequireViewerFailure;
+
 type RequireViewerDependencies = {
   authSessionRepositoryLike?: {
     getByAccessTokenHash(accessTokenHash: string): Promise<AuthSessionRow | null>;
@@ -173,5 +180,25 @@ const buildRequireViewer = (
 export const createRequireViewer = buildRequireViewer;
 
 export const requireViewer = buildRequireViewer();
+
+export const createOptionalViewer = (
+  dependencies: RequireViewerDependencies = {},
+) => {
+  const requireViewerFn = buildRequireViewer(dependencies);
+
+  return async (request: Request): Promise<OptionalViewerResult> => {
+    const authorizationHeader = request.headers.get("authorization")?.trim() || null;
+    if (!authorizationHeader) {
+      return {
+        ok: true,
+        viewer: null,
+      };
+    }
+
+    return requireViewerFn(request);
+  };
+};
+
+export const optionalViewer = createOptionalViewer();
 
 export default requireViewer;

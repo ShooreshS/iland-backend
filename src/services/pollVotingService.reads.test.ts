@@ -381,4 +381,94 @@ describe("pollVotingService read paths", () => {
       restoreFns.reverse().forEach((restore) => restore());
     }
   });
+
+  it("returns published poll reads for anonymous viewers and hides drafts or held polls", async () => {
+    const activePoll = createPoll({
+      id: "poll-active",
+      slug: "poll-active",
+      title: "Active poll",
+      status: "active",
+      created_by_user_id: "owner-1",
+    });
+    const draftPoll = createPoll({
+      id: "poll-draft",
+      slug: "poll-draft",
+      title: "Draft poll",
+      status: "draft",
+      created_by_user_id: "owner-1",
+    });
+    const heldPoll = createPoll({
+      id: "poll-held",
+      slug: "poll-held",
+      title: "Held poll",
+      status: "active",
+      created_by_user_id: "owner-1",
+      moderation_status: "review_required",
+    } as Partial<PollRow>);
+    let viewerVoteLookupCount = 0;
+
+    const restoreFns = [
+      patchMethod(pollRepository, "listAll", async () => [
+        activePoll,
+        draftPoll,
+        heldPoll,
+      ]),
+      patchMethod(pollRepository, "getById", async (pollId: string) => {
+        if (pollId === activePoll.id) {
+          return activePoll;
+        }
+        if (pollId === draftPoll.id) {
+          return draftPoll;
+        }
+        if (pollId === heldPoll.id) {
+          return heldPoll;
+        }
+        return null;
+      }),
+      patchMethod(pollRepository, "getOptionsByPollIds", async (pollIds: string[]) =>
+        pollIds.map((pollId, index) =>
+          createOption({
+            id: `${pollId}-option`,
+            poll_id: pollId,
+            display_order: index,
+          }),
+        ),
+      ),
+      patchMethod(pollRepository, "getOptionsByPollId", async (pollId: string) => [
+        createOption({ id: `${pollId}-option`, poll_id: pollId }),
+      ]),
+      patchMethod(voteRepository, "getViewerVotesByPollIds", async () => {
+        viewerVoteLookupCount += 1;
+        return [];
+      }),
+      patchMethod(voteRepository, "getByUserIdAndPollId", async () => {
+        viewerVoteLookupCount += 1;
+        return createVote({ poll_id: activePoll.id });
+      }),
+      patchMethod(voteRepository, "countValidByPollId", async () => 0),
+      patchMethod(voteRepository, "countValidByPollIdAndOptionId", async () => 0),
+      patchMethod(voteRepository, "getLatestValidSubmittedAtByPollId", async () => null),
+    ];
+
+    try {
+      const summaries = await pollVotingService.getPollSummaries(null);
+
+      expect(summaries.map((summary) => summary.poll.id)).toEqual([
+        activePoll.id,
+      ]);
+      expect(summaries[0]?.hasViewerVoted).toBe(false);
+
+      const activeDetails = await pollVotingService.getPollDetails(
+        activePoll.id,
+        null,
+      );
+      expect(activeDetails?.viewerVote).toBeNull();
+
+      expect(await pollVotingService.getPollDetails(draftPoll.id, null)).toBeNull();
+      expect(await pollVotingService.getPollDetails(heldPoll.id, null)).toBeNull();
+      expect(viewerVoteLookupCount).toBe(0);
+    } finally {
+      restoreFns.reverse().forEach((restore) => restore());
+    }
+  });
 });

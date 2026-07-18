@@ -1,5 +1,5 @@
 import { z } from "zod";
-import requireViewer from "../auth/requireViewer";
+import requireViewer, { optionalViewer } from "../auth/requireViewer";
 import { json } from "../middleware/json";
 import discussionService from "../services/discussionService";
 import type {
@@ -94,14 +94,14 @@ const getDiscussionsRoute: RouteDefinition = {
   method: "GET",
   path: "/discussions",
   handler: async ({ request, url }) => {
-    const viewerResult = await requireViewer(request);
+    const viewerResult = await optionalViewer(request);
     if (!viewerResult.ok) {
       return viewerResult.response;
     }
 
     return json(
       await discussionService.listPosts(
-        viewerResult.viewer.userId,
+        viewerResult.viewer?.userId ?? null,
         parseLimit(url),
       ),
     );
@@ -240,7 +240,7 @@ const getDiscussionCommentsRoute: RouteDefinition = {
   method: "GET",
   path: "/discussions/:id/comments",
   handler: async ({ request, params, url }) => {
-    const viewerResult = await requireViewer(request);
+    const viewerResult = await optionalViewer(request);
     if (!viewerResult.ok) {
       return viewerResult.response;
     }

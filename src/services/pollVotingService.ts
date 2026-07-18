@@ -526,9 +526,12 @@ const isPollModerationPublished = (poll: PollRow): boolean =>
   (poll.moderation_status ??
     (poll.status === "draft" ? "draft" : "published")) === "published";
 
-const isPollVisibleToViewer = (poll: PollRow, viewerUserId: string): boolean =>
+const isPollVisibleToViewer = (
+  poll: PollRow,
+  viewerUserId: string | null,
+): boolean =>
   (poll.status !== "draft" && isPollModerationPublished(poll)) ||
-  poll.created_by_user_id === viewerUserId;
+  (Boolean(viewerUserId) && poll.created_by_user_id === viewerUserId);
 
 const buildResults = (
   poll: PollDto,
@@ -767,7 +770,7 @@ export const createPollVotingService = (
     dependencies.zkpAuditEventService ?? zkpAuditEventService;
 
   return {
-  async getPollSummaries(viewerUserId: string): Promise<PollSummaryDto[]> {
+  async getPollSummaries(viewerUserId: string | null): Promise<PollSummaryDto[]> {
     const polls = (await pollRepository.listAll()).filter((poll) =>
       isPollVisibleToViewer(poll, viewerUserId),
     );
@@ -783,7 +786,9 @@ export const createPollVotingService = (
 
     const [options, viewerVotes, totalValidVotesByPoll] = await Promise.all([
       pollRepository.getOptionsByPollIds(pollIds),
-      voteRepository.getViewerVotesByPollIds(viewerUserId, pollIds),
+      viewerUserId
+        ? voteRepository.getViewerVotesByPollIds(viewerUserId, pollIds)
+        : Promise.resolve([]),
       Promise.all(
         polls.map(
           async (poll) =>
@@ -826,7 +831,10 @@ export const createPollVotingService = (
     return sortSummaries(summaries);
   },
 
-  async getPollDetails(pollId: string, viewerUserId: string): Promise<PollDetailsDto | null> {
+  async getPollDetails(
+    pollId: string,
+    viewerUserId: string | null,
+  ): Promise<PollDetailsDto | null> {
     const pollRow = await pollRepository.getById(pollId);
     if (!pollRow) {
       return null;
@@ -838,7 +846,7 @@ export const createPollVotingService = (
     const productionPoll = isProductionZkpPoll(pollRow);
     const [optionRows, viewerVote, exactTotalVotes, latestSubmittedAt] = await Promise.all([
       pollRepository.getOptionsByPollId(pollId),
-      productionPoll
+      productionPoll || !viewerUserId
         ? Promise.resolve(null)
         : voteRepository.getByUserIdAndPollId(viewerUserId, pollId),
       productionPoll

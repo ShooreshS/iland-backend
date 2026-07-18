@@ -452,16 +452,18 @@ export const createDiscussionService = (
 
   return {
     async listPosts(
-      viewerUserId: string,
+      viewerUserId: string | null,
       limit?: number | null,
     ): Promise<DiscussionPostListDto> {
       const rows = await repo.listPublishedPosts(
         normalizeLimit(limit, DEFAULT_POST_LIMIT, MAX_POST_LIMIT),
       );
-      const likedPostIds = await repo.getLikedPostIds(
-        viewerUserId,
-        rows.map((row) => row.id),
-      );
+      const likedPostIds = viewerUserId
+        ? await repo.getLikedPostIds(
+            viewerUserId,
+            rows.map((row) => row.id),
+          )
+        : new Set<string>();
 
       const posts = await Promise.all(
         rows.map(async (row) =>

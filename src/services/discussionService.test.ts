@@ -263,6 +263,40 @@ const createRepo = () => {
 };
 
 describe("discussionService", () => {
+  it("lists published posts for anonymous readers without resolving likes", async () => {
+    const { repo, posts } = createRepo();
+    let likedLookupCount = 0;
+    posts.push(
+      createPostRow({
+        id: "published-post",
+        moderation_status: "published",
+        like_count: 3,
+      }),
+    );
+    posts.push(
+      createPostRow({
+        id: "held-post",
+        moderation_status: "review_required",
+      }),
+    );
+    repo.getLikedPostIds = async () => {
+      likedLookupCount += 1;
+      return new Set(["published-post"]);
+    };
+    const service = createDiscussionService({
+      discussionRepositoryLike: repo as any,
+    });
+
+    const result = await service.listPosts(null);
+
+    expect(result.posts).toHaveLength(1);
+    expect(result.posts[0]).toMatchObject({
+      id: "published-post",
+      viewerHasLiked: false,
+    });
+    expect(likedLookupCount).toBe(0);
+  });
+
   it("rejects publishing when the viewer has no linked verified identity", async () => {
     const { repo } = createRepo();
     const service = createDiscussionService({

@@ -7,15 +7,32 @@ Contributors receive only the `contributor/` folder (README.md, README.pdf, cont
 
 Sequential relay over both frozen circuits (`credential_commitment_vote`,
 `encrypted_choice_tally`), starting from a **publicly trusted** perpetual
-powers-of-tau (Hermez `powersOfTau28_hez_final_16/20.ptau`) — never from the
-internal RC pot16/pot20, whose Phase 1 had a single internal contributor.
+powers-of-tau:
+
+- `zkp/circuits/build/powersOfTau28_hez_final_16.ptau` for
+  `credential_commitment_vote.r1cs`
+- `zkp/circuits/build/powersOfTau28_hez_final_20.ptau` for
+  `encrypted_choice_tally.r1cs`
+
+Never use the internal RC `pot16_final.ptau` or `pot20_final.ptau`, whose
+Phase 1 had a single internal contributor.
 
 ```
-prepare-ceremony.sh          → input/*_0000.zkey
-zip kit → contributor #1     → returns output/*_0001.zkey + attestation
-verify, rotate into input/   → re-zip → contributor #2 → *_0002.zkey
+prepare-ceremony.sh          → contributor/input/credential_commitment_vote_0000.zkey
+                              → contributor/input/encrypted_choice_tally_0000.zkey
+zip kit → contributor #1     → returns output/credential_commitment_vote_0001.zkey
+                              → returns output/encrypted_choice_tally_0001.zkey
+                              → returns output/ATTESTATION-Shooresh.md
+verify, rotate into input/   → re-zip → contributor #2
+                              → returns output/credential_commitment_vote_0002.zkey
+                              → returns output/encrypted_choice_tally_0002.zkey
+                              → returns output/ATTESTATION-matbas.md
 ... at least THREE independent contributors ...
-finalize-ceremony.sh <beacon> → final/*_final.zkey + vkeys + verification log
+finalize-ceremony.sh BEACON_HEX → final/credential_commitment_vote_final.zkey
+                              → final/credential_commitment_vote.vkey.json
+                              → final/encrypted_choice_tally_final.zkey
+                              → final/encrypted_choice_tally.vkey.json
+                              → coordinator/ceremony-verification-YYYYMMDD-HHMMSS.log
 ```
 
 The system is sound if at least one contributor was honest. The final beacon
@@ -28,8 +45,8 @@ randomness adaptively.
    - Confirms the local r1cs files match the frozen manifests (hard stop on
      mismatch — never run a ceremony over unfrozen circuits).
    - Downloads + cryptographically verifies the public ptau files.
-   - Writes `input/credential_commitment_vote_0000.zkey` and
-     `input/encrypted_choice_tally_0000.zkey`.
+   - Writes `contributor/input/credential_commitment_vote_0000.zkey` and
+     `contributor/input/encrypted_choice_tally_0000.zkey`.
 
 2. **Announce the beacon in advance.** Before contributor #1 starts, publicly
    commit to the beacon source — e.g. "the drand round at epoch X" or "the
@@ -41,20 +58,38 @@ randomness adaptively.
    - When `output/` comes back, **verify before accepting**:
      ```sh
      zkp/circuits/node_modules/.bin/snarkjs zkey verify \
-       zkp/circuits/build/<circuit>.r1cs \
-       zkp/circuits/build/powersOfTau28_hez_final_<power>.ptau \
-       <returned .zkey>
+       zkp/circuits/build/credential_commitment_vote.r1cs \
+       zkp/circuits/build/powersOfTau28_hez_final_16.ptau \
+       "scripts/human-ceremony/contributor 1/output/credential_commitment_vote_0001.zkey"
+
+     zkp/circuits/node_modules/.bin/snarkjs zkey verify \
+       zkp/circuits/build/encrypted_choice_tally.r1cs \
+       zkp/circuits/build/powersOfTau28_hez_final_20.ptau \
+       "scripts/human-ceremony/contributor 1/output/encrypted_choice_tally_0001.zkey"
+     ```
+     For contributor #2, verify:
+     ```sh
+     zkp/circuits/node_modules/.bin/snarkjs zkey verify \
+       zkp/circuits/build/credential_commitment_vote.r1cs \
+       zkp/circuits/build/powersOfTau28_hez_final_16.ptau \
+       "scripts/human-ceremony/contributor 2/output/credential_commitment_vote_0002.zkey"
+
+     zkp/circuits/node_modules/.bin/snarkjs zkey verify \
+       zkp/circuits/build/encrypted_choice_tally.r1cs \
+       zkp/circuits/build/powersOfTau28_hez_final_20.ptau \
+       "scripts/human-ceremony/contributor 2/output/encrypted_choice_tally_0002.zkey"
      ```
      The listed contributions must be the previous chain plus exactly one new
      entry with the contributor's name. Cross-check the contribution hash
-     against their `ATTESTATION-*.md`.
+     against `scripts/human-ceremony/contributor 1/output/ATTESTATION-Shooresh.md`
+     or `scripts/human-ceremony/contributor 2/output/ATTESTATION-matbas.md`.
    - Archive the previous `input/` zkeys, move the returned zkeys into
      `input/`, keep the attestation, re-zip, send to the next contributor.
    - Contributors should be genuinely independent: different organizations,
      different machines, no shared infrastructure with CivicOS.
 
 4. **Finalize:** after ≥3 contributors,
-   `./coordinator/finalize-ceremony.sh <beacon-hex> [iterations]`
+   `./coordinator/finalize-ceremony.sh BEACON_HEX [iterations]`
    - Applies the pre-announced beacon, verifies the full chain, exports the
      production verifier keys into `final/`, and writes a verification log.
    - Refuses to run with fewer than 3 contributions in the chain.

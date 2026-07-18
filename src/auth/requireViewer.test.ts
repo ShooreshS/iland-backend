@@ -1,6 +1,6 @@
 import { describe, expect, it } from "bun:test";
 
-import { createRequireViewer } from "./requireViewer";
+import { createOptionalViewer, createRequireViewer } from "./requireViewer";
 import { hashOpaqueBearerToken } from "./tokens";
 import type { AuthSessionRow, UserRow } from "../types/db";
 
@@ -390,5 +390,63 @@ describe("requireViewer", () => {
     }
 
     expect(touched).toEqual(["session-1"]);
+  });
+});
+
+describe("optionalViewer", () => {
+  it("allows public requests without a bearer token", async () => {
+    let sessionLookupCount = 0;
+    const optionalViewer = createOptionalViewer({
+      authSessionRepositoryLike: {
+        getByAccessTokenHash: async () => {
+          sessionLookupCount += 1;
+          return null;
+        },
+        touchLastSeen: async () => {},
+        revokeById: async () => null,
+      },
+      userRepositoryLike: {
+        getById: async () => activeUser,
+      },
+    });
+
+    const result = await optionalViewer(
+      new Request("http://127.0.0.1:3001/polls"),
+    );
+
+    expect(result).toEqual({
+      ok: true,
+      viewer: null,
+    });
+    expect(sessionLookupCount).toBe(0);
+  });
+
+  it("still rejects malformed authorization headers on public requests", async () => {
+    const optionalViewer = createOptionalViewer({
+      authSessionRepositoryLike: {
+        getByAccessTokenHash: async () => null,
+        touchLastSeen: async () => {},
+        revokeById: async () => null,
+      },
+      userRepositoryLike: {
+        getById: async () => activeUser,
+      },
+    });
+
+    const result = await optionalViewer(
+      new Request("http://127.0.0.1:3001/polls", {
+        headers: {
+          authorization: "Basic invalid",
+        },
+      }),
+    );
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.response.status).toBe(401);
+      expect(await result.response.json()).toMatchObject({
+        error: "invalid_authorization_header",
+      });
+    }
   });
 });

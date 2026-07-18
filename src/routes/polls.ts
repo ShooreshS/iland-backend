@@ -1,5 +1,5 @@
 import { z } from "zod";
-import requireViewer from "../auth/requireViewer";
+import requireViewer, { optionalViewer } from "../auth/requireViewer";
 import { json } from "../middleware/json";
 import pollEncryptionKeyService from "../services/pollEncryptionKeyService";
 import pollDraftService from "../services/pollDraftService";
@@ -362,12 +362,14 @@ const getPollsRoute: RouteDefinition = {
   method: "GET",
   path: "/polls",
   handler: async ({ request }) => {
-    const viewerResult = await requireViewer(request);
+    const viewerResult = await optionalViewer(request);
     if (!viewerResult.ok) {
       return viewerResult.response;
     }
 
-    const summaries = await pollVotingService.getPollSummaries(viewerResult.viewer.userId);
+    const summaries = await pollVotingService.getPollSummaries(
+      viewerResult.viewer?.userId ?? null,
+    );
     return json(summaries);
   },
 };
@@ -573,7 +575,7 @@ const getPollDetailsRoute: RouteDefinition = {
   method: "GET",
   path: "/polls/:id",
   handler: async ({ request, params }) => {
-    const viewerResult = await requireViewer(request);
+    const viewerResult = await optionalViewer(request);
     if (!viewerResult.ok) {
       return viewerResult.response;
     }
@@ -589,7 +591,10 @@ const getPollDetailsRoute: RouteDefinition = {
       );
     }
 
-    const details = await pollVotingService.getPollDetails(pollId, viewerResult.viewer.userId);
+    const details = await pollVotingService.getPollDetails(
+      pollId,
+      viewerResult.viewer?.userId ?? null,
+    );
     if (!details) {
       return json(
         {
