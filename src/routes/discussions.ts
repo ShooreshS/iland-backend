@@ -201,6 +201,41 @@ const updateDiscussionRoute: RouteDefinition = {
   },
 };
 
+const deleteDiscussionRoute: RouteDefinition = {
+  method: "DELETE",
+  path: "/discussions/:id",
+  handler: async ({ request, params }) => {
+    const viewerResult = await requireViewer(request);
+    if (!viewerResult.ok) {
+      return viewerResult.response;
+    }
+
+    const postId = params.id?.trim() || "";
+    if (!postId) {
+      return json(
+        {
+          success: false,
+          errorCode: "POST_NOT_FOUND",
+          message: "The discussion post could not be found.",
+        },
+        404,
+      );
+    }
+
+    const result = await discussionService.deletePost(
+      postId,
+      viewerResult.viewer.userId,
+    );
+
+    return json(
+      result,
+      result.success
+        ? 200
+        : mutationErrorStatusMap[result.errorCode || "VALIDATION_FAILED"] || 400,
+    );
+  },
+};
+
 const getDiscussionCommentsRoute: RouteDefinition = {
   method: "GET",
   path: "/discussions/:id/comments",
@@ -320,6 +355,7 @@ export const discussionRoutes: RouteDefinition[] = [
   getDiscussionsRoute,
   createDiscussionRoute,
   updateDiscussionRoute,
+  deleteDiscussionRoute,
   getDiscussionCommentsRoute,
   createDiscussionCommentRoute,
   likeDiscussionRoute,

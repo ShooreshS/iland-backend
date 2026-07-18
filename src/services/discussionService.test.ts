@@ -214,6 +214,24 @@ const createRepo = () => {
         posts[index] = row;
         return row;
       },
+      deletePostById: async (
+        postId: string,
+        authorUserId: string,
+        moderationStatuses: string[],
+      ) => {
+        const index = posts.findIndex(
+          (post) =>
+            post.id === postId &&
+            post.author_user_id === authorUserId &&
+            moderationStatuses.includes(post.moderation_status),
+        );
+        if (index < 0) {
+          return false;
+        }
+
+        posts.splice(index, 1);
+        return true;
+      },
       getLikedPostIds: async () => new Set<string>(),
       getLike: async () => null,
       insertLike: async () => undefined,
@@ -510,6 +528,48 @@ describe("discussionService", () => {
       errorCode: "POST_NOT_EDITABLE",
     });
     expect(posts[0].caption).toBe("A clean discussion");
+  });
+
+  it("lets the owner delete an unpublished discussion post", async () => {
+    const { repo, posts } = createRepo();
+    posts.push(createPostRow({ moderation_status: "review_required" }));
+    const service = createDiscussionService({
+      discussionRepositoryLike: repo as any,
+      userRepositoryLike: { getById: async () => createUser() },
+      verifiedIdentityRepositoryLike: { getByUserId: async () => verifiedIdentity },
+      moderationServiceLike: {
+        moderatePost: async () => createModerationResult(),
+      },
+    });
+
+    const result = await service.deletePost("post-1", "user-1");
+
+    expect(result).toEqual({
+      success: true,
+      postId: "post-1",
+    });
+    expect(posts).toHaveLength(0);
+  });
+
+  it("rejects deleting published discussion posts", async () => {
+    const { repo, posts } = createRepo();
+    posts.push(createPostRow({ moderation_status: "published" }));
+    const service = createDiscussionService({
+      discussionRepositoryLike: repo as any,
+      userRepositoryLike: { getById: async () => createUser() },
+      verifiedIdentityRepositoryLike: { getByUserId: async () => verifiedIdentity },
+      moderationServiceLike: {
+        moderatePost: async () => createModerationResult(),
+      },
+    });
+
+    const result = await service.deletePost("post-1", "user-1");
+
+    expect(result).toMatchObject({
+      success: false,
+      errorCode: "POST_NOT_EDITABLE",
+    });
+    expect(posts).toHaveLength(1);
   });
 
   it("stores moderated comments individually and hides held comments from public lists", async () => {

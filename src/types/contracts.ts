@@ -287,6 +287,13 @@ export type CreateDiscussionPostResultDto = {
   message?: string;
 };
 
+export type DeleteDiscussionPostResultDto = {
+  success: boolean;
+  postId?: string;
+  errorCode?: DiscussionMutationErrorCode;
+  message?: string;
+};
+
 export type DiscussionCommentListDto = {
   comments: DiscussionCommentDto[];
 };

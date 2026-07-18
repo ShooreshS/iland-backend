@@ -214,6 +214,32 @@ export const discussionRepository = {
     return data || null;
   },
 
+  async deletePostById(
+    postId: string,
+    authorUserId: string,
+    moderationStatuses: string[],
+  ): Promise<boolean> {
+    if (moderationStatuses.length === 0) {
+      return false;
+    }
+
+    const supabase = requireSupabaseAdminClient();
+    const { data, error } = await supabase
+      .from("discussion_posts")
+      .delete()
+      .eq("id", postId)
+      .eq("author_user_id", authorUserId)
+      .in("moderation_status", moderationStatuses)
+      .select("id")
+      .maybeSingle<{ id: string }>();
+
+    if (error) {
+      throw error;
+    }
+
+    return Boolean(data?.id);
+  },
+
   async getLikedPostIds(
     userId: string,
     postIds: string[],

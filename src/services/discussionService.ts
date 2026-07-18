@@ -16,6 +16,7 @@ import type {
   CreateDiscussionCommentResultDto,
   CreateDiscussionPostRequestDto,
   CreateDiscussionPostResultDto,
+  DeleteDiscussionPostResultDto,
   DiscussionCommentDto,
   DiscussionCommentListDto,
   DiscussionImageInputDto,
@@ -48,6 +49,20 @@ const EDITABLE_POST_MODERATION_STATUSES = new Set([
   "needs_edit",
   "moderation_error",
 ]);
+const DELETABLE_POST_MODERATION_STATUSES = [
+  "draft",
+  "moderation_pending",
+  "review_required",
+  "needs_edit",
+  "blocked",
+  "moderation_error",
+  "appeal_pending",
+  "appeal_approved",
+  "appeal_rejected",
+];
+const DELETABLE_POST_MODERATION_STATUS_SET = new Set(
+  DELETABLE_POST_MODERATION_STATUSES,
+);
 
 const MODERATION_USER_MESSAGES: Record<
   ModeratePostResult["decision"],
@@ -596,6 +611,53 @@ export const createDiscussionService = (
         ...(MODERATION_USER_MESSAGES[moderation.decision]
           ? { message: MODERATION_USER_MESSAGES[moderation.decision] as string }
           : null),
+      };
+    },
+
+    async deletePost(
+      postId: string,
+      viewerUserId: string,
+    ): Promise<DeleteDiscussionPostResultDto> {
+      const creator = await requireVerifiedCreator(viewerUserId);
+      if (!creator.ok) {
+        return createFailure<DeleteDiscussionPostResultDto>(
+          creator.errorCode,
+          creator.message,
+        );
+      }
+
+      const existingPost = await repo.getPostById(postId);
+      if (!existingPost || existingPost.author_user_id !== creator.user.id) {
+        return createFailure<DeleteDiscussionPostResultDto>(
+          "POST_NOT_FOUND",
+          "The discussion post could not be found.",
+        );
+      }
+
+      if (
+        !DELETABLE_POST_MODERATION_STATUS_SET.has(existingPost.moderation_status)
+      ) {
+        return createFailure<DeleteDiscussionPostResultDto>(
+          "POST_NOT_EDITABLE",
+          "Only unpublished discussion posts can be deleted here.",
+        );
+      }
+
+      const deleted = await repo.deletePostById(
+        existingPost.id,
+        creator.user.id,
+        DELETABLE_POST_MODERATION_STATUSES,
+      );
+      if (!deleted) {
+        return createFailure<DeleteDiscussionPostResultDto>(
+          "POST_NOT_EDITABLE",
+          "This discussion post is no longer unpublished.",
+        );
+      }
+
+      return {
+        success: true,
+        postId: existingPost.id,
       };
     },
 
