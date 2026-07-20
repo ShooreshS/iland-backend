@@ -10,6 +10,7 @@ import discussionMediaService from "./discussionMediaService";
 import type {
   AdminReviewerRow,
   DiscussionCommentRow,
+  DiscussionPostReportRow,
   DiscussionPostRow,
   ModerationReviewAction,
   ModerationReviewActionRow,
@@ -56,6 +57,16 @@ export type ReviewQueueItem = {
   createdAt: string;
 };
 
+export type ReviewPostReport = {
+  id: string;
+  postId: string;
+  reporterUserId: string;
+  category: string;
+  comment: string | null;
+  status: string;
+  createdAt: string;
+};
+
 export type ReviewDetail =
   | {
       contentType: "poll";
@@ -68,6 +79,7 @@ export type ReviewDetail =
       item: ReviewQueueItem;
       post: DiscussionPostRow;
       imagePreviewUrl: string | null;
+      reports: ReviewPostReport[];
     }
   | {
       contentType: "comment";
@@ -225,6 +237,16 @@ const mapCommentQueueItem = (row: DiscussionCommentRow): ReviewQueueItem => ({
   moderationCategories: row.moderation_categories,
   moderationCategoryScores: row.moderation_category_scores,
   moderatedAt: row.moderated_at,
+  createdAt: row.created_at,
+});
+
+const mapPostReport = (row: DiscussionPostReportRow): ReviewPostReport => ({
+  id: row.id,
+  postId: row.post_id,
+  reporterUserId: row.reporter_user_id,
+  category: row.category,
+  comment: row.comment,
+  status: row.status,
   createdAt: row.created_at,
 });
 
@@ -418,6 +440,9 @@ export const createAdminModerationService = (
         post?.moderation_status === "published"
           ? await repo.getOpenReportSummaryForPost(contentId)
           : null;
+      const reports = reportSummary
+        ? await repo.listOpenReportsForPost(contentId)
+        : [];
       return post
         ? {
             contentType,
@@ -429,6 +454,7 @@ export const createAdminModerationService = (
                 post.image_storage_bucket,
                 post.image_storage_path,
               )),
+            reports: reports.map(mapPostReport),
           }
         : null;
     }

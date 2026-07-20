@@ -261,6 +261,7 @@ const createBaseService = (overrides: Record<string, unknown> = {}) =>
       getPollById: async () => createPollRow(),
       getPostById: async () => null,
       getOpenReportSummaryForPost: async () => null,
+      listOpenReportsForPost: async () => [],
       getCommentById: async () => null,
       updatePollReviewStatus: async (input: any) =>
         createPollRow({
@@ -389,7 +390,27 @@ describe("adminModerationService", () => {
   it("includes a signed preview URL for stored discussion post images", async () => {
     const service = createBaseService({
       repositoryLike: {
-        getPostById: async () => createPostRow(),
+        getPostById: async () =>
+          createPostRow({
+            moderation_status: "published",
+          }),
+        getOpenReportSummaryForPost: async () => ({
+          reportCount: 1,
+          firstReportedAt: "2026-07-17T12:05:00.000Z",
+          latestReportedAt: "2026-07-17T12:05:00.000Z",
+        }),
+        listOpenReportsForPost: async () => [
+          {
+            id: "report-1",
+            post_id: "post-1",
+            reporter_user_id: "reporter-1",
+            category: "misinformation",
+            comment: "This claim needs a source.",
+            status: "open",
+            created_at: "2026-07-17T12:05:00.000Z",
+            updated_at: "2026-07-17T12:05:00.000Z",
+          },
+        ],
       },
     });
 
@@ -399,6 +420,13 @@ describe("adminModerationService", () => {
       contentType: "post",
       imagePreviewUrl:
         "https://storage.example.test/discussion-media/discussions/ab/upload-1.jpg?signed=1",
+      reports: [
+        {
+          category: "misinformation",
+          comment: "This claim needs a source.",
+          reporterUserId: "reporter-1",
+        },
+      ],
     });
   });
 

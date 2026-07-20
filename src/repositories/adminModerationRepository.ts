@@ -3,6 +3,7 @@ import type {
   AdminReviewerRow,
   DiscussionCommentRow,
   DiscussionPostOpenReportQueueRow,
+  DiscussionPostReportRow,
   DiscussionPostRow,
   ModerationReviewAction,
   ModerationReviewActionRow,
@@ -27,6 +28,8 @@ const COMMENT_COLUMNS =
   "id,post_id,author_user_id,author_public_nickname,body,moderation_status,moderation_model,moderation_flagged,moderation_categories,moderation_category_scores,moderation_applied_input_types,moderation_raw,moderated_at,moderation_error,moderation_policy_version,human_review_status,human_review_decision,human_reviewed_at,created_at,updated_at";
 const REPORT_QUEUE_COLUMNS =
   "post_id,report_count,first_reported_at,latest_reported_at";
+const REPORT_COLUMNS =
+  "id,post_id,reporter_user_id,category,comment,status,created_at,updated_at";
 
 const buildReviewUpdate = (
   status: PollModerationStatus,
@@ -177,6 +180,24 @@ export const adminModerationRepository = {
           latestReportedAt: data.latest_reported_at,
         }
       : null;
+  },
+
+  async listOpenReportsForPost(contentId: string): Promise<DiscussionPostReportRow[]> {
+    const supabase = requireSupabaseAdminClient();
+    const { data, error } = await supabase
+      .from("discussion_post_reports")
+      .select(REPORT_COLUMNS)
+      .eq("post_id", contentId)
+      .eq("status", "open")
+      .order("created_at", { ascending: true })
+      .order("id", { ascending: true })
+      .returns<DiscussionPostReportRow[]>();
+
+    if (error) {
+      throw error;
+    }
+
+    return data || [];
   },
 
   async listReviewRequiredComments(limit: number): Promise<DiscussionCommentRow[]> {
