@@ -1,6 +1,6 @@
 import { describe, expect, it } from "bun:test";
+import { generateKeyPairSync } from "node:crypto";
 import { hashOpaqueBearerToken } from "../auth/tokens";
-import { createAdminModerationService } from "./adminModerationService";
 import type {
   AdminReviewerRow,
   DiscussionPostRow,
@@ -10,6 +10,23 @@ import type {
   UserRow,
   VerifiedIdentityRow,
 } from "../types/db";
+
+const { privateKey: googleOAuthPrivateKey } = generateKeyPairSync("rsa", {
+  modulusLength: 2048,
+});
+
+process.env.AUTH_IOS_TEAM_ID = "DJWBN8658Q";
+process.env.AUTH_ENABLE_TRANSITIONAL_CRYPTO_BYPASS = "true";
+process.env.AUTH_ANDROID_GOOGLE_SERVICE_ACCOUNT_CLIENT_EMAIL =
+  "play-integrity-test@example.iam.gserviceaccount.com";
+process.env.AUTH_ANDROID_GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY = googleOAuthPrivateKey
+  .export({ format: "pem", type: "pkcs8" })
+  .toString();
+process.env.AUTH_ANDROID_ALLOWED_SIGNING_CERT_DIGESTS =
+  "23e31a67fd079259091c31ab079846a30d07f18e66ae675863b18a0a77e66763";
+process.env.SOLANA_AUDIT_TRANSACTIONS_ENABLED = "false";
+
+const { createAdminModerationService } = await import("./adminModerationService");
 
 const FIXED_TIME = "2026-07-17T12:00:00.000Z";
 
@@ -239,9 +256,11 @@ const createBaseService = (overrides: Record<string, unknown> = {}) =>
       getActiveReviewerByVerifiedIdentityId: async () => reviewer,
       listReviewRequiredPolls: async () => [createPollRow()],
       listReviewRequiredPosts: async () => [],
+      listOpenReportedPosts: async () => [],
       listReviewRequiredComments: async () => [],
       getPollById: async () => createPollRow(),
       getPostById: async () => null,
+      getOpenReportSummaryForPost: async () => null,
       getCommentById: async () => null,
       updatePollReviewStatus: async (input: any) =>
         createPollRow({
@@ -251,7 +270,9 @@ const createBaseService = (overrides: Record<string, unknown> = {}) =>
           human_reviewed_at: input.reviewedAt,
         }),
       updatePostReviewStatus: async () => null,
+      updateReportedPostReviewStatus: async () => null,
       updateCommentReviewStatus: async () => null,
+      markOpenPostReportsReviewed: async () => undefined,
       insertReviewAction: async (input: any) =>
         createReviewActionRow({
           content_type: input.contentType,
@@ -332,6 +353,39 @@ describe("adminModerationService", () => {
     });
   });
 
+  it("lists open reported published posts in the admin queue", async () => {
+    const service = createBaseService({
+      repositoryLike: {
+        listReviewRequiredPosts: async () => [],
+        listOpenReportedPosts: async () => [
+          {
+            post: createPostRow({
+              moderation_status: "published",
+              moderation_flagged: false,
+              moderation_categories: {},
+              moderation_category_scores: {},
+            }),
+            reportCount: 2,
+            firstReportedAt: "2026-07-17T12:05:00.000Z",
+            latestReportedAt: "2026-07-17T12:08:00.000Z",
+          },
+        ],
+      },
+    });
+
+    const items = await service.listQueue("post", 10);
+
+    expect(items).toHaveLength(1);
+    expect(items[0]).toMatchObject({
+      contentType: "post",
+      contentId: "post-1",
+      reviewSource: "user_report",
+      reportStatus: "open",
+      reportCount: 2,
+      moderationStatus: "published",
+    });
+  });
+
   it("includes a signed preview URL for stored discussion post images", async () => {
     const service = createBaseService({
       repositoryLike: {
@@ -374,6 +428,68 @@ describe("adminModerationService", () => {
         previous_status: "review_required",
         new_status: "published",
         internal_note: "Acceptable civic content.",
+      });
+    }
+  });
+
+  it("approves a reported published post without hiding it and closes reports", async () => {
+    let closedReports = false;
+    const service = createBaseService({
+      repositoryLike: {
+        getPostById: async () =>
+          createPostRow({
+            moderation_status: "published",
+            moderation_flagged: false,
+          }),
+        getOpenReportSummaryForPost: async () => ({
+          reportCount: 1,
+          firstReportedAt: "2026-07-17T12:05:00.000Z",
+          latestReportedAt: "2026-07-17T12:05:00.000Z",
+        }),
+        updateReportedPostReviewStatus: async (input: any) =>
+          createPostRow({
+            moderation_status: input.status,
+            human_review_status: "reviewed",
+            human_review_decision: input.decision,
+            human_reviewed_at: input.reviewedAt,
+          }),
+        markOpenPostReportsReviewed: async () => {
+          closedReports = true;
+        },
+        insertReviewAction: async (input: any) =>
+          createReviewActionRow({
+            content_type: input.contentType,
+            content_id: input.contentId,
+            reviewer_verified_identity_id: input.reviewerVerifiedIdentityId,
+            reviewer_user_id: input.reviewerUserId,
+            action: input.action,
+            previous_status: input.previousStatus,
+            new_status: input.newStatus,
+          }),
+      },
+    });
+    const auth = await service.requireAdmin("Bearer oidc-access-token");
+    if (!auth.ok) {
+      throw new Error("Expected admin auth success.");
+    }
+
+    const result = await service.applyDecision({
+      admin: auth.admin,
+      contentType: "post",
+      contentId: "post-1",
+      action: "approve",
+    });
+
+    expect(result).toMatchObject({
+      success: true,
+      status: "published",
+    });
+    expect(closedReports).toBe(true);
+    if (result.success) {
+      expect(result.reviewAction).toMatchObject({
+        content_type: "discussion_post",
+        previous_status: "published",
+        new_status: "published",
       });
     }
   });

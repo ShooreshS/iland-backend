@@ -37,6 +37,11 @@ export type AdminAuthResult =
 export type ReviewQueueItem = {
   contentType: AdminContentType;
   contentId: string;
+  reviewSource: "moderation" | "user_report";
+  reportStatus: "open" | null;
+  reportCount: number | null;
+  firstReportedAt: string | null;
+  latestReportedAt: string | null;
   authorUserId: string | null;
   authorNickname: string | null;
   title: string | null;
@@ -153,6 +158,11 @@ const excerpt = (value: string | null | undefined): string | null => {
 const mapPollQueueItem = (row: PollRow): ReviewQueueItem => ({
   contentType: "poll",
   contentId: row.id,
+  reviewSource: "moderation",
+  reportStatus: null,
+  reportCount: null,
+  firstReportedAt: null,
+  latestReportedAt: null,
   authorUserId: row.created_by_user_id,
   authorNickname: null,
   title: row.title,
@@ -167,9 +177,21 @@ const mapPollQueueItem = (row: PollRow): ReviewQueueItem => ({
   createdAt: row.created_at,
 });
 
-const mapPostQueueItem = (row: DiscussionPostRow): ReviewQueueItem => ({
+const mapPostQueueItem = (
+  row: DiscussionPostRow,
+  reportSummary?: {
+    reportCount: number;
+    firstReportedAt: string;
+    latestReportedAt: string;
+  } | null,
+): ReviewQueueItem => ({
   contentType: "post",
   contentId: row.id,
+  reviewSource: reportSummary ? "user_report" : "moderation",
+  reportStatus: reportSummary ? "open" : null,
+  reportCount: reportSummary?.reportCount ?? null,
+  firstReportedAt: reportSummary?.firstReportedAt ?? null,
+  latestReportedAt: reportSummary?.latestReportedAt ?? null,
   authorUserId: row.author_user_id,
   authorNickname: row.author_public_nickname,
   title: row.post_type,
@@ -187,6 +209,11 @@ const mapPostQueueItem = (row: DiscussionPostRow): ReviewQueueItem => ({
 const mapCommentQueueItem = (row: DiscussionCommentRow): ReviewQueueItem => ({
   contentType: "comment",
   contentId: row.id,
+  reviewSource: "moderation",
+  reportStatus: null,
+  reportCount: null,
+  firstReportedAt: null,
+  latestReportedAt: null,
   authorUserId: row.author_user_id,
   authorNickname: row.author_public_nickname,
   title: `Comment on ${row.post_id}`,
@@ -323,7 +350,18 @@ export const createAdminModerationService = (
     if (contentType === "all" || contentType === "post") {
       tasks.push(
         repo.listReviewRequiredPosts(normalizedLimit).then((rows) =>
-          rows.map(mapPostQueueItem),
+          rows.map((row) => mapPostQueueItem(row)),
+        ),
+      );
+      tasks.push(
+        repo.listOpenReportedPosts(normalizedLimit).then((rows) =>
+          rows.map((row) =>
+            mapPostQueueItem(row.post, {
+              reportCount: row.reportCount,
+              firstReportedAt: row.firstReportedAt,
+              latestReportedAt: row.latestReportedAt,
+            }),
+          ),
         ),
       );
     }
@@ -335,11 +373,23 @@ export const createAdminModerationService = (
       );
     }
 
-    const items = (await Promise.all(tasks)).flat();
-    return items
+    const itemsByKey = new Map<string, ReviewQueueItem>();
+    for (const item of (await Promise.all(tasks)).flat()) {
+      const key = `${item.contentType}:${item.contentId}`;
+      const current = itemsByKey.get(key);
+      if (!current || current.reviewSource === "user_report") {
+        itemsByKey.set(key, item);
+      }
+    }
+
+    return Array.from(itemsByKey.values())
       .sort((left, right) => {
-        const leftTime = new Date(left.moderatedAt || left.createdAt).getTime();
-        const rightTime = new Date(right.moderatedAt || right.createdAt).getTime();
+        const leftTime = new Date(
+          left.firstReportedAt || left.moderatedAt || left.createdAt,
+        ).getTime();
+        const rightTime = new Date(
+          right.firstReportedAt || right.moderatedAt || right.createdAt,
+        ).getTime();
         return leftTime - rightTime || left.contentId.localeCompare(right.contentId);
       })
       .slice(0, normalizedLimit);
@@ -364,10 +414,14 @@ export const createAdminModerationService = (
 
     if (contentType === "post") {
       const post = await repo.getPostById(contentId);
+      const reportSummary =
+        post?.moderation_status === "published"
+          ? await repo.getOpenReportSummaryForPost(contentId)
+          : null;
       return post
         ? {
             contentType,
-            item: mapPostQueueItem(post),
+            item: mapPostQueueItem(post, reportSummary),
             post,
             imagePreviewUrl:
               post.image_url ||
@@ -414,7 +468,16 @@ export const createAdminModerationService = (
       };
     }
 
-    if (current.item.moderationStatus !== "review_required") {
+    const isReportedPublishedPost =
+      input.contentType === "post" &&
+      current.item.reviewSource === "user_report" &&
+      current.item.reportStatus === "open" &&
+      current.item.moderationStatus === "published";
+
+    if (
+      current.item.moderationStatus !== "review_required" &&
+      !isReportedPublishedPost
+    ) {
       return {
         success: false,
         errorCode: "NOT_REVIEWABLE",
@@ -433,12 +496,19 @@ export const createAdminModerationService = (
             reviewedAt,
           })
         : input.contentType === "post"
-          ? await repo.updatePostReviewStatus({
-              contentId: input.contentId,
-              status: nextStatus,
-              decision: input.action,
-              reviewedAt,
-            })
+          ? isReportedPublishedPost
+            ? await repo.updateReportedPostReviewStatus({
+                contentId: input.contentId,
+                status: nextStatus,
+                decision: input.action,
+                reviewedAt,
+              })
+            : await repo.updatePostReviewStatus({
+                contentId: input.contentId,
+                status: nextStatus,
+                decision: input.action,
+                reviewedAt,
+              })
           : await repo.updateCommentReviewStatus({
               contentId: input.contentId,
               status: nextStatus,
@@ -460,11 +530,15 @@ export const createAdminModerationService = (
       reviewerVerifiedIdentityId: input.admin.verifiedIdentity.id,
       reviewerUserId: input.admin.user.id,
       action: input.action,
-      previousStatus: "review_required",
+      previousStatus: current.item.moderationStatus,
       newStatus: nextStatus,
       internalNote: input.internalNote,
       userMessage: input.userMessage,
     });
+
+    if (isReportedPublishedPost) {
+      await repo.markOpenPostReportsReviewed(input.contentId, reviewedAt);
+    }
 
     return {
       success: true,

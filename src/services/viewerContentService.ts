@@ -84,6 +84,7 @@ const mapPost = (
   commentCount: row.comment_count,
   feedScore: row.feed_score,
   viewerHasLiked: false,
+  viewerHasBookmarked: false,
   createdAt: row.created_at,
   updatedAt: row.updated_at,
 });

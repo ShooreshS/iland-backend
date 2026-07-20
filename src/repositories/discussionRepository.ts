@@ -1,10 +1,13 @@
 import { requireSupabaseAdminClient } from "../db/supabaseClient";
 import type {
   DiscussionCommentRow,
+  DiscussionPostBookmarkRow,
   DiscussionPostLikeRow,
+  DiscussionPostReportRow,
   DiscussionPostRow,
   ModerationReviewActionRow,
   NewDiscussionCommentRow,
+  NewDiscussionPostReportRow,
   NewDiscussionPostRow,
 } from "../types/db";
 
@@ -15,6 +18,8 @@ const COMMENT_COLUMNS =
   "id,post_id,author_user_id,author_public_nickname,body,moderation_status,moderation_model,moderation_flagged,moderation_categories,moderation_category_scores,moderation_applied_input_types,moderation_raw,moderated_at,moderation_error,moderation_policy_version,human_review_status,human_review_decision,human_reviewed_at,created_at,updated_at";
 const REVIEW_ACTION_COLUMNS =
   "id,content_type,content_id,reviewer_verified_identity_id,reviewer_user_id,action,previous_status,new_status,internal_note,user_message,created_at";
+const REPORT_COLUMNS =
+  "id,post_id,reporter_user_id,category,comment,status,created_at,updated_at";
 
 const buildPostPayload = (input: NewDiscussionPostRow) => ({
   ...(input.id ? { id: input.id } : null),
@@ -262,6 +267,28 @@ export const discussionRepository = {
     return new Set((data || []).map((row) => row.post_id as string));
   },
 
+  async getBookmarkedPostIds(
+    userId: string,
+    postIds: string[],
+  ): Promise<Set<string>> {
+    if (postIds.length === 0) {
+      return new Set();
+    }
+
+    const supabase = requireSupabaseAdminClient();
+    const { data, error } = await supabase
+      .from("discussion_post_bookmarks")
+      .select("post_id")
+      .eq("user_id", userId)
+      .in("post_id", postIds);
+
+    if (error) {
+      throw error;
+    }
+
+    return new Set((data || []).map((row) => row.post_id as string));
+  },
+
   async getLike(
     postId: string,
     userId: string,
@@ -303,6 +330,92 @@ export const discussionRepository = {
     if (error) {
       throw error;
     }
+  },
+
+  async getBookmark(
+    postId: string,
+    userId: string,
+  ): Promise<DiscussionPostBookmarkRow | null> {
+    const supabase = requireSupabaseAdminClient();
+    const { data, error } = await supabase
+      .from("discussion_post_bookmarks")
+      .select("post_id,user_id,created_at")
+      .eq("post_id", postId)
+      .eq("user_id", userId)
+      .maybeSingle<DiscussionPostBookmarkRow>();
+
+    if (error) {
+      throw error;
+    }
+
+    return data || null;
+  },
+
+  async insertBookmark(postId: string, userId: string): Promise<void> {
+    const supabase = requireSupabaseAdminClient();
+    const { error } = await supabase
+      .from("discussion_post_bookmarks")
+      .insert({ post_id: postId, user_id: userId });
+
+    if (error && error.code !== "23505") {
+      throw error;
+    }
+  },
+
+  async deleteBookmark(postId: string, userId: string): Promise<void> {
+    const supabase = requireSupabaseAdminClient();
+    const { error } = await supabase
+      .from("discussion_post_bookmarks")
+      .delete()
+      .eq("post_id", postId)
+      .eq("user_id", userId);
+
+    if (error) {
+      throw error;
+    }
+  },
+
+  async getReport(
+    postId: string,
+    reporterUserId: string,
+  ): Promise<DiscussionPostReportRow | null> {
+    const supabase = requireSupabaseAdminClient();
+    const { data, error } = await supabase
+      .from("discussion_post_reports")
+      .select(REPORT_COLUMNS)
+      .eq("post_id", postId)
+      .eq("reporter_user_id", reporterUserId)
+      .maybeSingle<DiscussionPostReportRow>();
+
+    if (error) {
+      throw error;
+    }
+
+    return data || null;
+  },
+
+  async insertReport(
+    input: NewDiscussionPostReportRow,
+  ): Promise<DiscussionPostReportRow> {
+    const supabase = requireSupabaseAdminClient();
+    const { data, error } = await supabase
+      .from("discussion_post_reports")
+      .insert({
+        ...(input.id ? { id: input.id } : null),
+        post_id: input.post_id,
+        reporter_user_id: input.reporter_user_id,
+        category: input.category,
+        comment: input.comment ?? null,
+        status: input.status ?? "open",
+      })
+      .select(REPORT_COLUMNS)
+      .single<DiscussionPostReportRow>();
+
+    if (error) {
+      throw error;
+    }
+
+    return data;
   },
 
   async listPublishedComments(

@@ -14,20 +14,27 @@ import {
 import type {
   CreateDiscussionCommentRequestDto,
   CreateDiscussionCommentResultDto,
+  CreateDiscussionPostReportRequestDto,
   CreateDiscussionPostRequestDto,
   CreateDiscussionPostResultDto,
   DeleteDiscussionPostResultDto,
+  DiscussionBookmarkResultDto,
   DiscussionCommentDto,
   DiscussionCommentListDto,
   DiscussionImageInputDto,
   DiscussionLikeResultDto,
   DiscussionMutationErrorCode,
   DiscussionPostDto,
+  DiscussionPostDetailDto,
   DiscussionPostListDto,
+  DiscussionPostReportDto,
+  DiscussionPostReportResultDto,
+  DiscussionPostReportCategory,
   DiscussionPostType,
 } from "../types/contracts";
 import type {
   DiscussionCommentRow,
+  DiscussionPostReportRow,
   DiscussionPostRow,
   UserRow,
   VerifiedIdentityRow,
@@ -38,6 +45,14 @@ const DISCUSSION_POST_TYPES = new Set<DiscussionPostType>([
   "question",
   "proposal",
   "announcement",
+]);
+const DISCUSSION_POST_REPORT_CATEGORIES = new Set<DiscussionPostReportCategory>([
+  "spam",
+  "harassment",
+  "hate_or_abuse",
+  "misinformation",
+  "illegal_or_unsafe",
+  "other",
 ]);
 
 const DEFAULT_POST_LIMIT = 50;
@@ -253,6 +268,7 @@ const createExistingImageForModeration = async (
 const mapPost = (
   row: DiscussionPostRow,
   viewerLikedPostIds = new Set<string>(),
+  viewerBookmarkedPostIds = new Set<string>(),
   displayImageUrl: string | null = row.image_url,
 ): DiscussionPostDto => ({
   id: row.id,
@@ -275,6 +291,7 @@ const mapPost = (
   commentCount: row.comment_count,
   feedScore: row.feed_score,
   viewerHasLiked: viewerLikedPostIds.has(row.id),
+  viewerHasBookmarked: viewerBookmarkedPostIds.has(row.id),
   createdAt: row.created_at,
   updatedAt: row.updated_at,
 });
@@ -290,6 +307,17 @@ const mapComment = (row: DiscussionCommentRow): DiscussionCommentDto => ({
   moderationFlagged: row.moderation_flagged,
   moderatedAt: row.moderated_at,
   moderationPolicyVersion: row.moderation_policy_version,
+  createdAt: row.created_at,
+  updatedAt: row.updated_at,
+});
+
+const mapReport = (row: DiscussionPostReportRow): DiscussionPostReportDto => ({
+  id: row.id,
+  postId: row.post_id,
+  reporterUserId: row.reporter_user_id,
+  category: row.category,
+  comment: row.comment,
+  status: row.status,
   createdAt: row.created_at,
   updatedAt: row.updated_at,
 });
@@ -458,20 +486,52 @@ export const createDiscussionService = (
       const rows = await repo.listPublishedPosts(
         normalizeLimit(limit, DEFAULT_POST_LIMIT, MAX_POST_LIMIT),
       );
-      const likedPostIds = viewerUserId
-        ? await repo.getLikedPostIds(
-            viewerUserId,
-            rows.map((row) => row.id),
-          )
-        : new Set<string>();
+      const postIds = rows.map((row) => row.id);
+      const [likedPostIds, bookmarkedPostIds] = viewerUserId
+        ? await Promise.all([
+            repo.getLikedPostIds(viewerUserId, postIds),
+            repo.getBookmarkedPostIds(viewerUserId, postIds),
+          ])
+        : [new Set<string>(), new Set<string>()];
 
       const posts = await Promise.all(
         rows.map(async (row) =>
-          mapPost(row, likedPostIds, await resolveDisplayImageUrl(row)),
+          mapPost(
+            row,
+            likedPostIds,
+            bookmarkedPostIds,
+            await resolveDisplayImageUrl(row),
+          ),
         ),
       );
 
       return { posts };
+    },
+
+    async getPost(
+      postId: string,
+      viewerUserId: string | null,
+    ): Promise<DiscussionPostDetailDto | null> {
+      const post = await repo.getPostById(postId);
+      if (!post || post.moderation_status !== "published") {
+        return null;
+      }
+
+      const [likedPostIds, bookmarkedPostIds] = viewerUserId
+        ? await Promise.all([
+            repo.getLikedPostIds(viewerUserId, [post.id]),
+            repo.getBookmarkedPostIds(viewerUserId, [post.id]),
+          ])
+        : [new Set<string>(), new Set<string>()];
+
+      return {
+        post: mapPost(
+          post,
+          likedPostIds,
+          bookmarkedPostIds,
+          await resolveDisplayImageUrl(post),
+        ),
+      };
     },
 
     async createPost(
@@ -523,7 +583,7 @@ export const createDiscussionService = (
 
       return {
         success: true,
-        post: mapPost(stored, new Set(), displayImageUrl),
+        post: mapPost(stored, new Set(), new Set(), displayImageUrl),
         ...(MODERATION_USER_MESSAGES[moderation.decision]
           ? { message: MODERATION_USER_MESSAGES[moderation.decision] as string }
           : null),
@@ -609,7 +669,7 @@ export const createDiscussionService = (
 
       return {
         success: true,
-        post: mapPost(stored, new Set(), displayImageUrl),
+        post: mapPost(stored, new Set(), new Set(), displayImageUrl),
         ...(MODERATION_USER_MESSAGES[moderation.decision]
           ? { message: MODERATION_USER_MESSAGES[moderation.decision] as string }
           : null),
@@ -794,6 +854,118 @@ export const createDiscussionService = (
         postId,
         liked: false,
         likeCount: updated?.like_count ?? Math.max(post.like_count - 1, 0),
+      };
+    },
+
+    async setPostBookmarked(
+      postId: string,
+      viewerUserId: string,
+      bookmarked: boolean,
+    ): Promise<DiscussionBookmarkResultDto> {
+      const creator = await requireVerifiedCreator(viewerUserId);
+      if (!creator.ok) {
+        return createFailure<DiscussionBookmarkResultDto>(
+          creator.errorCode,
+          creator.message,
+        );
+      }
+
+      const post = await repo.getPostById(postId);
+      if (!post || post.moderation_status !== "published") {
+        return createFailure<DiscussionBookmarkResultDto>(
+          "POST_NOT_FOUND",
+          "The discussion post could not be found.",
+        );
+      }
+
+      if (bookmarked) {
+        await repo.insertBookmark(postId, viewerUserId);
+      } else {
+        await repo.deleteBookmark(postId, viewerUserId);
+      }
+
+      return {
+        success: true,
+        postId,
+        bookmarked,
+      };
+    },
+
+    async reportPost(
+      postId: string,
+      input: CreateDiscussionPostReportRequestDto,
+      viewerUserId: string,
+    ): Promise<DiscussionPostReportResultDto> {
+      const creator = await requireVerifiedCreator(viewerUserId);
+      if (!creator.ok) {
+        return createFailure<DiscussionPostReportResultDto>(
+          creator.errorCode,
+          creator.message,
+        );
+      }
+
+      const post = await repo.getPostById(postId);
+      if (!post || post.moderation_status !== "published") {
+        return createFailure<DiscussionPostReportResultDto>(
+          "POST_NOT_FOUND",
+          "The discussion post could not be found.",
+        );
+      }
+
+      if (!DISCUSSION_POST_REPORT_CATEGORIES.has(input.category)) {
+        return createFailure<DiscussionPostReportResultDto>(
+          "VALIDATION_FAILED",
+          "Choose a valid report category.",
+        );
+      }
+
+      const comment = normalizeText(input.comment);
+      const existing = await repo.getReport(post.id, creator.user.id);
+      if (existing) {
+        return {
+          success: true,
+          postId: post.id,
+          report: mapReport(existing),
+          duplicate: true,
+          message: "You have already reported this discussion post.",
+        };
+      }
+
+      let report: DiscussionPostReportRow;
+      try {
+        report = await repo.insertReport({
+          id: randomUUID(),
+          post_id: post.id,
+          reporter_user_id: creator.user.id,
+          category: input.category,
+          comment,
+          status: "open",
+        });
+      } catch (error) {
+        if ((error as { code?: string })?.code !== "23505") {
+          throw error;
+        }
+
+        const duplicate = await repo.getReport(post.id, creator.user.id);
+        if (!duplicate) {
+          throw error;
+        }
+
+        return {
+          success: true,
+          postId: post.id,
+          report: mapReport(duplicate),
+          duplicate: true,
+          message: "You have already reported this discussion post.",
+        };
+      }
+
+      return {
+        success: true,
+        postId: post.id,
+        report: mapReport(report),
+        duplicate: false,
+        message: "Report submitted for admin review.",
       };
     },
   };

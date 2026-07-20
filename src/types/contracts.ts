@@ -220,6 +220,7 @@ export type DiscussionPostDto = {
   commentCount: number;
   feedScore: number;
   viewerHasLiked: boolean;
+  viewerHasBookmarked: boolean;
   createdAt: string;
   updatedAt: string;
 };
@@ -265,6 +266,10 @@ export type DiscussionMutationErrorCode =
 
 export type DiscussionPostListDto = {
   posts: DiscussionPostDto[];
+};
+
+export type DiscussionPostDetailDto = {
+  post: DiscussionPostDto;
 };
 
 export type ViewerDiscussionPostListDto = {
@@ -314,6 +319,47 @@ export type DiscussionLikeResultDto = {
   postId?: string;
   liked?: boolean;
   likeCount?: number;
+  errorCode?: DiscussionMutationErrorCode;
+  message?: string;
+};
+
+export type DiscussionBookmarkResultDto = {
+  success: boolean;
+  postId?: string;
+  bookmarked?: boolean;
+  errorCode?: DiscussionMutationErrorCode;
+  message?: string;
+};
+
+export type DiscussionPostReportCategory =
+  | "spam"
+  | "harassment"
+  | "hate_or_abuse"
+  | "misinformation"
+  | "illegal_or_unsafe"
+  | "other";
+
+export type CreateDiscussionPostReportRequestDto = {
+  category: DiscussionPostReportCategory;
+  comment?: string | null;
+};
+
+export type DiscussionPostReportDto = {
+  id: string;
+  postId: string;
+  reporterUserId: string;
+  category: DiscussionPostReportCategory;
+  comment: string | null;
+  status: "open" | "reviewed";
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type DiscussionPostReportResultDto = {
+  success: boolean;
+  postId?: string;
+  report?: DiscussionPostReportDto;
+  duplicate?: boolean;
   errorCode?: DiscussionMutationErrorCode;
   message?: string;
 };

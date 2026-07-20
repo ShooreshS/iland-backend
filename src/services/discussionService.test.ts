@@ -2,6 +2,7 @@ import { describe, expect, it } from "bun:test";
 import { generateKeyPairSync } from "node:crypto";
 import type {
   DiscussionCommentRow,
+  DiscussionPostReportRow,
   DiscussionPostRow,
   UserRow,
   VerifiedIdentityRow,
@@ -138,13 +139,31 @@ const createCommentRow = (
   ...overrides,
 });
 
+const createReportRow = (
+  overrides: Partial<DiscussionPostReportRow> = {},
+): DiscussionPostReportRow => ({
+  id: "report-1",
+  post_id: "post-1",
+  reporter_user_id: "user-1",
+  category: "other",
+  comment: null,
+  status: "open",
+  created_at: FIXED_TIME,
+  updated_at: FIXED_TIME,
+  ...overrides,
+});
+
 const createRepo = () => {
   const posts: DiscussionPostRow[] = [];
   const comments: DiscussionCommentRow[] = [];
+  const bookmarks = new Set<string>();
+  const reports: DiscussionPostReportRow[] = [];
 
   return {
     posts,
     comments,
+    bookmarks,
+    reports,
     repo: {
       listPublishedPosts: async () =>
         posts.filter((post) => post.moderation_status === "published"),
@@ -236,6 +255,50 @@ const createRepo = () => {
       getLike: async () => null,
       insertLike: async () => undefined,
       deleteLike: async () => undefined,
+      getBookmarkedPostIds: async (userId: string, postIds: string[]) =>
+        new Set(
+          postIds.filter((postId) => bookmarks.has(`${postId}:${userId}`)),
+        ),
+      getBookmark: async (postId: string, userId: string) =>
+        bookmarks.has(`${postId}:${userId}`)
+          ? { post_id: postId, user_id: userId, created_at: FIXED_TIME }
+          : null,
+      insertBookmark: async (postId: string, userId: string) => {
+        bookmarks.add(`${postId}:${userId}`);
+      },
+      deleteBookmark: async (postId: string, userId: string) => {
+        bookmarks.delete(`${postId}:${userId}`);
+      },
+      getReport: async (postId: string, reporterUserId: string) =>
+        reports.find(
+          (report) =>
+            report.post_id === postId &&
+            report.reporter_user_id === reporterUserId,
+        ) || null,
+      insertReport: async (input: any) => {
+        if (
+          reports.some(
+            (report) =>
+              report.post_id === input.post_id &&
+              report.reporter_user_id === input.reporter_user_id,
+          )
+        ) {
+          const error = new Error("duplicate report") as Error & { code?: string };
+          error.code = "23505";
+          throw error;
+        }
+
+        const row = createReportRow({
+          id: input.id,
+          post_id: input.post_id,
+          reporter_user_id: input.reporter_user_id,
+          category: input.category,
+          comment: input.comment,
+          status: input.status,
+        });
+        reports.push(row);
+        return row;
+      },
       listPublishedComments: async (postId: string) =>
         comments.filter(
           (comment) =>
@@ -295,6 +358,84 @@ describe("discussionService", () => {
       viewerHasLiked: false,
     });
     expect(likedLookupCount).toBe(0);
+  });
+
+  it("loads a published post detail with viewer bookmark state", async () => {
+    const { repo, posts, bookmarks } = createRepo();
+    posts.push(createPostRow({ id: "post-1", moderation_status: "published" }));
+    bookmarks.add("post-1:user-1");
+    const service = createDiscussionService({
+      discussionRepositoryLike: repo as any,
+    });
+
+    const result = await service.getPost("post-1", "user-1");
+
+    expect(result?.post).toMatchObject({
+      id: "post-1",
+      viewerHasBookmarked: true,
+    });
+  });
+
+  it("toggles bookmarks on published discussion posts", async () => {
+    const { repo, posts, bookmarks } = createRepo();
+    posts.push(createPostRow({ id: "post-1", moderation_status: "published" }));
+    const service = createDiscussionService({
+      discussionRepositoryLike: repo as any,
+      userRepositoryLike: { getById: async () => createUser() },
+      verifiedIdentityRepositoryLike: { getByUserId: async () => verifiedIdentity },
+    });
+
+    const bookmarked = await service.setPostBookmarked("post-1", "user-1", true);
+    const unbookmarked = await service.setPostBookmarked("post-1", "user-1", false);
+
+    expect(bookmarked).toMatchObject({
+      success: true,
+      bookmarked: true,
+    });
+    expect(unbookmarked).toMatchObject({
+      success: true,
+      bookmarked: false,
+    });
+    expect(bookmarks.has("post-1:user-1")).toBe(false);
+  });
+
+  it("dedupes repeated reports by the same user and post", async () => {
+    const { repo, posts, reports } = createRepo();
+    posts.push(createPostRow({ id: "post-1", moderation_status: "published" }));
+    const service = createDiscussionService({
+      discussionRepositoryLike: repo as any,
+      userRepositoryLike: { getById: async () => createUser() },
+      verifiedIdentityRepositoryLike: { getByUserId: async () => verifiedIdentity },
+    });
+
+    const first = await service.reportPost(
+      "post-1",
+      { category: "misinformation", comment: "Needs review." },
+      "user-1",
+    );
+    const second = await service.reportPost(
+      "post-1",
+      { category: "misinformation", comment: "Needs review again." },
+      "user-1",
+    );
+
+    expect(first).toMatchObject({
+      success: true,
+      duplicate: false,
+      postId: "post-1",
+    });
+    expect(second).toMatchObject({
+      success: true,
+      duplicate: true,
+      postId: "post-1",
+    });
+    expect(reports).toHaveLength(1);
+    expect(reports[0]).toMatchObject({
+      post_id: "post-1",
+      reporter_user_id: "user-1",
+      status: "open",
+    });
+    expect(posts[0].moderation_status).toBe("published");
   });
 
   it("rejects publishing when the viewer has no linked verified identity", async () => {

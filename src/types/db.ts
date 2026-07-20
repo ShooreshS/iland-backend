@@ -1,4 +1,5 @@
 import type {
+  DiscussionPostReportCategory,
   DiscussionPostType,
   PollJurisdictionType,
   PollModerationStatus,
@@ -710,6 +711,41 @@ export type DiscussionPostLikeRow = {
   post_id: string;
   user_id: string;
   created_at: string;
+};
+
+export type DiscussionPostBookmarkRow = {
+  post_id: string;
+  user_id: string;
+  created_at: string;
+};
+
+export type DiscussionPostReportStatus = "open" | "reviewed";
+
+export type DiscussionPostReportRow = {
+  id: string;
+  post_id: string;
+  reporter_user_id: string;
+  category: DiscussionPostReportCategory;
+  comment: string | null;
+  status: DiscussionPostReportStatus;
+  created_at: string;
+  updated_at: string;
+};
+
+export type NewDiscussionPostReportRow = {
+  id?: string;
+  post_id: string;
+  reporter_user_id: string;
+  category: DiscussionPostReportCategory;
+  comment?: string | null;
+  status?: DiscussionPostReportStatus;
+};
+
+export type DiscussionPostOpenReportQueueRow = {
+  post_id: string;
+  report_count: number;
+  first_reported_at: string;
+  latest_reported_at: string;
 };
 
 export type DiscussionMediaUploadStatus =

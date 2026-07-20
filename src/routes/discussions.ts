@@ -4,6 +4,7 @@ import { json } from "../middleware/json";
 import discussionService from "../services/discussionService";
 import type {
   CreateDiscussionCommentRequestDto,
+  CreateDiscussionPostReportRequestDto,
   CreateDiscussionPostRequestDto,
   DiscussionMutationErrorCode,
 } from "../types/contracts";
@@ -48,6 +49,22 @@ const createDiscussionPostSchema = z
 const createDiscussionCommentSchema = z
   .object({
     body: z.string(),
+  })
+  .strict();
+
+const discussionReportCategorySchema = z.enum([
+  "spam",
+  "harassment",
+  "hate_or_abuse",
+  "misinformation",
+  "illegal_or_unsafe",
+  "other",
+]);
+
+const createDiscussionPostReportSchema = z
+  .object({
+    category: discussionReportCategorySchema,
+    comment: z.string().trim().max(1000).nullable().optional(),
   })
   .strict();
 
@@ -145,6 +162,46 @@ const createDiscussionRoute: RouteDefinition = {
         ? 201
         : mutationErrorStatusMap[result.errorCode || "VALIDATION_FAILED"] || 400,
     );
+  },
+};
+
+const getDiscussionRoute: RouteDefinition = {
+  method: "GET",
+  path: "/discussions/:id",
+  handler: async ({ request, params }) => {
+    const viewerResult = await optionalViewer(request);
+    if (!viewerResult.ok) {
+      return viewerResult.response;
+    }
+
+    const postId = params.id?.trim() || "";
+    if (!postId) {
+      return json(
+        {
+          success: false,
+          errorCode: "POST_NOT_FOUND",
+          message: "The discussion post could not be found.",
+        },
+        404,
+      );
+    }
+
+    const result = await discussionService.getPost(
+      postId,
+      viewerResult.viewer?.userId ?? null,
+    );
+    if (!result) {
+      return json(
+        {
+          success: false,
+          errorCode: "POST_NOT_FOUND",
+          message: "The discussion post could not be found.",
+        },
+        404,
+      );
+    }
+
+    return json(result);
   },
 };
 
@@ -351,13 +408,103 @@ const unlikeDiscussionRoute: RouteDefinition = {
   },
 };
 
+const bookmarkDiscussionRoute: RouteDefinition = {
+  method: "POST",
+  path: "/discussions/:id/bookmark",
+  handler: async ({ request, params }) => {
+    const viewerResult = await requireViewer(request);
+    if (!viewerResult.ok) {
+      return viewerResult.response;
+    }
+
+    const result = await discussionService.setPostBookmarked(
+      params.id?.trim() || "",
+      viewerResult.viewer.userId,
+      true,
+    );
+    return json(
+      result,
+      result.success
+        ? 200
+        : mutationErrorStatusMap[result.errorCode || "VALIDATION_FAILED"] || 400,
+    );
+  },
+};
+
+const unbookmarkDiscussionRoute: RouteDefinition = {
+  method: "DELETE",
+  path: "/discussions/:id/bookmark",
+  handler: async ({ request, params }) => {
+    const viewerResult = await requireViewer(request);
+    if (!viewerResult.ok) {
+      return viewerResult.response;
+    }
+
+    const result = await discussionService.setPostBookmarked(
+      params.id?.trim() || "",
+      viewerResult.viewer.userId,
+      false,
+    );
+    return json(
+      result,
+      result.success
+        ? 200
+        : mutationErrorStatusMap[result.errorCode || "VALIDATION_FAILED"] || 400,
+    );
+  },
+};
+
+const reportDiscussionRoute: RouteDefinition = {
+  method: "POST",
+  path: "/discussions/:id/report",
+  handler: async ({ request, params }) => {
+    const viewerResult = await requireViewer(request);
+    if (!viewerResult.ok) {
+      return viewerResult.response;
+    }
+
+    const bodyResult = await parseJsonBody(request);
+    if (!bodyResult.ok) {
+      return bodyResult.response;
+    }
+
+    const parsed = createDiscussionPostReportSchema.safeParse(bodyResult.body);
+    if (!parsed.success) {
+      return json(
+        {
+          success: false,
+          errorCode: "VALIDATION_FAILED",
+          message: "Discussion report request body is invalid.",
+        },
+        400,
+      );
+    }
+
+    const result = await discussionService.reportPost(
+      params.id?.trim() || "",
+      parsed.data as CreateDiscussionPostReportRequestDto,
+      viewerResult.viewer.userId,
+    );
+    return json(
+      result,
+      result.success
+        ? 201
+        : mutationErrorStatusMap[result.errorCode || "VALIDATION_FAILED"] || 400,
+    );
+  },
+};
+
 export const discussionRoutes: RouteDefinition[] = [
   getDiscussionsRoute,
   createDiscussionRoute,
+  getDiscussionRoute,
   updateDiscussionRoute,
   deleteDiscussionRoute,
   getDiscussionCommentsRoute,
   createDiscussionCommentRoute,
   likeDiscussionRoute,
   unlikeDiscussionRoute,
+  bookmarkDiscussionRoute,
+  unbookmarkDiscussionRoute,
+  reportDiscussionRoute,
 ];
