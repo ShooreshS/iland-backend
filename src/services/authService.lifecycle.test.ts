@@ -103,6 +103,7 @@ const state = {
     credentials: 0,
     attestations: 0,
   },
+  accountDeletionCalls: [] as string[],
 };
 
 const resetState = () => {
@@ -117,6 +118,7 @@ const resetState = () => {
     credentials: 0,
     attestations: 0,
   };
+  state.accountDeletionCalls = [];
 };
 
 mock.module("../repositories/authChallengeRepository", () => {
@@ -458,6 +460,39 @@ mock.module("../repositories/authAuditEventRepository", () => {
   };
 });
 
+mock.module("../repositories/accountDeletionRepository", () => {
+  const repository = {
+    deleteAccountForUser: async (userId: string) => {
+      state.accountDeletionCalls.push(userId);
+      return {
+        userFound: true,
+        userAnonymized: true,
+        votes: 2,
+        discussionPosts: 1,
+        discussionComments: 3,
+        discussionPostLikes: 4,
+        discussionPostBookmarks: 1,
+        discussionPostReports: 1,
+        discussionMediaUploads: 1,
+        walletCredentials: 1,
+        authCredentials: 1,
+        oidcRecords: 0,
+        authAuditEventsAnonymized: 2,
+        oidcAuditEventsAnonymized: 0,
+        adminReviewersDisabled: 0,
+        pollOwnershipsCleared: 0,
+        landFoundershipsCleared: 0,
+        credentialRegistryEntriesRevoked: 1,
+      };
+    },
+  };
+
+  return {
+    accountDeletionRepository: repository,
+    default: repository,
+  };
+});
+
 const { __testOnly, authService } = await import("./authService");
 
 describe("authService first-party auth lifecycle hardening", () => {
@@ -662,5 +697,33 @@ describe("authService first-party auth lifecycle hardening", () => {
         event_type: "auth_recovery_revoked_authentication_lineage",
       }),
     );
+  });
+
+  it("deletes an account only after the exact confirmation phrase", async () => {
+    const rejected = await authService.deleteAccount(activeUser.id, {
+      confirmationPhrase: "delete my account",
+    });
+
+    expect(rejected).toMatchObject({
+      success: false,
+      errorCode: "CONFIRMATION_PHRASE_MISMATCH",
+    });
+    expect(state.accountDeletionCalls).toEqual([]);
+
+    const accepted = await authService.deleteAccount(activeUser.id, {
+      confirmationPhrase: "I want to delete my account forever",
+    });
+
+    expect(accepted).toMatchObject({
+      success: true,
+      deleted: {
+        userFound: true,
+        userAnonymized: true,
+        votes: 2,
+        discussionPosts: 1,
+        discussionComments: 3,
+      },
+    });
+    expect(state.accountDeletionCalls).toEqual([activeUser.id]);
   });
 });

@@ -55,6 +55,13 @@ const state = {
       status: "revoked",
     },
   } as Record<string, unknown>,
+  deleteAccountResult: {
+    success: true,
+    deleted: {
+      userFound: true,
+      userAnonymized: true,
+    },
+  } as Record<string, unknown>,
 };
 
 const resetState = () => {
@@ -92,6 +99,13 @@ const resetState = () => {
       status: "revoked",
     },
   };
+  state.deleteAccountResult = {
+    success: true,
+    deleted: {
+      userFound: true,
+      userAnonymized: true,
+    },
+  };
 };
 
 const requireViewer = async () => ({
@@ -125,6 +139,10 @@ const authService = {
   revokeSessionForUser: async (...input: unknown[]) => {
     state.serviceCalls.push({ method: "revokeSessionForUser", input });
     return state.revokeResult;
+  },
+  deleteAccount: async (...input: unknown[]) => {
+    state.serviceCalls.push({ method: "deleteAccount", input });
+    return state.deleteAccountResult;
   },
   issueChallenge: async () => ({ success: true as const }),
   completeRegistration: async (...input: unknown[]) => {
@@ -215,6 +233,40 @@ describe("auth lifecycle routes", () => {
       method: "completeRegistration",
       input: [buildRegistrationCompleteBody()],
     });
+  });
+
+  it("DELETE /auth/account forwards the confirmation phrase for the viewer", async () => {
+    const route = findRoute("DELETE", "/auth/account");
+
+    const response = await invokeRoute(route, {
+      body: {
+        confirmationPhrase: "I want to delete my account forever",
+      },
+    });
+
+    expect(response.status).toBe(200);
+    expect(state.serviceCalls).toContainEqual({
+      method: "deleteAccount",
+      input: [
+        viewerUser.id,
+        {
+          confirmationPhrase: "I want to delete my account forever",
+        },
+      ],
+    });
+  });
+
+  it("DELETE /auth/account rejects an invalid request body", async () => {
+    const route = findRoute("DELETE", "/auth/account");
+
+    const response = await invokeRoute(route, {
+      body: {
+        confirmationPhrase: 123,
+      },
+    });
+
+    expect(response.status).toBe(400);
+    expect(state.serviceCalls.some((call) => call.method === "deleteAccount")).toBe(false);
   });
 
   it("POST /auth/register/complete rejects missing verification evidence", async () => {

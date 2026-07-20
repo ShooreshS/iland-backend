@@ -46,6 +46,12 @@ const refreshSchema = z
   })
   .strict();
 
+const deleteAccountSchema = z
+  .object({
+    confirmationPhrase: z.string(),
+  })
+  .strict();
+
 const parseJsonBody = async (request: Request) => {
   try {
     return await request.json();
@@ -90,6 +96,7 @@ type AuthServiceLike = Pick<
   | "logoutSession"
   | "listSessionsForUser"
   | "revokeSessionForUser"
+  | "deleteAccount"
 >;
 
 type RequireViewerFn = typeof defaultRequireViewer;
@@ -403,6 +410,46 @@ const revokeSessionRoute: RouteDefinition = {
   },
 };
 
+const deleteAccountRoute: RouteDefinition = {
+  method: "DELETE",
+  path: "/auth/account",
+  handler: async ({ request }) => {
+    const viewerResult = await requireViewer(request);
+    if (!viewerResult.ok) {
+      return viewerResult.response;
+    }
+
+    const requestBody = await parseJsonBody(request);
+    if (!requestBody) {
+      return invalidJsonResponse("Request body must be valid JSON.");
+    }
+
+    const parsed = deleteAccountSchema.safeParse(requestBody);
+    if (!parsed.success) {
+      return invalidJsonResponse("Account deletion request body is invalid.");
+    }
+
+    const result = await authService.deleteAccount(
+      viewerResult.viewer.userId,
+      parsed.data,
+    );
+
+    return json(
+      result,
+      result.success
+        ? 200
+        : result.errorCode === "CONFIRMATION_PHRASE_MISMATCH"
+          ? 400
+          : result.errorCode === "USER_NOT_FOUND"
+            ? 404
+            : 500,
+      {
+        "cache-control": "no-store",
+      },
+    );
+  },
+};
+
 return [
   registerChallengeRoute,
   registerCompleteRoute,
@@ -412,6 +459,7 @@ return [
   logoutRoute,
   listSessionsRoute,
   revokeSessionRoute,
+  deleteAccountRoute,
 ];
 };
 

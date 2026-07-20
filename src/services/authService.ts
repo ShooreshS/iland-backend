@@ -12,6 +12,7 @@ import authAuditEventRepository from "../repositories/authAuditEventRepository";
 import authChallengeRepository from "../repositories/authChallengeRepository";
 import authCredentialRepository from "../repositories/authCredentialRepository";
 import authSessionRepository from "../repositories/authSessionRepository";
+import accountDeletionRepository from "../repositories/accountDeletionRepository";
 import refreshTokenFamilyRepository from "../repositories/refreshTokenFamilyRepository";
 import userRepository from "../repositories/userRepository";
 import type {
@@ -23,6 +24,8 @@ import type {
 } from "../types/db";
 
 const AUTH_CHALLENGE_TTL_MS = 5 * 60 * 1000;
+export const ACCOUNT_DELETE_CONFIRMATION_PHRASE =
+  "I want to delete my account forever";
 
 type IssueAuthChallengeInput = {
   purpose: AuthChallengePurpose;
@@ -60,6 +63,10 @@ type RecoveryRevocationInput = {
   userId: string;
   preserveAuthCredentialId?: string | null;
   reason?: string;
+};
+
+type DeleteAccountInput = {
+  confirmationPhrase: string;
 };
 
 const createOpaqueChallenge = (): string => createOpaqueBearerToken().token;
@@ -890,6 +897,39 @@ export const authService = {
     return {
       success: true as const,
       session: toPublicSession(revoked),
+    };
+  },
+
+  async deleteAccount(userId: string, input: DeleteAccountInput) {
+    if (input.confirmationPhrase !== ACCOUNT_DELETE_CONFIRMATION_PHRASE) {
+      return {
+        success: false as const,
+        errorCode: "CONFIRMATION_PHRASE_MISMATCH",
+        message: "The account deletion confirmation phrase did not match.",
+      };
+    }
+
+    const user = await userRepository.getById(userId);
+    if (!user) {
+      return {
+        success: false as const,
+        errorCode: "USER_NOT_FOUND",
+        message: "Account user could not be resolved.",
+      };
+    }
+
+    const deleted = await accountDeletionRepository.deleteAccountForUser(userId);
+    if (!deleted.userFound || !deleted.userAnonymized) {
+      return {
+        success: false as const,
+        errorCode: "ACCOUNT_DELETE_FAILED",
+        message: "The account could not be deleted.",
+      };
+    }
+
+    return {
+      success: true as const,
+      deleted,
     };
   },
 
