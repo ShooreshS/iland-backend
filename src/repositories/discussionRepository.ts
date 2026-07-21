@@ -121,6 +121,24 @@ export const discussionRepository = {
     return data || [];
   },
 
+  async listPostsByIds(postIds: string[]): Promise<DiscussionPostRow[]> {
+    if (postIds.length === 0) {
+      return [];
+    }
+
+    const supabase = requireSupabaseAdminClient();
+    const { data, error } = await supabase
+      .from("discussion_posts")
+      .select(POST_COLUMNS)
+      .in("id", postIds);
+
+    if (error) {
+      throw error;
+    }
+
+    return data || [];
+  },
+
   async getPostEngagementTotalsByAuthorUserId(userId: string): Promise<{
     postCount: number;
     likeCount: number;
@@ -393,6 +411,31 @@ export const discussionRepository = {
     return new Set((data || []).map((row) => row.blocked_user_id as string));
   },
 
+  async listUserBlocksByBlockerUserId(
+    blockerUserId: string,
+    limit?: number | null,
+  ): Promise<DiscussionUserBlockRow[]> {
+    const supabase = requireSupabaseAdminClient();
+    let query = supabase
+      .from("discussion_user_blocks")
+      .select(BLOCK_COLUMNS)
+      .eq("blocker_user_id", blockerUserId)
+      .order("created_at", { ascending: false })
+      .order("blocked_user_id", { ascending: true });
+
+    if (Number.isFinite(limit)) {
+      query = query.limit(Math.max(1, Math.trunc(limit as number)));
+    }
+
+    const { data, error } = await query;
+
+    if (error) {
+      throw error;
+    }
+
+    return data || [];
+  },
+
   async getUserBlock(
     blockerUserId: string,
     blockedUserId: string,
@@ -490,6 +533,31 @@ export const discussionRepository = {
     }
 
     return data;
+  },
+
+  async listReportsByReporterUserId(
+    reporterUserId: string,
+    limit?: number | null,
+  ): Promise<DiscussionPostReportRow[]> {
+    const supabase = requireSupabaseAdminClient();
+    let query = supabase
+      .from("discussion_post_reports")
+      .select(REPORT_COLUMNS)
+      .eq("reporter_user_id", reporterUserId)
+      .order("created_at", { ascending: false })
+      .order("id", { ascending: false });
+
+    if (Number.isFinite(limit)) {
+      query = query.limit(Math.max(1, Math.trunc(limit as number)));
+    }
+
+    const { data, error } = await query;
+
+    if (error) {
+      throw error;
+    }
+
+    return data || [];
   },
 
   async listPublishedComments(

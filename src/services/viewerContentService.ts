@@ -1,27 +1,40 @@
 import discussionRepository from "../repositories/discussionRepository";
 import pollRepository from "../repositories/pollRepository";
 import pollZkVoteRepository from "../repositories/pollZkVoteRepository";
+import userRepository from "../repositories/userRepository";
 import voteRepository from "../repositories/voteRepository";
 import { discussionMediaService } from "./discussionMediaService";
 import type {
+  DiscussionBlockResultDto,
   DiscussionPostDto,
+  DiscussionMutationErrorCode,
   ModerationReviewActionDto,
   ViewerActivityOverviewDto,
   ViewerDiscussionPostDto,
   ViewerDiscussionPostListDto,
+  ViewerUserInteractionsDto,
 } from "../types/contracts";
 import type {
   DiscussionPostRow,
+  DiscussionPostReportRow,
+  DiscussionUserBlockRow,
   ModerationReviewActionRow,
+  UserRow,
 } from "../types/db";
 
 const MAX_POST_LIMIT = 100;
+const DEFAULT_INTERACTION_LIMIT = 50;
+const CAPTION_SNIPPET_LENGTH = 10;
 
 type ViewerContentDiscussionRepository = Pick<
   typeof discussionRepository,
   | "listPostsByAuthorUserId"
+  | "listPostsByIds"
   | "listReviewActionsForDiscussionPosts"
   | "getPostEngagementTotalsByAuthorUserId"
+  | "listUserBlocksByBlockerUserId"
+  | "deleteUserBlock"
+  | "listReportsByReporterUserId"
 >;
 
 type ViewerContentPollRepository = Pick<
@@ -44,12 +57,15 @@ type ViewerContentMediaService = Pick<
   "createDisplayImageUrl"
 >;
 
+type ViewerContentUserRepository = Pick<typeof userRepository, "listByIds">;
+
 type ViewerContentServiceDependencies = {
   discussionRepositoryLike?: ViewerContentDiscussionRepository;
   pollRepositoryLike?: ViewerContentPollRepository;
   voteRepositoryLike?: ViewerContentVoteRepository;
   pollZkVoteRepositoryLike?: ViewerContentPollZkVoteRepository;
   mediaServiceLike?: ViewerContentMediaService;
+  userRepositoryLike?: ViewerContentUserRepository;
 };
 
 const normalizeLimit = (value: number | null | undefined): number | null => {
@@ -130,6 +146,44 @@ const buildLatestReviewActionsByContentId = (
   return actionsByContentId;
 };
 
+const uniqueStrings = (values: Array<string | null | undefined>): string[] =>
+  Array.from(
+    new Set(
+      values
+        .map((value) => (typeof value === "string" ? value.trim() : ""))
+        .filter(Boolean),
+    ),
+  );
+
+const normalizeInteractionLimit = (value: number | null | undefined): number =>
+  normalizeLimit(value) || DEFAULT_INTERACTION_LIMIT;
+
+const getPublicNickname = (user: UserRow | null | undefined): string | null =>
+  user?.public_nickname || user?.display_name || user?.username || null;
+
+const getCaptionSnippet = (caption: string | null | undefined): string | null => {
+  const normalized = typeof caption === "string" ? caption.trim() : "";
+  return normalized ? normalized.slice(0, CAPTION_SNIPPET_LENGTH) : null;
+};
+
+const buildPostsById = (
+  posts: DiscussionPostRow[],
+): Map<string, DiscussionPostRow> =>
+  new Map(posts.map((post) => [post.id, post]));
+
+const buildUsersById = (users: UserRow[]): Map<string, UserRow> =>
+  new Map(users.map((user) => [user.id, user]));
+
+const createFailure = <T extends { success: boolean }>(
+  errorCode: DiscussionMutationErrorCode,
+  message: string,
+): T =>
+  ({
+    success: false,
+    errorCode,
+    message,
+  }) as unknown as T;
+
 export const createViewerContentService = (
   dependencies: ViewerContentServiceDependencies = {},
 ) => {
@@ -140,6 +194,7 @@ export const createViewerContentService = (
   const zkVoteRepo =
     dependencies.pollZkVoteRepositoryLike || pollZkVoteRepository;
   const mediaService = dependencies.mediaServiceLike || discussionMediaService;
+  const userRepo = dependencies.userRepositoryLike || userRepository;
 
   const resolveDisplayImageUrl = async (
     row: DiscussionPostRow,
@@ -216,6 +271,92 @@ export const createViewerContentService = (
         postReactionsReceived: postLikesReceived + postCommentsReceived,
         createdPollCount: Math.max(0, polls.length),
         pollVotesReceived: Math.max(0, legacyVoteCount + zkVoteCount),
+      };
+    },
+
+    async getUserInteractions(
+      viewerUserId: string,
+      limit?: number | null,
+    ): Promise<ViewerUserInteractionsDto> {
+      const interactionLimit = normalizeInteractionLimit(limit);
+      const [blockedRows, reportRows] = await Promise.all([
+        discussionRepo.listUserBlocksByBlockerUserId(
+          viewerUserId,
+          interactionLimit,
+        ),
+        discussionRepo.listReportsByReporterUserId(
+          viewerUserId,
+          interactionLimit,
+        ),
+      ]);
+      const postIds = uniqueStrings([
+        ...blockedRows.map((row) => row.source_post_id),
+        ...reportRows.map((row) => row.post_id),
+      ]);
+      const posts = await discussionRepo.listPostsByIds(postIds);
+      const postsById = buildPostsById(posts);
+      const userIds = uniqueStrings([
+        ...blockedRows.map((row) => row.blocked_user_id),
+        ...reportRows.map((row) => postsById.get(row.post_id)?.author_user_id),
+      ]);
+      const usersById = buildUsersById(await userRepo.listByIds(userIds));
+
+      return {
+        blockedUsers: blockedRows.map((row: DiscussionUserBlockRow) => {
+          const sourcePost = row.source_post_id
+            ? postsById.get(row.source_post_id)
+            : null;
+          return {
+            blockedUserId: row.blocked_user_id,
+            publicNickname: getPublicNickname(usersById.get(row.blocked_user_id)),
+            captionSnippet: getCaptionSnippet(sourcePost?.caption),
+            blockedAt: row.created_at,
+          };
+        }),
+        reportsSubmitted: reportRows.map((row: DiscussionPostReportRow) => {
+          const post = postsById.get(row.post_id) || null;
+          const authorUserId = post?.author_user_id || null;
+          return {
+            reportId: row.id,
+            postId: row.post_id,
+            authorUserId,
+            authorNickname: authorUserId
+              ? getPublicNickname(usersById.get(authorUserId))
+              : null,
+            captionSnippet: getCaptionSnippet(post?.caption),
+            category: row.category,
+            status: row.status,
+            submittedAt: row.created_at,
+          };
+        }),
+      };
+    },
+
+    async unblockUser(
+      viewerUserId: string,
+      blockedUserId: string,
+    ): Promise<DiscussionBlockResultDto> {
+      const normalizedBlockedUserId = blockedUserId.trim();
+      if (!normalizedBlockedUserId) {
+        return createFailure<DiscussionBlockResultDto>(
+          "VALIDATION_FAILED",
+          "The blocked user could not be resolved.",
+        );
+      }
+
+      if (normalizedBlockedUserId === viewerUserId) {
+        return createFailure<DiscussionBlockResultDto>(
+          "USER_BLOCK_NOT_ALLOWED",
+          "You cannot unblock yourself.",
+        );
+      }
+
+      await discussionRepo.deleteUserBlock(viewerUserId, normalizedBlockedUserId);
+
+      return {
+        success: true,
+        blockedUserId: normalizedBlockedUserId,
+        blocked: false,
       };
     },
   };

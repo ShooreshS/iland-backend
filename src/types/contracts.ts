@@ -287,6 +287,29 @@ export type ViewerActivityOverviewDto = {
   pollVotesReceived: number;
 };
 
+export type ViewerBlockedUserDto = {
+  blockedUserId: string;
+  publicNickname: string | null;
+  captionSnippet: string | null;
+  blockedAt: string;
+};
+
+export type ViewerSubmittedReportDto = {
+  reportId: string;
+  postId: string;
+  authorUserId: string | null;
+  authorNickname: string | null;
+  captionSnippet: string | null;
+  category: DiscussionPostReportCategory;
+  status: "open" | "reviewed";
+  submittedAt: string;
+};
+
+export type ViewerUserInteractionsDto = {
+  blockedUsers: ViewerBlockedUserDto[];
+  reportsSubmitted: ViewerSubmittedReportDto[];
+};
+
 export type CreateDiscussionPostResultDto = {
   success: boolean;
   post?: DiscussionPostDto;

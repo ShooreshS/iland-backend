@@ -6,6 +6,7 @@ import viewerContentService from "../services/viewerContentService";
 import viewerProfileService from "../services/viewerProfileService";
 import type {
   BindVerifiedIdentityResultDto,
+  DiscussionMutationErrorCode,
   IssueWalletCredentialResultDto,
   UpdateViewerHomeLocationResultDto,
   UpdateViewerPublicNicknameResultDto,
@@ -138,6 +139,16 @@ const verifyIdentityErrorStatusMap: Record<
   IDENTITY_ALREADY_BOUND: 409,
 };
 
+const discussionMutationErrorStatusMap: Record<DiscussionMutationErrorCode, number> = {
+  USER_NOT_FOUND: 401,
+  VERIFIED_IDENTITY_REQUIRED: 409,
+  POST_NOT_FOUND: 404,
+  POST_NOT_EDITABLE: 409,
+  USER_BLOCK_NOT_ALLOWED: 400,
+  VALIDATION_FAILED: 400,
+  MODERATION_FAILED: 502,
+};
+
 const getCurrentViewerProfileRoute: RouteDefinition = {
   method: "GET",
   path: "/me/profile",
@@ -194,6 +205,49 @@ const getViewerActivityOverviewRoute: RouteDefinition = {
 
     return json(
       await viewerContentService.getActivityOverview(viewerResult.viewer.userId),
+    );
+  },
+};
+
+const getViewerUserInteractionsRoute: RouteDefinition = {
+  method: "GET",
+  path: "/me/user-interactions",
+  handler: async ({ request }) => {
+    const viewerResult = await requireViewer(request);
+    if (!viewerResult.ok) {
+      return viewerResult.response;
+    }
+
+    return json(
+      await viewerContentService.getUserInteractions(
+        viewerResult.viewer.userId,
+        parseOptionalLimitQueryParam(request, 100),
+      ),
+    );
+  },
+};
+
+const unblockViewerBlockedUserRoute: RouteDefinition = {
+  method: "DELETE",
+  path: "/me/blocked-users/:blockedUserId",
+  handler: async ({ request, params }) => {
+    const viewerResult = await requireViewer(request);
+    if (!viewerResult.ok) {
+      return viewerResult.response;
+    }
+
+    const result = await viewerContentService.unblockUser(
+      viewerResult.viewer.userId,
+      params.blockedUserId?.trim() || "",
+    );
+
+    return json(
+      result,
+      result.success
+        ? 200
+        : discussionMutationErrorStatusMap[
+            result.errorCode || "VALIDATION_FAILED"
+          ] || 400,
     );
   },
 };
@@ -582,6 +636,8 @@ export const meRoutes: RouteDefinition[] = [
   getCurrentViewerProfileRoute,
   getViewerDiscussionPostsRoute,
   getViewerActivityOverviewRoute,
+  getViewerUserInteractionsRoute,
+  unblockViewerBlockedUserRoute,
   updateViewerHomeLocationRoute,
   updateViewerPublicNicknameRoute,
   getViewerLandStateRoute,

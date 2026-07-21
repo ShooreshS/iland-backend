@@ -2,8 +2,11 @@ import { describe, expect, it } from "bun:test";
 import { generateKeyPairSync } from "node:crypto";
 import type {
   DiscussionPostRow,
+  DiscussionPostReportRow,
+  DiscussionUserBlockRow,
   ModerationReviewActionRow,
   PollRow,
+  UserRow,
 } from "../types/db";
 
 const { privateKey: googleOAuthPrivateKey } = generateKeyPairSync("rsa", {
@@ -78,6 +81,48 @@ const createReviewActionRow = (
   internal_note: "Internal note",
   user_message: "Please remove the sale language before publishing.",
   created_at: FIXED_TIME,
+  ...overrides,
+});
+
+const createUserRow = (overrides: Partial<UserRow> = {}): UserRow => ({
+  id: "user-1",
+  username: "user-1",
+  display_name: null,
+  public_nickname: "clear-voter",
+  onboarding_status: "completed",
+  verification_level: "verified",
+  has_wallet: true,
+  wallet_credential_id: null,
+  selected_land_id: null,
+  preferred_language: "en",
+  auth_generation: 1,
+  account_status: "active",
+  created_at: FIXED_TIME,
+  updated_at: FIXED_TIME,
+  ...overrides,
+});
+
+const createUserBlockRow = (
+  overrides: Partial<DiscussionUserBlockRow> = {},
+): DiscussionUserBlockRow => ({
+  blocker_user_id: "user-1",
+  blocked_user_id: "blocked-user-1",
+  source_post_id: "source-post-1",
+  created_at: FIXED_TIME,
+  ...overrides,
+});
+
+const createReportRow = (
+  overrides: Partial<DiscussionPostReportRow> = {},
+): DiscussionPostReportRow => ({
+  id: "report-1",
+  post_id: "reported-post-1",
+  reporter_user_id: "user-1",
+  category: "spam",
+  comment: null,
+  status: "open",
+  created_at: FIXED_TIME,
+  updated_at: FIXED_TIME,
   ...overrides,
 });
 
@@ -235,6 +280,132 @@ describe("viewerContentService", () => {
       postReactionsReceived: 10,
       createdPollCount: 2,
       pollVotesReceived: 9,
+    });
+  });
+
+  it("returns blocked users and submitted reports with public names and caption snippets", async () => {
+    const service = createViewerContentService({
+      discussionRepositoryLike: {
+        listPostsByAuthorUserId: async () => [],
+        listReviewActionsForDiscussionPosts: async () => [],
+        getPostEngagementTotalsByAuthorUserId: async () => ({
+          postCount: 0,
+          likeCount: 0,
+          commentCount: 0,
+        }),
+        listUserBlocksByBlockerUserId: async (
+          blockerUserId: string,
+          limit: number,
+        ) => {
+          expect(blockerUserId).toBe("user-1");
+          expect(limit).toBe(50);
+          return [createUserBlockRow()];
+        },
+        listReportsByReporterUserId: async (
+          reporterUserId: string,
+          limit: number,
+        ) => {
+          expect(reporterUserId).toBe("user-1");
+          expect(limit).toBe(50);
+          return [createReportRow()];
+        },
+        listPostsByIds: async (postIds: string[]) => {
+          expect(new Set(postIds)).toEqual(
+            new Set(["source-post-1", "reported-post-1"]),
+          );
+          return [
+            createPostRow({
+              id: "source-post-1",
+              author_user_id: "blocked-user-1",
+              caption: "Source caption body",
+            }),
+            createPostRow({
+              id: "reported-post-1",
+              author_user_id: "reported-author-1",
+              caption: "Reported caption body",
+            }),
+          ];
+        },
+        deleteUserBlock: async () => undefined,
+      },
+      userRepositoryLike: {
+        listByIds: async (userIds: string[]) => {
+          expect(new Set(userIds)).toEqual(
+            new Set(["blocked-user-1", "reported-author-1"]),
+          );
+          return [
+            createUserRow({
+              id: "blocked-user-1",
+              public_nickname: "blocked-nick",
+            }),
+            createUserRow({
+              id: "reported-author-1",
+              public_nickname: "reported-nick",
+            }),
+          ];
+        },
+      },
+    } as any);
+
+    const result = await service.getUserInteractions("user-1");
+
+    expect(result).toEqual({
+      blockedUsers: [
+        {
+          blockedUserId: "blocked-user-1",
+          publicNickname: "blocked-nick",
+          captionSnippet: "Source cap",
+          blockedAt: FIXED_TIME,
+        },
+      ],
+      reportsSubmitted: [
+        {
+          reportId: "report-1",
+          postId: "reported-post-1",
+          authorUserId: "reported-author-1",
+          authorNickname: "reported-nick",
+          captionSnippet: "Reported c",
+          category: "spam",
+          status: "open",
+          submittedAt: FIXED_TIME,
+        },
+      ],
+    });
+  });
+
+  it("unblocks a user by blocked user id", async () => {
+    const deletedBlocks: Array<[string, string]> = [];
+    const service = createViewerContentService({
+      discussionRepositoryLike: {
+        listPostsByAuthorUserId: async () => [],
+        listReviewActionsForDiscussionPosts: async () => [],
+        getPostEngagementTotalsByAuthorUserId: async () => ({
+          postCount: 0,
+          likeCount: 0,
+          commentCount: 0,
+        }),
+        listUserBlocksByBlockerUserId: async () => [],
+        listReportsByReporterUserId: async () => [],
+        listPostsByIds: async () => [],
+        deleteUserBlock: async (
+          blockerUserId: string,
+          blockedUserId: string,
+        ) => {
+          deletedBlocks.push([blockerUserId, blockedUserId]);
+        },
+      },
+      userRepositoryLike: {
+        listByIds: async () => [],
+      },
+    } as any);
+
+    const result = await service.unblockUser("user-1", "blocked-user-1");
+
+    expect(deletedBlocks).toEqual([["user-1", "blocked-user-1"]]);
+    expect(result).toEqual({
+      success: true,
+      blockedUserId: "blocked-user-1",
+      blocked: false,
     });
   });
 });

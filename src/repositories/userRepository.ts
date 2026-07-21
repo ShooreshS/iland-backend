@@ -21,6 +21,25 @@ export const userRepository = {
     return data || null;
   },
 
+  async listByIds(userIds: string[]): Promise<UserRow[]> {
+    if (userIds.length === 0) {
+      return [];
+    }
+
+    const supabase = requireSupabaseAdminClient();
+
+    const { data, error } = await supabase
+      .from("users")
+      .select(USER_COLUMNS)
+      .in("id", userIds);
+
+    if (error) {
+      throw error;
+    }
+
+    return data || [];
+  },
+
   async insert(input: NewUserRow): Promise<UserRow> {
     const supabase = requireSupabaseAdminClient();
 
