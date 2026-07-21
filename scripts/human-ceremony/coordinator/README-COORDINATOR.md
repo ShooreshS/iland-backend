@@ -55,6 +55,10 @@ randomness adaptively.
 
 3. **Relay.** For each contributor:
    - Zip the `contributor/` folder and send it.
+   - Prefer an archive/folder name without spaces for Windows contributors,
+     for example `contributor3.zip` or `contributor3/`. The contributor
+     script uses relative `input/...` and `output/...` paths for `snarkjs`,
+     but no-space archive names avoid shell edge cases around `npx.cmd`.
    - When `output/` comes back, **verify before accepting**:
      ```sh
      zkp/circuits/node_modules/.bin/snarkjs zkey verify \

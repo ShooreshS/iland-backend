@@ -4,6 +4,7 @@ import type {
   DiscussionCommentRow,
   DiscussionPostReportRow,
   DiscussionPostRow,
+  DiscussionUserBlockRow,
   UserRow,
   VerifiedIdentityRow,
 } from "../types/db";
@@ -153,17 +154,29 @@ const createReportRow = (
   ...overrides,
 });
 
+const createBlockRow = (
+  overrides: Partial<DiscussionUserBlockRow> = {},
+): DiscussionUserBlockRow => ({
+  blocker_user_id: "user-1",
+  blocked_user_id: "user-2",
+  source_post_id: "post-2",
+  created_at: FIXED_TIME,
+  ...overrides,
+});
+
 const createRepo = () => {
   const posts: DiscussionPostRow[] = [];
   const comments: DiscussionCommentRow[] = [];
   const bookmarks = new Set<string>();
   const reports: DiscussionPostReportRow[] = [];
+  const blocks: DiscussionUserBlockRow[] = [];
 
   return {
     posts,
     comments,
     bookmarks,
     reports,
+    blocks,
     repo: {
       listPublishedPosts: async () =>
         posts.filter((post) => post.moderation_status === "published"),
@@ -269,6 +282,49 @@ const createRepo = () => {
       deleteBookmark: async (postId: string, userId: string) => {
         bookmarks.delete(`${postId}:${userId}`);
       },
+      getBlockedUserIds: async (blockerUserId: string) =>
+        new Set(
+          blocks
+            .filter((block) => block.blocker_user_id === blockerUserId)
+            .map((block) => block.blocked_user_id),
+        ),
+      getUserBlock: async (blockerUserId: string, blockedUserId: string) =>
+        blocks.find(
+          (block) =>
+            block.blocker_user_id === blockerUserId &&
+            block.blocked_user_id === blockedUserId,
+        ) || null,
+      insertUserBlock: async (input: any) => {
+        if (
+          blocks.some(
+            (block) =>
+              block.blocker_user_id === input.blocker_user_id &&
+              block.blocked_user_id === input.blocked_user_id,
+          )
+        ) {
+          const error = new Error("duplicate block") as Error & { code?: string };
+          error.code = "23505";
+          throw error;
+        }
+
+        const row = createBlockRow({
+          blocker_user_id: input.blocker_user_id,
+          blocked_user_id: input.blocked_user_id,
+          source_post_id: input.source_post_id,
+        });
+        blocks.push(row);
+        return row;
+      },
+      deleteUserBlock: async (blockerUserId: string, blockedUserId: string) => {
+        const index = blocks.findIndex(
+          (block) =>
+            block.blocker_user_id === blockerUserId &&
+            block.blocked_user_id === blockedUserId,
+        );
+        if (index >= 0) {
+          blocks.splice(index, 1);
+        }
+      },
       getReport: async (postId: string, reporterUserId: string) =>
         reports.find(
           (report) =>
@@ -360,6 +416,35 @@ describe("discussionService", () => {
     expect(likedLookupCount).toBe(0);
   });
 
+  it("filters posts from authors blocked by the authenticated viewer", async () => {
+    const { repo, posts, blocks } = createRepo();
+    posts.push(
+      createPostRow({
+        id: "blocked-author-post",
+        author_user_id: "user-2",
+      }),
+    );
+    posts.push(
+      createPostRow({
+        id: "visible-author-post",
+        author_user_id: "user-3",
+      }),
+    );
+    blocks.push(
+      createBlockRow({
+        blocker_user_id: "user-1",
+        blocked_user_id: "user-2",
+      }),
+    );
+    const service = createDiscussionService({
+      discussionRepositoryLike: repo as any,
+    });
+
+    const result = await service.listPosts("user-1");
+
+    expect(result.posts.map((post) => post.id)).toEqual(["visible-author-post"]);
+  });
+
   it("loads a published post detail with viewer bookmark state", async () => {
     const { repo, posts, bookmarks } = createRepo();
     posts.push(createPostRow({ id: "post-1", moderation_status: "published" }));
@@ -374,6 +459,130 @@ describe("discussionService", () => {
       id: "post-1",
       viewerHasBookmarked: true,
     });
+  });
+
+  it("returns blocked detail state instead of post content for blocked authors", async () => {
+    const { repo, posts, blocks } = createRepo();
+    posts.push(
+      createPostRow({
+        id: "post-2",
+        author_user_id: "user-2",
+      }),
+    );
+    blocks.push(
+      createBlockRow({
+        blocker_user_id: "user-1",
+        blocked_user_id: "user-2",
+        source_post_id: "post-2",
+      }),
+    );
+    const service = createDiscussionService({
+      discussionRepositoryLike: repo as any,
+    });
+
+    const result = await service.getPost("post-2", "user-1");
+
+    expect(result).toEqual({
+      post: null,
+      blocked: true,
+    });
+  });
+
+  it("filters comments from authors blocked by the authenticated viewer", async () => {
+    const { repo, posts, comments, blocks } = createRepo();
+    posts.push(
+      createPostRow({
+        id: "post-1",
+        author_user_id: "user-3",
+      }),
+    );
+    comments.push(
+      createCommentRow({
+        id: "blocked-comment",
+        author_user_id: "user-2",
+      }),
+    );
+    comments.push(
+      createCommentRow({
+        id: "visible-comment",
+        author_user_id: "user-4",
+      }),
+    );
+    blocks.push(
+      createBlockRow({
+        blocker_user_id: "user-1",
+        blocked_user_id: "user-2",
+      }),
+    );
+    const service = createDiscussionService({
+      discussionRepositoryLike: repo as any,
+    });
+
+    const result = await service.listComments("post-1", "user-1");
+
+    expect(result.comments.map((comment) => comment.id)).toEqual(["visible-comment"]);
+  });
+
+  it("blocks a post author once without requiring verified identity", async () => {
+    const { repo, posts, blocks } = createRepo();
+    posts.push(
+      createPostRow({
+        id: "post-2",
+        author_user_id: "user-2",
+      }),
+    );
+    const service = createDiscussionService({
+      discussionRepositoryLike: repo as any,
+      userRepositoryLike: { getById: async (userId) => createUser({ id: userId }) },
+      verifiedIdentityRepositoryLike: {
+        getByUserId: async () => {
+          throw new Error("block should not require verified identity lookup");
+        },
+      },
+    });
+
+    const first = await service.blockPostAuthor("post-2", "user-1");
+    const second = await service.blockPostAuthor("post-2", "user-1");
+
+    expect(first).toMatchObject({
+      success: true,
+      postId: "post-2",
+      blockedUserId: "user-2",
+      blocked: true,
+      duplicate: false,
+    });
+    expect(second).toMatchObject({
+      success: true,
+      duplicate: true,
+    });
+    expect(blocks).toHaveLength(1);
+    expect(blocks[0]).toMatchObject({
+      blocker_user_id: "user-1",
+      blocked_user_id: "user-2",
+      source_post_id: "post-2",
+    });
+  });
+
+  it("rejects blocking the current viewer from their own post", async () => {
+    const { repo, posts, blocks } = createRepo();
+    posts.push(
+      createPostRow({
+        id: "post-1",
+        author_user_id: "user-1",
+      }),
+    );
+    const service = createDiscussionService({
+      discussionRepositoryLike: repo as any,
+      userRepositoryLike: { getById: async (userId) => createUser({ id: userId }) },
+    });
+
+    const result = await service.blockPostAuthor("post-1", "user-1");
+
+    expect(result).toMatchObject({
+      success: false,
+      errorCode: "USER_BLOCK_NOT_ALLOWED",
+    });
+    expect(blocks).toHaveLength(0);
   });
 
   it("toggles bookmarks on published discussion posts", async () => {

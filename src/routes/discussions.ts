@@ -73,6 +73,7 @@ const mutationErrorStatusMap: Record<DiscussionMutationErrorCode, number> = {
   VERIFIED_IDENTITY_REQUIRED: 403,
   POST_NOT_FOUND: 404,
   POST_NOT_EDITABLE: 409,
+  USER_BLOCK_NOT_ALLOWED: 409,
   VALIDATION_FAILED: 400,
   MODERATION_FAILED: 502,
 };
@@ -307,7 +308,13 @@ const getDiscussionCommentsRoute: RouteDefinition = {
       return json({ comments: [] });
     }
 
-    return json(await discussionService.listComments(postId, parseLimit(url)));
+    return json(
+      await discussionService.listComments(
+        postId,
+        viewerResult.viewer?.userId ?? null,
+        parseLimit(url),
+      ),
+    );
   },
 };
 
@@ -454,6 +461,50 @@ const unbookmarkDiscussionRoute: RouteDefinition = {
   },
 };
 
+const blockDiscussionAuthorRoute: RouteDefinition = {
+  method: "POST",
+  path: "/discussions/:id/block",
+  handler: async ({ request, params }) => {
+    const viewerResult = await requireViewer(request);
+    if (!viewerResult.ok) {
+      return viewerResult.response;
+    }
+
+    const result = await discussionService.blockPostAuthor(
+      params.id?.trim() || "",
+      viewerResult.viewer.userId,
+    );
+    return json(
+      result,
+      result.success
+        ? 200
+        : mutationErrorStatusMap[result.errorCode || "VALIDATION_FAILED"] || 400,
+    );
+  },
+};
+
+const unblockDiscussionAuthorRoute: RouteDefinition = {
+  method: "DELETE",
+  path: "/discussions/:id/block",
+  handler: async ({ request, params }) => {
+    const viewerResult = await requireViewer(request);
+    if (!viewerResult.ok) {
+      return viewerResult.response;
+    }
+
+    const result = await discussionService.unblockPostAuthor(
+      params.id?.trim() || "",
+      viewerResult.viewer.userId,
+    );
+    return json(
+      result,
+      result.success
+        ? 200
+        : mutationErrorStatusMap[result.errorCode || "VALIDATION_FAILED"] || 400,
+    );
+  },
+};
+
 const reportDiscussionRoute: RouteDefinition = {
   method: "POST",
   path: "/discussions/:id/report",
@@ -506,5 +557,7 @@ export const discussionRoutes: RouteDefinition[] = [
   unlikeDiscussionRoute,
   bookmarkDiscussionRoute,
   unbookmarkDiscussionRoute,
+  blockDiscussionAuthorRoute,
+  unblockDiscussionAuthorRoute,
   reportDiscussionRoute,
 ];

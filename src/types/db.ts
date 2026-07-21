@@ -719,6 +719,19 @@ export type DiscussionPostBookmarkRow = {
   created_at: string;
 };
 
+export type DiscussionUserBlockRow = {
+  blocker_user_id: string;
+  blocked_user_id: string;
+  source_post_id: string | null;
+  created_at: string;
+};
+
+export type NewDiscussionUserBlockRow = {
+  blocker_user_id: string;
+  blocked_user_id: string;
+  source_post_id?: string | null;
+};
+
 export type DiscussionPostReportStatus = "open" | "reviewed";
 
 export type DiscussionPostReportRow = {

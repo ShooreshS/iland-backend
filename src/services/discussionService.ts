@@ -14,6 +14,7 @@ import {
 import type {
   CreateDiscussionCommentRequestDto,
   CreateDiscussionCommentResultDto,
+  DiscussionBlockResultDto,
   CreateDiscussionPostReportRequestDto,
   CreateDiscussionPostRequestDto,
   CreateDiscussionPostResultDto,
@@ -405,6 +406,34 @@ export const createDiscussionService = (
     return { ok: true, user, verifiedIdentity };
   };
 
+  const requireExistingViewer = async (
+    viewerUserId: string,
+  ): Promise<
+    | { ok: true; user: UserRow }
+    | { ok: false; errorCode: DiscussionMutationErrorCode; message: string }
+  > => {
+    const user = await userRepo.getById(viewerUserId);
+    if (!user) {
+      return {
+        ok: false,
+        errorCode: "USER_NOT_FOUND",
+        message: "The current user could not be resolved.",
+      };
+    }
+
+    return { ok: true, user };
+  };
+
+  const getViewerBlockedUserIds = async (
+    viewerUserId: string | null,
+  ): Promise<Set<string>> =>
+    viewerUserId ? repo.getBlockedUserIds(viewerUserId) : new Set<string>();
+
+  const isBlockedAuthor = (
+    row: { author_user_id: string },
+    blockedUserIds: Set<string>,
+  ): boolean => blockedUserIds.has(row.author_user_id);
+
   const moderatePostInput = async (params: {
     postId: string;
     input: CreateDiscussionPostRequestDto;
@@ -483,10 +512,15 @@ export const createDiscussionService = (
       viewerUserId: string | null,
       limit?: number | null,
     ): Promise<DiscussionPostListDto> {
+      const normalizedLimit = normalizeLimit(limit, DEFAULT_POST_LIMIT, MAX_POST_LIMIT);
       const rows = await repo.listPublishedPosts(
-        normalizeLimit(limit, DEFAULT_POST_LIMIT, MAX_POST_LIMIT),
+        viewerUserId ? MAX_POST_LIMIT : normalizedLimit,
       );
-      const postIds = rows.map((row) => row.id);
+      const blockedUserIds = await getViewerBlockedUserIds(viewerUserId);
+      const visibleRows = rows
+        .filter((row) => !isBlockedAuthor(row, blockedUserIds))
+        .slice(0, normalizedLimit);
+      const postIds = visibleRows.map((row) => row.id);
       const [likedPostIds, bookmarkedPostIds] = viewerUserId
         ? await Promise.all([
             repo.getLikedPostIds(viewerUserId, postIds),
@@ -495,7 +529,7 @@ export const createDiscussionService = (
         : [new Set<string>(), new Set<string>()];
 
       const posts = await Promise.all(
-        rows.map(async (row) =>
+        visibleRows.map(async (row) =>
           mapPost(
             row,
             likedPostIds,
@@ -515,6 +549,14 @@ export const createDiscussionService = (
       const post = await repo.getPostById(postId);
       if (!post || post.moderation_status !== "published") {
         return null;
+      }
+
+      const blockedUserIds = await getViewerBlockedUserIds(viewerUserId);
+      if (isBlockedAuthor(post, blockedUserIds)) {
+        return {
+          post: null,
+          blocked: true,
+        };
       }
 
       const [likedPostIds, bookmarkedPostIds] = viewerUserId
@@ -725,10 +767,16 @@ export const createDiscussionService = (
 
     async listComments(
       postId: string,
+      viewerUserId: string | null = null,
       limit?: number | null,
     ): Promise<DiscussionCommentListDto> {
       const post = await repo.getPostById(postId);
       if (!post || post.moderation_status !== "published") {
+        return { comments: [] };
+      }
+
+      const blockedUserIds = await getViewerBlockedUserIds(viewerUserId);
+      if (isBlockedAuthor(post, blockedUserIds)) {
         return { comments: [] };
       }
 
@@ -737,7 +785,11 @@ export const createDiscussionService = (
         normalizeLimit(limit, DEFAULT_COMMENT_LIMIT, MAX_COMMENT_LIMIT),
       );
 
-      return { comments: comments.map(mapComment) };
+      return {
+        comments: comments
+          .filter((comment) => !isBlockedAuthor(comment, blockedUserIds))
+          .map(mapComment),
+      };
     },
 
     async createComment(
@@ -755,6 +807,14 @@ export const createDiscussionService = (
 
       const post = await repo.getPostById(postId);
       if (!post || post.moderation_status !== "published") {
+        return createFailure<CreateDiscussionCommentResultDto>(
+          "POST_NOT_FOUND",
+          "The discussion post could not be found.",
+        );
+      }
+
+      const blockedUserIds = await getViewerBlockedUserIds(creator.user.id);
+      if (isBlockedAuthor(post, blockedUserIds)) {
         return createFailure<CreateDiscussionCommentResultDto>(
           "POST_NOT_FOUND",
           "The discussion post could not be found.",
@@ -888,6 +948,113 @@ export const createDiscussionService = (
         success: true,
         postId,
         bookmarked,
+      };
+    },
+
+    async blockPostAuthor(
+      postId: string,
+      viewerUserId: string,
+    ): Promise<DiscussionBlockResultDto> {
+      const viewer = await requireExistingViewer(viewerUserId);
+      if (!viewer.ok) {
+        return createFailure<DiscussionBlockResultDto>(
+          viewer.errorCode,
+          viewer.message,
+        );
+      }
+
+      const post = await repo.getPostById(postId);
+      if (!post || post.moderation_status !== "published") {
+        return createFailure<DiscussionBlockResultDto>(
+          "POST_NOT_FOUND",
+          "The discussion post could not be found.",
+        );
+      }
+
+      if (post.author_user_id === viewer.user.id) {
+        return createFailure<DiscussionBlockResultDto>(
+          "USER_BLOCK_NOT_ALLOWED",
+          "You cannot block yourself.",
+        );
+      }
+
+      const existing = await repo.getUserBlock(viewer.user.id, post.author_user_id);
+      if (existing) {
+        return {
+          success: true,
+          postId: post.id,
+          blockedUserId: post.author_user_id,
+          blocked: true,
+          duplicate: true,
+          message: "You have already blocked this author.",
+        };
+      }
+
+      try {
+        await repo.insertUserBlock({
+          blocker_user_id: viewer.user.id,
+          blocked_user_id: post.author_user_id,
+          source_post_id: post.id,
+        });
+      } catch (error) {
+        if ((error as { code?: string })?.code !== "23505") {
+          throw error;
+        }
+
+        return {
+          success: true,
+          postId: post.id,
+          blockedUserId: post.author_user_id,
+          blocked: true,
+          duplicate: true,
+          message: "You have already blocked this author.",
+        };
+      }
+
+      return {
+        success: true,
+        postId: post.id,
+        blockedUserId: post.author_user_id,
+        blocked: true,
+        duplicate: false,
+        message: "Author blocked.",
+      };
+    },
+
+    async unblockPostAuthor(
+      postId: string,
+      viewerUserId: string,
+    ): Promise<DiscussionBlockResultDto> {
+      const viewer = await requireExistingViewer(viewerUserId);
+      if (!viewer.ok) {
+        return createFailure<DiscussionBlockResultDto>(
+          viewer.errorCode,
+          viewer.message,
+        );
+      }
+
+      const post = await repo.getPostById(postId);
+      if (!post) {
+        return createFailure<DiscussionBlockResultDto>(
+          "POST_NOT_FOUND",
+          "The discussion post could not be found.",
+        );
+      }
+
+      if (post.author_user_id === viewer.user.id) {
+        return createFailure<DiscussionBlockResultDto>(
+          "USER_BLOCK_NOT_ALLOWED",
+          "You cannot unblock yourself.",
+        );
+      }
+
+      await repo.deleteUserBlock(viewer.user.id, post.author_user_id);
+
+      return {
+        success: true,
+        postId: post.id,
+        blockedUserId: post.author_user_id,
+        blocked: false,
       };
     },
 

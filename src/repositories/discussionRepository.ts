@@ -5,10 +5,12 @@ import type {
   DiscussionPostLikeRow,
   DiscussionPostReportRow,
   DiscussionPostRow,
+  DiscussionUserBlockRow,
   ModerationReviewActionRow,
   NewDiscussionCommentRow,
   NewDiscussionPostReportRow,
   NewDiscussionPostRow,
+  NewDiscussionUserBlockRow,
 } from "../types/db";
 
 const POST_COLUMNS =
@@ -20,6 +22,8 @@ const REVIEW_ACTION_COLUMNS =
   "id,content_type,content_id,reviewer_verified_identity_id,reviewer_user_id,action,previous_status,new_status,internal_note,user_message,created_at";
 const REPORT_COLUMNS =
   "id,post_id,reporter_user_id,category,comment,status,created_at,updated_at";
+const BLOCK_COLUMNS =
+  "blocker_user_id,blocked_user_id,source_post_id,created_at";
 
 const buildPostPayload = (input: NewDiscussionPostRow) => ({
   ...(input.id ? { id: input.id } : null),
@@ -369,6 +373,76 @@ export const discussionRepository = {
       .delete()
       .eq("post_id", postId)
       .eq("user_id", userId);
+
+    if (error) {
+      throw error;
+    }
+  },
+
+  async getBlockedUserIds(blockerUserId: string): Promise<Set<string>> {
+    const supabase = requireSupabaseAdminClient();
+    const { data, error } = await supabase
+      .from("discussion_user_blocks")
+      .select("blocked_user_id")
+      .eq("blocker_user_id", blockerUserId);
+
+    if (error) {
+      throw error;
+    }
+
+    return new Set((data || []).map((row) => row.blocked_user_id as string));
+  },
+
+  async getUserBlock(
+    blockerUserId: string,
+    blockedUserId: string,
+  ): Promise<DiscussionUserBlockRow | null> {
+    const supabase = requireSupabaseAdminClient();
+    const { data, error } = await supabase
+      .from("discussion_user_blocks")
+      .select(BLOCK_COLUMNS)
+      .eq("blocker_user_id", blockerUserId)
+      .eq("blocked_user_id", blockedUserId)
+      .maybeSingle<DiscussionUserBlockRow>();
+
+    if (error) {
+      throw error;
+    }
+
+    return data || null;
+  },
+
+  async insertUserBlock(
+    input: NewDiscussionUserBlockRow,
+  ): Promise<DiscussionUserBlockRow> {
+    const supabase = requireSupabaseAdminClient();
+    const { data, error } = await supabase
+      .from("discussion_user_blocks")
+      .insert({
+        blocker_user_id: input.blocker_user_id,
+        blocked_user_id: input.blocked_user_id,
+        source_post_id: input.source_post_id ?? null,
+      })
+      .select(BLOCK_COLUMNS)
+      .single<DiscussionUserBlockRow>();
+
+    if (error) {
+      throw error;
+    }
+
+    return data;
+  },
+
+  async deleteUserBlock(
+    blockerUserId: string,
+    blockedUserId: string,
+  ): Promise<void> {
+    const supabase = requireSupabaseAdminClient();
+    const { error } = await supabase
+      .from("discussion_user_blocks")
+      .delete()
+      .eq("blocker_user_id", blockerUserId)
+      .eq("blocked_user_id", blockedUserId);
 
     if (error) {
       throw error;

@@ -261,6 +261,7 @@ export type DiscussionMutationErrorCode =
   | "VERIFIED_IDENTITY_REQUIRED"
   | "POST_NOT_FOUND"
   | "POST_NOT_EDITABLE"
+  | "USER_BLOCK_NOT_ALLOWED"
   | "VALIDATION_FAILED"
   | "MODERATION_FAILED";
 
@@ -269,7 +270,8 @@ export type DiscussionPostListDto = {
 };
 
 export type DiscussionPostDetailDto = {
-  post: DiscussionPostDto;
+  post: DiscussionPostDto | null;
+  blocked?: boolean;
 };
 
 export type ViewerDiscussionPostListDto = {
@@ -327,6 +329,16 @@ export type DiscussionBookmarkResultDto = {
   success: boolean;
   postId?: string;
   bookmarked?: boolean;
+  errorCode?: DiscussionMutationErrorCode;
+  message?: string;
+};
+
+export type DiscussionBlockResultDto = {
+  success: boolean;
+  postId?: string;
+  blockedUserId?: string;
+  blocked?: boolean;
+  duplicate?: boolean;
   errorCode?: DiscussionMutationErrorCode;
   message?: string;
 };
