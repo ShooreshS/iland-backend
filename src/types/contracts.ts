@@ -252,6 +252,8 @@ export type DiscussionCommentDto = {
   moderationFlagged: boolean | null;
   moderatedAt: string | null;
   moderationPolicyVersion: string | null;
+  likeCount: number;
+  viewerHasLiked: boolean;
   createdAt: string;
   updatedAt: string;
 };
@@ -261,6 +263,7 @@ export type DiscussionMutationErrorCode =
   | "VERIFIED_IDENTITY_REQUIRED"
   | "POST_NOT_FOUND"
   | "POST_NOT_EDITABLE"
+  | "COMMENT_NOT_FOUND"
   | "USER_BLOCK_NOT_ALLOWED"
   | "VALIDATION_FAILED"
   | "MODERATION_FAILED";
@@ -348,6 +351,15 @@ export type DiscussionLikeResultDto = {
   message?: string;
 };
 
+export type DiscussionCommentLikeResultDto = {
+  success: boolean;
+  commentId?: string;
+  liked?: boolean;
+  likeCount?: number;
+  errorCode?: DiscussionMutationErrorCode;
+  message?: string;
+};
+
 export type DiscussionBookmarkResultDto = {
   success: boolean;
   postId?: string;
@@ -382,6 +394,7 @@ export type CreateDiscussionPostReportRequestDto = {
 export type DiscussionPostReportDto = {
   id: string;
   postId: string;
+  commentId: string | null;
   reporterUserId: string;
   category: DiscussionPostReportCategory;
   comment: string | null;

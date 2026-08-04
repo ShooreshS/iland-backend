@@ -117,6 +117,7 @@ const createReportRow = (
 ): DiscussionPostReportRow => ({
   id: "report-1",
   post_id: "reported-post-1",
+  comment_id: null,
   reporter_user_id: "user-1",
   category: "spam",
   comment: null,

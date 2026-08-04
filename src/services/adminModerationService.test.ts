@@ -403,6 +403,7 @@ describe("adminModerationService", () => {
           {
             id: "report-1",
             post_id: "post-1",
+            comment_id: null,
             reporter_user_id: "reporter-1",
             category: "misinformation",
             comment: "This claim needs a source.",

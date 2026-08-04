@@ -29,7 +29,7 @@ const COMMENT_COLUMNS =
 const REPORT_QUEUE_COLUMNS =
   "post_id,report_count,first_reported_at,latest_reported_at";
 const REPORT_COLUMNS =
-  "id,post_id,reporter_user_id,category,comment,status,created_at,updated_at";
+  "id,post_id,comment_id,reporter_user_id,category,comment,status,created_at,updated_at";
 
 const buildReviewUpdate = (
   status: PollModerationStatus,

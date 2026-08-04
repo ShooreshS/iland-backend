@@ -72,6 +72,7 @@ const mutationErrorStatusMap: Record<DiscussionMutationErrorCode, number> = {
   USER_NOT_FOUND: 401,
   VERIFIED_IDENTITY_REQUIRED: 403,
   POST_NOT_FOUND: 404,
+  COMMENT_NOT_FOUND: 404,
   POST_NOT_EDITABLE: 409,
   USER_BLOCK_NOT_ALLOWED: 409,
   VALIDATION_FAILED: 400,
@@ -371,6 +372,110 @@ const createDiscussionCommentRoute: RouteDefinition = {
   },
 };
 
+const likeDiscussionCommentRoute: RouteDefinition = {
+  method: "POST",
+  path: "/discussions/:id/comments/:commentId/like",
+  handler: async ({ request, params }) => {
+    const viewerResult = await requireViewer(request);
+    if (!viewerResult.ok) {
+      return viewerResult.response;
+    }
+    const result = await discussionService.likeComment(
+      params.id?.trim() || "",
+      params.commentId?.trim() || "",
+      viewerResult.viewer.userId,
+    );
+    return json(
+      result,
+      result.success
+        ? 200
+        : mutationErrorStatusMap[result.errorCode || "VALIDATION_FAILED"] || 400,
+    );
+  },
+};
+
+const unlikeDiscussionCommentRoute: RouteDefinition = {
+  method: "DELETE",
+  path: "/discussions/:id/comments/:commentId/like",
+  handler: async ({ request, params }) => {
+    const viewerResult = await requireViewer(request);
+    if (!viewerResult.ok) {
+      return viewerResult.response;
+    }
+    const result = await discussionService.unlikeComment(
+      params.id?.trim() || "",
+      params.commentId?.trim() || "",
+      viewerResult.viewer.userId,
+    );
+    return json(
+      result,
+      result.success
+        ? 200
+        : mutationErrorStatusMap[result.errorCode || "VALIDATION_FAILED"] || 400,
+    );
+  },
+};
+
+const reportDiscussionCommentRoute: RouteDefinition = {
+  method: "POST",
+  path: "/discussions/:id/comments/:commentId/report",
+  handler: async ({ request, params }) => {
+    const viewerResult = await requireViewer(request);
+    if (!viewerResult.ok) {
+      return viewerResult.response;
+    }
+    const bodyResult = await parseJsonBody(request);
+    if (!bodyResult.ok) {
+      return bodyResult.response;
+    }
+    const parsed = createDiscussionPostReportSchema.safeParse(bodyResult.body);
+    if (!parsed.success) {
+      return json(
+        {
+          success: false,
+          errorCode: "VALIDATION_FAILED",
+          message: "Comment report request body is invalid.",
+        },
+        400,
+      );
+    }
+    const result = await discussionService.reportComment(
+      params.id?.trim() || "",
+      params.commentId?.trim() || "",
+      parsed.data as CreateDiscussionPostReportRequestDto,
+      viewerResult.viewer.userId,
+    );
+    return json(
+      result,
+      result.success
+        ? 201
+        : mutationErrorStatusMap[result.errorCode || "VALIDATION_FAILED"] || 400,
+    );
+  },
+};
+
+const blockDiscussionCommentAuthorRoute: RouteDefinition = {
+  method: "POST",
+  path: "/discussions/:id/comments/:commentId/block",
+  handler: async ({ request, params }) => {
+    const viewerResult = await requireViewer(request);
+    if (!viewerResult.ok) {
+      return viewerResult.response;
+    }
+    const result = await discussionService.blockCommentAuthor(
+      params.id?.trim() || "",
+      params.commentId?.trim() || "",
+      viewerResult.viewer.userId,
+    );
+    return json(
+      result,
+      result.success
+        ? 200
+        : mutationErrorStatusMap[result.errorCode || "VALIDATION_FAILED"] || 400,
+    );
+  },
+};
+
 const likeDiscussionRoute: RouteDefinition = {
   method: "POST",
   path: "/discussions/:id/like",
@@ -553,6 +658,10 @@ export const discussionRoutes: RouteDefinition[] = [
   deleteDiscussionRoute,
   getDiscussionCommentsRoute,
   createDiscussionCommentRoute,
+  likeDiscussionCommentRoute,
+  unlikeDiscussionCommentRoute,
+  reportDiscussionCommentRoute,
+  blockDiscussionCommentAuthorRoute,
   likeDiscussionRoute,
   unlikeDiscussionRoute,
   bookmarkDiscussionRoute,

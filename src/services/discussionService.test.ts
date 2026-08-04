@@ -135,6 +135,7 @@ const createCommentRow = (
   human_review_status: null,
   human_review_decision: null,
   human_reviewed_at: null,
+  like_count: 0,
   created_at: FIXED_TIME,
   updated_at: FIXED_TIME,
   ...overrides,
@@ -145,6 +146,7 @@ const createReportRow = (
 ): DiscussionPostReportRow => ({
   id: "report-1",
   post_id: "post-1",
+  comment_id: null,
   reporter_user_id: "user-1",
   category: "other",
   comment: null,
@@ -167,6 +169,7 @@ const createBlockRow = (
 const createRepo = () => {
   const posts: DiscussionPostRow[] = [];
   const comments: DiscussionCommentRow[] = [];
+  const commentLikes = new Set<string>();
   const bookmarks = new Set<string>();
   const reports: DiscussionPostReportRow[] = [];
   const blocks: DiscussionUserBlockRow[] = [];
@@ -174,6 +177,7 @@ const createRepo = () => {
   return {
     posts,
     comments,
+    commentLikes,
     bookmarks,
     reports,
     blocks,
@@ -325,18 +329,24 @@ const createRepo = () => {
           blocks.splice(index, 1);
         }
       },
-      getReport: async (postId: string, reporterUserId: string) =>
+      getReport: async (
+        postId: string,
+        reporterUserId: string,
+        commentId: string | null = null,
+      ) =>
         reports.find(
           (report) =>
             report.post_id === postId &&
-            report.reporter_user_id === reporterUserId,
+            report.reporter_user_id === reporterUserId &&
+            report.comment_id === commentId,
         ) || null,
       insertReport: async (input: any) => {
         if (
           reports.some(
             (report) =>
               report.post_id === input.post_id &&
-              report.reporter_user_id === input.reporter_user_id,
+              report.reporter_user_id === input.reporter_user_id &&
+              report.comment_id === (input.comment_id ?? null),
           )
         ) {
           const error = new Error("duplicate report") as Error & { code?: string };
@@ -347,6 +357,7 @@ const createRepo = () => {
         const row = createReportRow({
           id: input.id,
           post_id: input.post_id,
+          comment_id: input.comment_id ?? null,
           reporter_user_id: input.reporter_user_id,
           category: input.category,
           comment: input.comment,
@@ -361,6 +372,37 @@ const createRepo = () => {
             comment.post_id === postId &&
             comment.moderation_status === "published",
         ),
+      getCommentById: async (commentId: string) =>
+        comments.find((comment) => comment.id === commentId) || null,
+      getLikedCommentIds: async (userId: string, commentIds: string[]) =>
+        new Set(
+          commentIds.filter((commentId) =>
+            commentLikes.has(`${commentId}:${userId}`),
+          ),
+        ),
+      getCommentLike: async (commentId: string, userId: string) =>
+        commentLikes.has(`${commentId}:${userId}`)
+          ? { comment_id: commentId, user_id: userId, created_at: FIXED_TIME }
+          : null,
+      insertCommentLike: async (commentId: string, userId: string) => {
+        const key = `${commentId}:${userId}`;
+        if (!commentLikes.has(key)) {
+          commentLikes.add(key);
+          const comment = comments.find((candidate) => candidate.id === commentId);
+          if (comment) {
+            comment.like_count += 1;
+          }
+        }
+      },
+      deleteCommentLike: async (commentId: string, userId: string) => {
+        const key = `${commentId}:${userId}`;
+        if (commentLikes.delete(key)) {
+          const comment = comments.find((candidate) => candidate.id === commentId);
+          if (comment) {
+            comment.like_count = Math.max(0, comment.like_count - 1);
+          }
+        }
+      },
       insertComment: async (input: any) => {
         const row = createCommentRow({
           id: input.id,
@@ -523,8 +565,117 @@ describe("discussionService", () => {
     expect(result.comments.map((comment) => comment.id)).toEqual(["visible-comment"]);
   });
 
+  it("returns and toggles the authenticated viewer's comment like state", async () => {
+    const { repo, posts, comments, commentLikes } = createRepo();
+    posts.push(createPostRow({ id: "post-1" }));
+    comments.push(
+      createCommentRow({
+        id: "comment-1",
+        post_id: "post-1",
+        author_user_id: "user-2",
+      }),
+    );
+    const service = createDiscussionService({
+      discussionRepositoryLike: repo as any,
+      userRepositoryLike: { getById: async (userId) => createUser({ id: userId }) },
+      verifiedIdentityRepositoryLike: { getByUserId: async () => verifiedIdentity },
+    });
+
+    const liked = await service.likeComment("post-1", "comment-1", "user-1");
+    const listed = await service.listComments("post-1", "user-1");
+    const unliked = await service.unlikeComment("post-1", "comment-1", "user-1");
+
+    expect(liked).toMatchObject({
+      success: true,
+      commentId: "comment-1",
+      liked: true,
+      likeCount: 1,
+    });
+    expect(listed.comments[0]).toMatchObject({
+      id: "comment-1",
+      viewerHasLiked: true,
+      likeCount: 1,
+    });
+    expect(unliked).toMatchObject({
+      success: true,
+      liked: false,
+      likeCount: 0,
+    });
+    expect(commentLikes.size).toBe(0);
+  });
+
+  it("reports the exact comment through the moderation queue", async () => {
+    const { repo, posts, comments, reports } = createRepo();
+    posts.push(createPostRow({ id: "post-1" }));
+    comments.push(
+      createCommentRow({
+        id: "comment-1",
+        post_id: "post-1",
+        author_user_id: "user-2",
+        author_public_nickname: "reported-author",
+        body: "Reported comment body",
+      }),
+    );
+    const service = createDiscussionService({
+      discussionRepositoryLike: repo as any,
+      userRepositoryLike: { getById: async (userId) => createUser({ id: userId }) },
+      verifiedIdentityRepositoryLike: { getByUserId: async () => verifiedIdentity },
+    });
+
+    const result = await service.reportComment(
+      "post-1",
+      "comment-1",
+      { category: "harassment", comment: "Please review this reply." },
+      "user-1",
+    );
+
+    expect(result).toMatchObject({ success: true, duplicate: false, postId: "post-1" });
+    expect(reports).toHaveLength(1);
+    expect(reports[0]).toMatchObject({
+      post_id: "post-1",
+      comment_id: "comment-1",
+      reporter_user_id: "user-1",
+      category: "harassment",
+    });
+    expect(reports[0]?.comment).toContain("Comment ID: comment-1");
+    expect(reports[0]?.comment).toContain("Reported comment body");
+  });
+
+  it("reports a comment and blocks its author in one action", async () => {
+    const { repo, posts, comments, blocks, reports } = createRepo();
+    posts.push(createPostRow({ id: "post-1", author_user_id: "user-3" }));
+    comments.push(
+      createCommentRow({
+        id: "comment-1",
+        post_id: "post-1",
+        author_user_id: "user-2",
+      }),
+    );
+    const service = createDiscussionService({
+      discussionRepositoryLike: repo as any,
+      userRepositoryLike: { getById: async (userId) => createUser({ id: userId }) },
+    });
+
+    const result = await service.blockCommentAuthor(
+      "post-1",
+      "comment-1",
+      "user-1",
+    );
+
+    expect(result).toMatchObject({
+      success: true,
+      blockedUserId: "user-2",
+      blocked: true,
+      duplicate: false,
+    });
+    expect(blocks).toHaveLength(1);
+    expect(reports).toHaveLength(1);
+    expect(reports[0]?.comment_id).toBe("comment-1");
+    expect(reports[0]?.comment).toContain("Comment ID: comment-1");
+  });
+
   it("blocks a post author once without requiring verified identity", async () => {
-    const { repo, posts, blocks } = createRepo();
+    const { repo, posts, blocks, reports } = createRepo();
     posts.push(
       createPostRow({
         id: "post-2",
@@ -560,6 +711,13 @@ describe("discussionService", () => {
       blocker_user_id: "user-1",
       blocked_user_id: "user-2",
       source_post_id: "post-2",
+    });
+    expect(reports).toHaveLength(1);
+    expect(reports[0]).toMatchObject({
+      post_id: "post-2",
+      reporter_user_id: "user-1",
+      category: "other",
+      status: "open",
     });
   });
 

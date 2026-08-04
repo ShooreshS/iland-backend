@@ -1,5 +1,6 @@
 import { requireSupabaseAdminClient } from "../db/supabaseClient";
 import type {
+  DiscussionCommentLikeRow,
   DiscussionCommentRow,
   DiscussionPostBookmarkRow,
   DiscussionPostLikeRow,
@@ -17,11 +18,11 @@ const POST_COLUMNS =
   "id,author_user_id,author_public_nickname,post_type,caption,image_url,image_storage_bucket,image_storage_path,image_mime_type,image_size_bytes,image_alt_text,moderation_status,moderation_model,moderation_flagged,moderation_categories,moderation_category_scores,moderation_applied_input_types,moderation_raw,moderated_at,moderation_error,moderation_policy_version,gate2_status,gate2_model,gate2_result,human_review_status,human_review_decision,human_reviewed_at,like_count,comment_count,feed_score,deliberation_id,created_at,updated_at";
 
 const COMMENT_COLUMNS =
-  "id,post_id,author_user_id,author_public_nickname,body,moderation_status,moderation_model,moderation_flagged,moderation_categories,moderation_category_scores,moderation_applied_input_types,moderation_raw,moderated_at,moderation_error,moderation_policy_version,human_review_status,human_review_decision,human_reviewed_at,created_at,updated_at";
+  "id,post_id,author_user_id,author_public_nickname,body,moderation_status,moderation_model,moderation_flagged,moderation_categories,moderation_category_scores,moderation_applied_input_types,moderation_raw,moderated_at,moderation_error,moderation_policy_version,human_review_status,human_review_decision,human_reviewed_at,like_count,created_at,updated_at";
 const REVIEW_ACTION_COLUMNS =
   "id,content_type,content_id,reviewer_verified_identity_id,reviewer_user_id,action,previous_status,new_status,internal_note,user_message,created_at";
 const REPORT_COLUMNS =
-  "id,post_id,reporter_user_id,category,comment,status,created_at,updated_at";
+  "id,post_id,comment_id,reporter_user_id,category,comment,status,created_at,updated_at";
 const BLOCK_COLUMNS =
   "blocker_user_id,blocked_user_id,source_post_id,created_at";
 
@@ -203,6 +204,21 @@ export const discussionRepository = {
     return data || null;
   },
 
+  async getCommentById(commentId: string): Promise<DiscussionCommentRow | null> {
+    const supabase = requireSupabaseAdminClient();
+    const { data, error } = await supabase
+      .from("discussion_comments")
+      .select(COMMENT_COLUMNS)
+      .eq("id", commentId)
+      .maybeSingle<DiscussionCommentRow>();
+
+    if (error) {
+      throw error;
+    }
+
+    return data || null;
+  },
+
   async insertPost(input: NewDiscussionPostRow): Promise<DiscussionPostRow> {
     const supabase = requireSupabaseAdminClient();
     const { data, error } = await supabase
@@ -354,6 +370,71 @@ export const discussionRepository = {
     }
   },
 
+  async getLikedCommentIds(
+    userId: string,
+    commentIds: string[],
+  ): Promise<Set<string>> {
+    if (commentIds.length === 0) {
+      return new Set();
+    }
+
+    const supabase = requireSupabaseAdminClient();
+    const { data, error } = await supabase
+      .from("discussion_comment_likes")
+      .select("comment_id")
+      .eq("user_id", userId)
+      .in("comment_id", commentIds);
+
+    if (error) {
+      throw error;
+    }
+
+    return new Set((data || []).map((row) => row.comment_id as string));
+  },
+
+  async getCommentLike(
+    commentId: string,
+    userId: string,
+  ): Promise<DiscussionCommentLikeRow | null> {
+    const supabase = requireSupabaseAdminClient();
+    const { data, error } = await supabase
+      .from("discussion_comment_likes")
+      .select("comment_id,user_id,created_at")
+      .eq("comment_id", commentId)
+      .eq("user_id", userId)
+      .maybeSingle<DiscussionCommentLikeRow>();
+
+    if (error) {
+      throw error;
+    }
+
+    return data || null;
+  },
+
+  async insertCommentLike(commentId: string, userId: string): Promise<void> {
+    const supabase = requireSupabaseAdminClient();
+    const { error } = await supabase
+      .from("discussion_comment_likes")
+      .insert({ comment_id: commentId, user_id: userId });
+
+    if (error && error.code !== "23505") {
+      throw error;
+    }
+  },
+
+  async deleteCommentLike(commentId: string, userId: string): Promise<void> {
+    const supabase = requireSupabaseAdminClient();
+    const { error } = await supabase
+      .from("discussion_comment_likes")
+      .delete()
+      .eq("comment_id", commentId)
+      .eq("user_id", userId);
+
+    if (error) {
+      throw error;
+    }
+  },
+
   async getBookmark(
     postId: string,
     userId: string,
@@ -495,14 +576,16 @@ export const discussionRepository = {
   async getReport(
     postId: string,
     reporterUserId: string,
+    commentId: string | null = null,
   ): Promise<DiscussionPostReportRow | null> {
     const supabase = requireSupabaseAdminClient();
-    const { data, error } = await supabase
+    let query = supabase
       .from("discussion_post_reports")
       .select(REPORT_COLUMNS)
       .eq("post_id", postId)
-      .eq("reporter_user_id", reporterUserId)
-      .maybeSingle<DiscussionPostReportRow>();
+      .eq("reporter_user_id", reporterUserId);
+    query = commentId ? query.eq("comment_id", commentId) : query.is("comment_id", null);
+    const { data, error } = await query.maybeSingle<DiscussionPostReportRow>();
 
     if (error) {
       throw error;
@@ -520,6 +603,7 @@ export const discussionRepository = {
       .insert({
         ...(input.id ? { id: input.id } : null),
         post_id: input.post_id,
+        comment_id: input.comment_id ?? null,
         reporter_user_id: input.reporter_user_id,
         category: input.category,
         comment: input.comment ?? null,

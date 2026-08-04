@@ -682,8 +682,15 @@ export type DiscussionCommentRow = {
   human_review_status: string | null;
   human_review_decision: string | null;
   human_reviewed_at: string | null;
+  like_count: number;
   created_at: string;
   updated_at: string;
+};
+
+export type DiscussionCommentLikeRow = {
+  comment_id: string;
+  user_id: string;
+  created_at: string;
 };
 
 export type NewDiscussionCommentRow = {
@@ -737,6 +744,7 @@ export type DiscussionPostReportStatus = "open" | "reviewed";
 export type DiscussionPostReportRow = {
   id: string;
   post_id: string;
+  comment_id: string | null;
   reporter_user_id: string;
   category: DiscussionPostReportCategory;
   comment: string | null;
@@ -748,6 +756,7 @@ export type DiscussionPostReportRow = {
 export type NewDiscussionPostReportRow = {
   id?: string;
   post_id: string;
+  comment_id?: string | null;
   reporter_user_id: string;
   category: DiscussionPostReportCategory;
   comment?: string | null;

@@ -60,6 +60,7 @@ export type ReviewQueueItem = {
 export type ReviewPostReport = {
   id: string;
   postId: string;
+  commentId: string | null;
   reporterUserId: string;
   category: string;
   comment: string | null;
@@ -243,6 +244,7 @@ const mapCommentQueueItem = (row: DiscussionCommentRow): ReviewQueueItem => ({
 const mapPostReport = (row: DiscussionPostReportRow): ReviewPostReport => ({
   id: row.id,
   postId: row.post_id,
+  commentId: row.comment_id,
   reporterUserId: row.reporter_user_id,
   category: row.category,
   comment: row.comment,

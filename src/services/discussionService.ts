@@ -14,6 +14,7 @@ import {
 import type {
   CreateDiscussionCommentRequestDto,
   CreateDiscussionCommentResultDto,
+  DiscussionCommentLikeResultDto,
   DiscussionBlockResultDto,
   CreateDiscussionPostReportRequestDto,
   CreateDiscussionPostRequestDto,
@@ -297,7 +298,10 @@ const mapPost = (
   updatedAt: row.updated_at,
 });
 
-const mapComment = (row: DiscussionCommentRow): DiscussionCommentDto => ({
+const mapComment = (
+  row: DiscussionCommentRow,
+  viewerLikedCommentIds = new Set<string>(),
+): DiscussionCommentDto => ({
   id: row.id,
   postId: row.post_id,
   authorUserId: row.author_user_id,
@@ -308,6 +312,8 @@ const mapComment = (row: DiscussionCommentRow): DiscussionCommentDto => ({
   moderationFlagged: row.moderation_flagged,
   moderatedAt: row.moderated_at,
   moderationPolicyVersion: row.moderation_policy_version,
+  likeCount: Math.max(0, row.like_count || 0),
+  viewerHasLiked: viewerLikedCommentIds.has(row.id),
   createdAt: row.created_at,
   updatedAt: row.updated_at,
 });
@@ -315,6 +321,7 @@ const mapComment = (row: DiscussionCommentRow): DiscussionCommentDto => ({
 const mapReport = (row: DiscussionPostReportRow): DiscussionPostReportDto => ({
   id: row.id,
   postId: row.post_id,
+  commentId: row.comment_id,
   reporterUserId: row.reporter_user_id,
   category: row.category,
   comment: row.comment,
@@ -433,6 +440,62 @@ export const createDiscussionService = (
     row: { author_user_id: string },
     blockedUserIds: Set<string>,
   ): boolean => blockedUserIds.has(row.author_user_id);
+
+  const buildCommentModerationNote = (
+    comment: DiscussionCommentRow,
+    userNote?: string | null,
+    source = "Comment reported by user",
+  ): string => {
+    const parts = [
+      `${source}. Comment ID: ${comment.id}.`,
+      `Author: ${comment.author_public_nickname || comment.author_user_id}.`,
+      `Content: ${comment.body}`,
+      normalizeText(userNote) ? `Reporter note: ${normalizeText(userNote)}` : null,
+    ].filter(Boolean);
+    return parts.join(" ").slice(0, 1000);
+  };
+
+  const ensurePostModerationReport = async (input: {
+    postId: string;
+    commentId?: string | null;
+    reporterUserId: string;
+    category: DiscussionPostReportCategory;
+    comment: string;
+  }): Promise<DiscussionPostReportRow> => {
+    const existing = await repo.getReport(
+      input.postId,
+      input.reporterUserId,
+      input.commentId ?? null,
+    );
+    if (existing) {
+      return existing;
+    }
+
+    try {
+      return await repo.insertReport({
+        id: randomUUID(),
+        post_id: input.postId,
+        comment_id: input.commentId ?? null,
+        reporter_user_id: input.reporterUserId,
+        category: input.category,
+        comment: input.comment.slice(0, 1000),
+        status: "open",
+      });
+    } catch (error) {
+      if ((error as { code?: string })?.code !== "23505") {
+        throw error;
+      }
+      const duplicate = await repo.getReport(
+        input.postId,
+        input.reporterUserId,
+        input.commentId ?? null,
+      );
+      if (!duplicate) {
+        throw error;
+      }
+      return duplicate;
+    }
+  };
 
   const moderatePostInput = async (params: {
     postId: string;
@@ -784,11 +847,20 @@ export const createDiscussionService = (
         postId,
         normalizeLimit(limit, DEFAULT_COMMENT_LIMIT, MAX_COMMENT_LIMIT),
       );
+      const visibleComments = comments.filter(
+        (comment) => !isBlockedAuthor(comment, blockedUserIds),
+      );
+      const viewerLikedCommentIds = viewerUserId
+        ? await repo.getLikedCommentIds(
+            viewerUserId,
+            visibleComments.map((comment) => comment.id),
+          )
+        : new Set<string>();
 
       return {
-        comments: comments
-          .filter((comment) => !isBlockedAuthor(comment, blockedUserIds))
-          .map(mapComment),
+        comments: visibleComments.map((comment) =>
+          mapComment(comment, viewerLikedCommentIds),
+        ),
       };
     },
 
@@ -850,6 +922,190 @@ export const createDiscussionService = (
         ...(COMMENT_MODERATION_USER_MESSAGES[moderation.decision]
           ? { message: COMMENT_MODERATION_USER_MESSAGES[moderation.decision] as string }
           : null),
+      };
+    },
+
+    async likeComment(
+      postId: string,
+      commentId: string,
+      viewerUserId: string,
+    ): Promise<DiscussionCommentLikeResultDto> {
+      const creator = await requireVerifiedCreator(viewerUserId);
+      if (!creator.ok) {
+        return createFailure<DiscussionCommentLikeResultDto>(
+          creator.errorCode,
+          creator.message,
+        );
+      }
+
+      const comment = await repo.getCommentById(commentId);
+      if (
+        !comment ||
+        comment.post_id !== postId ||
+        comment.moderation_status !== "published"
+      ) {
+        return createFailure<DiscussionCommentLikeResultDto>(
+          "COMMENT_NOT_FOUND",
+          "The comment could not be found.",
+        );
+      }
+
+      if (!(await repo.getCommentLike(comment.id, creator.user.id))) {
+        await repo.insertCommentLike(comment.id, creator.user.id);
+      }
+      const updated = await repo.getCommentById(comment.id);
+      return {
+        success: true,
+        commentId: comment.id,
+        liked: true,
+        likeCount: updated?.like_count ?? comment.like_count,
+      };
+    },
+
+    async unlikeComment(
+      postId: string,
+      commentId: string,
+      viewerUserId: string,
+    ): Promise<DiscussionCommentLikeResultDto> {
+      const creator = await requireVerifiedCreator(viewerUserId);
+      if (!creator.ok) {
+        return createFailure<DiscussionCommentLikeResultDto>(
+          creator.errorCode,
+          creator.message,
+        );
+      }
+
+      const comment = await repo.getCommentById(commentId);
+      if (!comment || comment.post_id !== postId) {
+        return createFailure<DiscussionCommentLikeResultDto>(
+          "COMMENT_NOT_FOUND",
+          "The comment could not be found.",
+        );
+      }
+
+      await repo.deleteCommentLike(comment.id, creator.user.id);
+      const updated = await repo.getCommentById(comment.id);
+      return {
+        success: true,
+        commentId: comment.id,
+        liked: false,
+        likeCount: updated?.like_count ?? Math.max(comment.like_count - 1, 0),
+      };
+    },
+
+    async reportComment(
+      postId: string,
+      commentId: string,
+      input: CreateDiscussionPostReportRequestDto,
+      viewerUserId: string,
+    ): Promise<DiscussionPostReportResultDto> {
+      const creator = await requireExistingViewer(viewerUserId);
+      if (!creator.ok) {
+        return createFailure<DiscussionPostReportResultDto>(
+          creator.errorCode,
+          creator.message,
+        );
+      }
+      if (!DISCUSSION_POST_REPORT_CATEGORIES.has(input.category)) {
+        return createFailure<DiscussionPostReportResultDto>(
+          "VALIDATION_FAILED",
+          "Choose a valid report category.",
+        );
+      }
+
+      const comment = await repo.getCommentById(commentId);
+      if (
+        !comment ||
+        comment.post_id !== postId ||
+        comment.moderation_status !== "published"
+      ) {
+        return createFailure<DiscussionPostReportResultDto>(
+          "COMMENT_NOT_FOUND",
+          "The comment could not be found.",
+        );
+      }
+
+      const existing = await repo.getReport(postId, creator.user.id, comment.id);
+      const report = await ensurePostModerationReport({
+        postId,
+        commentId: comment.id,
+        reporterUserId: creator.user.id,
+        category: input.category,
+        comment: buildCommentModerationNote(comment, input.comment),
+      });
+      return {
+        success: true,
+        postId,
+        report: mapReport(report),
+        duplicate: Boolean(existing),
+        message: existing
+          ? "You have already submitted a report for this discussion."
+          : "Comment submitted for admin review.",
+      };
+    },
+
+    async blockCommentAuthor(
+      postId: string,
+      commentId: string,
+      viewerUserId: string,
+    ): Promise<DiscussionBlockResultDto> {
+      const viewer = await requireExistingViewer(viewerUserId);
+      if (!viewer.ok) {
+        return createFailure<DiscussionBlockResultDto>(viewer.errorCode, viewer.message);
+      }
+
+      const comment = await repo.getCommentById(commentId);
+      if (
+        !comment ||
+        comment.post_id !== postId ||
+        comment.moderation_status !== "published"
+      ) {
+        return createFailure<DiscussionBlockResultDto>(
+          "COMMENT_NOT_FOUND",
+          "The comment could not be found.",
+        );
+      }
+      if (comment.author_user_id === viewer.user.id) {
+        return createFailure<DiscussionBlockResultDto>(
+          "USER_BLOCK_NOT_ALLOWED",
+          "You cannot block yourself.",
+        );
+      }
+
+      await ensurePostModerationReport({
+        postId,
+        commentId: comment.id,
+        reporterUserId: viewer.user.id,
+        category: "other",
+        comment: buildCommentModerationNote(
+          comment,
+          null,
+          "Automatically reported when the viewer blocked this comment author",
+        ),
+      });
+
+      const existing = await repo.getUserBlock(viewer.user.id, comment.author_user_id);
+      if (!existing) {
+        try {
+          await repo.insertUserBlock({
+            blocker_user_id: viewer.user.id,
+            blocked_user_id: comment.author_user_id,
+            source_post_id: postId,
+          });
+        } catch (error) {
+          if ((error as { code?: string })?.code !== "23505") {
+            throw error;
+          }
+        }
+      }
+
+      return {
+        success: true,
+        postId,
+        blockedUserId: comment.author_user_id,
+        blocked: true,
+        duplicate: Boolean(existing),
+        message: existing ? "You have already blocked this author." : "Author blocked.",
       };
     },
 
@@ -978,6 +1234,14 @@ export const createDiscussionService = (
         );
       }
 
+      await ensurePostModerationReport({
+        postId: post.id,
+        reporterUserId: viewer.user.id,
+        category: "other",
+        comment:
+          "Automatically reported for moderation when the viewer blocked this post author.",
+      });
+
       const existing = await repo.getUserBlock(viewer.user.id, post.author_user_id);
       if (existing) {
         return {
@@ -1063,7 +1327,7 @@ export const createDiscussionService = (
       input: CreateDiscussionPostReportRequestDto,
       viewerUserId: string,
     ): Promise<DiscussionPostReportResultDto> {
-      const creator = await requireVerifiedCreator(viewerUserId);
+      const creator = await requireExistingViewer(viewerUserId);
       if (!creator.ok) {
         return createFailure<DiscussionPostReportResultDto>(
           creator.errorCode,
