@@ -18,7 +18,7 @@ const POST_COLUMNS =
   "id,author_user_id,author_public_nickname,post_type,caption,image_url,image_storage_bucket,image_storage_path,image_mime_type,image_size_bytes,image_alt_text,moderation_status,moderation_model,moderation_flagged,moderation_categories,moderation_category_scores,moderation_applied_input_types,moderation_raw,moderated_at,moderation_error,moderation_policy_version,gate2_status,gate2_model,gate2_result,human_review_status,human_review_decision,human_reviewed_at,like_count,comment_count,feed_score,deliberation_id,created_at,updated_at";
 
 const COMMENT_COLUMNS =
-  "id,post_id,author_user_id,author_public_nickname,body,moderation_status,moderation_model,moderation_flagged,moderation_categories,moderation_category_scores,moderation_applied_input_types,moderation_raw,moderated_at,moderation_error,moderation_policy_version,human_review_status,human_review_decision,human_reviewed_at,like_count,created_at,updated_at";
+  "id,post_id,thread_root_comment_id,reply_to_comment_id,author_user_id,author_public_nickname,body,moderation_status,moderation_model,moderation_flagged,moderation_categories,moderation_category_scores,moderation_applied_input_types,moderation_raw,moderated_at,moderation_error,moderation_policy_version,human_review_status,human_review_decision,human_reviewed_at,like_count,direct_reply_count,thread_reply_count,feed_score,created_at,updated_at";
 const REVIEW_ACTION_COLUMNS =
   "id,content_type,content_id,reviewer_verified_identity_id,reviewer_user_id,action,previous_status,new_status,internal_note,user_message,created_at";
 const REPORT_COLUMNS =
@@ -60,6 +60,8 @@ const buildPostPayload = (input: NewDiscussionPostRow) => ({
 const buildCommentPayload = (input: NewDiscussionCommentRow) => ({
   ...(input.id ? { id: input.id } : null),
   post_id: input.post_id,
+  thread_root_comment_id: input.thread_root_comment_id ?? null,
+  reply_to_comment_id: input.reply_to_comment_id ?? null,
   author_user_id: input.author_user_id,
   author_public_nickname: input.author_public_nickname ?? null,
   body: input.body,
@@ -662,24 +664,116 @@ export const discussionRepository = {
     return data || [];
   },
 
-  async listPublishedComments(
+  async listPublishedRootComments(
     postId: string,
     limit: number,
+    cursor?: {
+      feedScore: number;
+      createdAt: string;
+      id: string;
+    } | null,
   ): Promise<DiscussionCommentRow[]> {
     const supabase = requireSupabaseAdminClient();
-    const { data, error } = await supabase
+    let query = supabase
       .from("discussion_comments")
       .select(COMMENT_COLUMNS)
       .eq("post_id", postId)
       .eq("moderation_status", "published")
-      .order("created_at", { ascending: true })
+      .is("thread_root_comment_id", null)
+      .order("feed_score", { ascending: false })
+      .order("created_at", { ascending: false })
+      .order("id", { ascending: false })
       .limit(limit);
+
+    if (cursor) {
+      query = query.or(
+        [
+          `feed_score.lt.${cursor.feedScore}`,
+          `and(feed_score.eq.${cursor.feedScore},created_at.lt.${cursor.createdAt})`,
+          `and(feed_score.eq.${cursor.feedScore},created_at.eq.${cursor.createdAt},id.lt.${cursor.id})`,
+        ].join(","),
+      );
+    }
+
+    const { data, error } = await query;
 
     if (error) {
       throw error;
     }
 
     return data || [];
+  },
+
+  async listPublishedReplyPreview(
+    threadRootCommentIds: string[],
+    perRootLimit: number,
+  ): Promise<DiscussionCommentRow[]> {
+    if (threadRootCommentIds.length === 0) {
+      return [];
+    }
+
+    const supabase = requireSupabaseAdminClient();
+    const { data, error } = await supabase
+      .rpc("list_discussion_comment_reply_preview", {
+        p_thread_root_comment_ids: threadRootCommentIds,
+        p_per_root_limit: perRootLimit,
+      });
+
+    if (error) {
+      throw error;
+    }
+
+    return (data || []) as unknown as DiscussionCommentRow[];
+  },
+
+  async listPublishedReplies(
+    threadRootCommentId: string,
+    limit: number,
+    cursor?: { createdAt: string; id: string } | null,
+  ): Promise<DiscussionCommentRow[]> {
+    const supabase = requireSupabaseAdminClient();
+    let query = supabase
+      .from("discussion_comments")
+      .select(COMMENT_COLUMNS)
+      .eq("thread_root_comment_id", threadRootCommentId)
+      .eq("moderation_status", "published")
+      .order("created_at", { ascending: true })
+      .order("id", { ascending: true })
+      .limit(limit);
+
+    if (cursor) {
+      query = query.or(
+        [
+          `created_at.gt.${cursor.createdAt}`,
+          `and(created_at.eq.${cursor.createdAt},id.gt.${cursor.id})`,
+        ].join(","),
+      );
+    }
+
+    const { data, error } = await query;
+    if (error) {
+      throw error;
+    }
+
+    return data || [];
+  },
+
+  async listPublishedOrphanReplies(
+    postId: string,
+    limit: number,
+  ): Promise<DiscussionCommentRow[]> {
+    const supabase = requireSupabaseAdminClient();
+    const { data, error } = await supabase
+      .rpc("list_discussion_comment_orphans", {
+        p_post_id: postId,
+        p_limit: limit,
+      });
+
+    if (error) {
+      throw error;
+    }
+
+    return (data || []) as unknown as DiscussionCommentRow[];
   },
 
   async insertComment(

@@ -666,6 +666,8 @@ export type NewDiscussionPostRow = {
 export type DiscussionCommentRow = {
   id: string;
   post_id: string;
+  thread_root_comment_id: string | null;
+  reply_to_comment_id: string | null;
   author_user_id: string;
   author_public_nickname: string | null;
   body: string;
@@ -683,6 +685,9 @@ export type DiscussionCommentRow = {
   human_review_decision: string | null;
   human_reviewed_at: string | null;
   like_count: number;
+  direct_reply_count: number;
+  thread_reply_count: number;
+  feed_score: number;
   created_at: string;
   updated_at: string;
 };
@@ -696,6 +701,8 @@ export type DiscussionCommentLikeRow = {
 export type NewDiscussionCommentRow = {
   id?: string;
   post_id: string;
+  thread_root_comment_id?: string | null;
+  reply_to_comment_id?: string | null;
   author_user_id: string;
   author_public_nickname?: string | null;
   body: string;

@@ -22,7 +22,9 @@ import type {
   DeleteDiscussionPostResultDto,
   DiscussionBookmarkResultDto,
   DiscussionCommentDto,
-  DiscussionCommentListDto,
+  DiscussionCommentReplyListDto,
+  DiscussionCommentThreadDto,
+  DiscussionCommentThreadListDto,
   DiscussionImageInputDto,
   DiscussionLikeResultDto,
   DiscussionMutationErrorCode,
@@ -59,8 +61,11 @@ const DISCUSSION_POST_REPORT_CATEGORIES = new Set<DiscussionPostReportCategory>(
 
 const DEFAULT_POST_LIMIT = 50;
 const MAX_POST_LIMIT = 100;
-const DEFAULT_COMMENT_LIMIT = 100;
-const MAX_COMMENT_LIMIT = 200;
+const DEFAULT_COMMENT_THREAD_LIMIT = 20;
+const MAX_COMMENT_THREAD_LIMIT = 50;
+const COMMENT_REPLY_PREVIEW_LIMIT = 2;
+const DEFAULT_COMMENT_REPLY_LIMIT = 25;
+const MAX_COMMENT_REPLY_LIMIT = 100;
 const EDITABLE_POST_MODERATION_STATUSES = new Set([
   "review_required",
   "needs_edit",
@@ -155,6 +160,75 @@ const normalizeLimit = (
 
   return Math.min(max, Math.max(1, Math.trunc(value as number)));
 };
+
+type CommentThreadCursor = {
+  feedScore: number;
+  createdAt: string;
+  id: string;
+};
+
+type CommentReplyCursor = {
+  createdAt: string;
+  id: string;
+};
+
+const encodeCursor = (value: CommentThreadCursor | CommentReplyCursor): string =>
+  Buffer.from(JSON.stringify(value), "utf8").toString("base64url");
+
+const decodeCursor = <T extends CommentThreadCursor | CommentReplyCursor>(
+  value: string | null | undefined,
+  validator: (parsed: unknown) => parsed is T,
+): T | null => {
+  if (!value?.trim()) {
+    return null;
+  }
+
+  try {
+    const parsed = JSON.parse(
+      Buffer.from(value.trim(), "base64url").toString("utf8"),
+    ) as unknown;
+    return validator(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
+};
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  Boolean(value && typeof value === "object" && !Array.isArray(value));
+
+const UUID_PATTERN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const ISO_TIMESTAMP_PATTERN =
+  /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?(?:Z|[+-]\d{2}:\d{2})$/;
+
+const isCursorTimestamp = (value: unknown): value is string =>
+  typeof value === "string" &&
+  ISO_TIMESTAMP_PATTERN.test(value) &&
+  Number.isFinite(Date.parse(value));
+
+const isCursorId = (value: unknown): value is string =>
+  typeof value === "string" && UUID_PATTERN.test(value);
+
+const isCommentThreadCursor = (value: unknown): value is CommentThreadCursor =>
+  isRecord(value) &&
+  Number.isFinite(value.feedScore) &&
+  isCursorTimestamp(value.createdAt) &&
+  isCursorId(value.id);
+
+const isCommentReplyCursor = (value: unknown): value is CommentReplyCursor =>
+  isRecord(value) &&
+  isCursorTimestamp(value.createdAt) &&
+  isCursorId(value.id);
+
+const commentThreadCursorFor = (row: DiscussionCommentRow): string =>
+  encodeCursor({
+    feedScore: row.feed_score,
+    createdAt: row.created_at,
+    id: row.id,
+  });
+
+const commentReplyCursorFor = (row: DiscussionCommentRow): string =>
+  encodeCursor({ createdAt: row.created_at, id: row.id });
 
 const getAuthorNickname = (user: UserRow): string | null =>
   user.public_nickname || user.display_name || user.username || null;
@@ -304,6 +378,8 @@ const mapComment = (
 ): DiscussionCommentDto => ({
   id: row.id,
   postId: row.post_id,
+  threadRootCommentId: row.thread_root_comment_id,
+  replyToCommentId: row.reply_to_comment_id,
   authorUserId: row.author_user_id,
   authorNickname: row.author_public_nickname,
   body: row.body,
@@ -313,6 +389,9 @@ const mapComment = (
   moderatedAt: row.moderated_at,
   moderationPolicyVersion: row.moderation_policy_version,
   likeCount: Math.max(0, row.like_count || 0),
+  directReplyCount: Math.max(0, row.direct_reply_count || 0),
+  threadReplyCount: Math.max(0, row.thread_reply_count || 0),
+  feedScore: Number.isFinite(row.feed_score) ? row.feed_score : 0,
   viewerHasLiked: viewerLikedCommentIds.has(row.id),
   createdAt: row.created_at,
   updatedAt: row.updated_at,
@@ -832,35 +911,180 @@ export const createDiscussionService = (
       postId: string,
       viewerUserId: string | null = null,
       limit?: number | null,
-    ): Promise<DiscussionCommentListDto> {
+      cursor?: string | null,
+    ): Promise<DiscussionCommentThreadListDto> {
       const post = await repo.getPostById(postId);
       if (!post || post.moderation_status !== "published") {
-        return { comments: [] };
+        return { threads: [], nextCursor: null };
       }
 
       const blockedUserIds = await getViewerBlockedUserIds(viewerUserId);
       if (isBlockedAuthor(post, blockedUserIds)) {
-        return { comments: [] };
+        return { threads: [], nextCursor: null };
       }
 
-      const comments = await repo.listPublishedComments(
-        postId,
-        normalizeLimit(limit, DEFAULT_COMMENT_LIMIT, MAX_COMMENT_LIMIT),
+      const normalizedLimit = normalizeLimit(
+        limit,
+        DEFAULT_COMMENT_THREAD_LIMIT,
+        MAX_COMMENT_THREAD_LIMIT,
       );
-      const visibleComments = comments.filter(
-        (comment) => !isBlockedAuthor(comment, blockedUserIds),
+      const rootCursor = decodeCursor(cursor, isCommentThreadCursor);
+      const roots = await repo.listPublishedRootComments(
+        postId,
+        normalizedLimit + 1,
+        rootCursor,
+      );
+      const hasMoreRoots = roots.length > normalizedLimit;
+      const pageRoots = roots.slice(0, normalizedLimit);
+      const [previewReplies, storedOrphans] = await Promise.all([
+        repo.listPublishedReplyPreview(
+          pageRoots.map((root) => root.id),
+          COMMENT_REPLY_PREVIEW_LIMIT,
+        ),
+        cursor
+          ? Promise.resolve([] as DiscussionCommentRow[])
+          : repo.listPublishedOrphanReplies(postId, normalizedLimit),
+      ]);
+      const candidateComments = [...pageRoots, ...previewReplies, ...storedOrphans];
+      const viewerLikedCommentIds = viewerUserId
+        ? await repo.getLikedCommentIds(
+            viewerUserId,
+            candidateComments.map((comment) => comment.id),
+          )
+        : new Set<string>();
+
+      const previewsByRootId = new Map<string, DiscussionCommentRow[]>();
+      for (const reply of previewReplies) {
+        const rootId = reply.thread_root_comment_id;
+        if (!rootId) {
+          continue;
+        }
+        const current = previewsByRootId.get(rootId) || [];
+        current.push(reply);
+        previewsByRootId.set(rootId, current);
+      }
+
+      const threads: DiscussionCommentThreadDto[] = [];
+      for (const root of pageRoots) {
+        const rawReplies = previewsByRootId.get(root.id) || [];
+        const visibleReplies = rawReplies.filter(
+          (reply) => !isBlockedAuthor(reply, blockedUserIds),
+        );
+
+        if (isBlockedAuthor(root, blockedUserIds)) {
+          for (const reply of visibleReplies) {
+            threads.push({
+              root: mapComment(reply, viewerLikedCommentIds),
+              replies: [],
+              replyCount: 0,
+              repliesNextCursor: null,
+              isOrphaned: true,
+              canReply: false,
+            });
+          }
+          continue;
+        }
+
+        const lastRawReply = rawReplies.at(-1) || null;
+        threads.push({
+          root: mapComment(root, viewerLikedCommentIds),
+          replies: visibleReplies.map((reply) =>
+            mapComment(reply, viewerLikedCommentIds),
+          ),
+          replyCount: Math.max(0, root.thread_reply_count || 0),
+          repliesNextCursor:
+            lastRawReply && root.thread_reply_count > rawReplies.length
+              ? commentReplyCursorFor(lastRawReply)
+              : null,
+          isOrphaned: false,
+          canReply: true,
+        });
+      }
+
+      for (const orphan of storedOrphans) {
+        if (isBlockedAuthor(orphan, blockedUserIds)) {
+          continue;
+        }
+        threads.push({
+          root: mapComment(orphan, viewerLikedCommentIds),
+          replies: [],
+          replyCount: 0,
+          repliesNextCursor: null,
+          isOrphaned: true,
+          canReply: false,
+        });
+      }
+
+      return {
+        threads,
+        nextCursor:
+          hasMoreRoots && pageRoots.length > 0
+            ? commentThreadCursorFor(pageRoots[pageRoots.length - 1])
+            : null,
+      };
+    },
+
+    async listCommentReplies(
+      postId: string,
+      threadRootCommentId: string,
+      viewerUserId: string | null = null,
+      limit?: number | null,
+      cursor?: string | null,
+    ): Promise<DiscussionCommentReplyListDto> {
+      const [post, root] = await Promise.all([
+        repo.getPostById(postId),
+        repo.getCommentById(threadRootCommentId),
+      ]);
+      if (
+        !post ||
+        post.moderation_status !== "published" ||
+        !root ||
+        root.post_id !== post.id ||
+        root.thread_root_comment_id !== null ||
+        root.moderation_status !== "published"
+      ) {
+        return { replies: [], nextCursor: null };
+      }
+
+      const blockedUserIds = await getViewerBlockedUserIds(viewerUserId);
+      if (
+        isBlockedAuthor(post, blockedUserIds) ||
+        isBlockedAuthor(root, blockedUserIds)
+      ) {
+        return { replies: [], nextCursor: null };
+      }
+
+      const normalizedLimit = normalizeLimit(
+        limit,
+        DEFAULT_COMMENT_REPLY_LIMIT,
+        MAX_COMMENT_REPLY_LIMIT,
+      );
+      const replyCursor = decodeCursor(cursor, isCommentReplyCursor);
+      const rows = await repo.listPublishedReplies(
+        root.id,
+        normalizedLimit + 1,
+        replyCursor,
+      );
+      const hasMore = rows.length > normalizedLimit;
+      const pageRows = rows.slice(0, normalizedLimit);
+      const visibleRows = pageRows.filter(
+        (reply) => !isBlockedAuthor(reply, blockedUserIds),
       );
       const viewerLikedCommentIds = viewerUserId
         ? await repo.getLikedCommentIds(
             viewerUserId,
-            visibleComments.map((comment) => comment.id),
+            visibleRows.map((reply) => reply.id),
           )
         : new Set<string>();
 
       return {
-        comments: visibleComments.map((comment) =>
-          mapComment(comment, viewerLikedCommentIds),
+        replies: visibleRows.map((reply) =>
+          mapComment(reply, viewerLikedCommentIds),
         ),
+        nextCursor:
+          hasMore && pageRows.length > 0
+            ? commentReplyCursorFor(pageRows[pageRows.length - 1])
+            : null,
       };
     },
 
@@ -893,7 +1117,55 @@ export const createDiscussionService = (
         );
       }
 
-      const body = normalizeText(input.body);
+      const requestedReplyTargetId = input.replyToCommentId?.trim() || null;
+      let threadRootCommentId: string | null = null;
+      let replyToCommentId: string | null = null;
+      let replyTarget: DiscussionCommentRow | null = null;
+      if (requestedReplyTargetId) {
+        replyTarget = await repo.getCommentById(requestedReplyTargetId);
+        if (
+          !replyTarget ||
+          replyTarget.post_id !== post.id ||
+          replyTarget.moderation_status !== "published" ||
+          isBlockedAuthor(replyTarget, blockedUserIds)
+        ) {
+          return createFailure<CreateDiscussionCommentResultDto>(
+            "COMMENT_NOT_FOUND",
+            "The comment being replied to could not be found.",
+          );
+        }
+
+        threadRootCommentId =
+          replyTarget.thread_root_comment_id || replyTarget.id;
+        const root =
+          threadRootCommentId === replyTarget.id
+            ? replyTarget
+            : await repo.getCommentById(threadRootCommentId);
+        if (
+          !root ||
+          root.post_id !== post.id ||
+          root.thread_root_comment_id !== null ||
+          root.moderation_status !== "published" ||
+          isBlockedAuthor(root, blockedUserIds)
+        ) {
+          return createFailure<CreateDiscussionCommentResultDto>(
+            "COMMENT_NOT_FOUND",
+            "The comment being replied to could not be found.",
+          );
+        }
+        replyToCommentId = replyTarget.id;
+      }
+
+      const draftBody = normalizeText(input.body);
+      const mention = replyTarget?.author_public_nickname?.trim()
+        ? `@${replyTarget.author_public_nickname.trim()} `
+        : "";
+      const bodyWithoutStaleMention = replyTarget
+        ? draftBody?.replace(/^@\S+(?:\s+|$)/, "").trim() || null
+        : draftBody;
+      const body = bodyWithoutStaleMention
+        ? `${mention}${bodyWithoutStaleMention}`
+        : null;
       const gate0 = validateModerationGate0({ body });
       if (!gate0.ok) {
         return createFailure<CreateDiscussionCommentResultDto>(
@@ -910,6 +1182,8 @@ export const createDiscussionService = (
       const stored = await repo.insertComment({
         id: commentId,
         post_id: post.id,
+        thread_root_comment_id: threadRootCommentId,
+        reply_to_comment_id: replyToCommentId,
         author_user_id: creator.user.id,
         author_public_nickname: getAuthorNickname(creator.user),
         body: body as string,

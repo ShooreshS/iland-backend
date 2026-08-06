@@ -119,6 +119,8 @@ const createCommentRow = (
 ): DiscussionCommentRow => ({
   id: "comment-1",
   post_id: "post-1",
+  thread_root_comment_id: null,
+  reply_to_comment_id: null,
   author_user_id: "user-1",
   author_public_nickname: "clear-voter",
   body: "A clean comment",
@@ -136,6 +138,9 @@ const createCommentRow = (
   human_review_decision: null,
   human_reviewed_at: null,
   like_count: 0,
+  direct_reply_count: 0,
+  thread_reply_count: 0,
+  feed_score: 1,
   created_at: FIXED_TIME,
   updated_at: FIXED_TIME,
   ...overrides,
@@ -366,12 +371,88 @@ const createRepo = () => {
         reports.push(row);
         return row;
       },
-      listPublishedComments: async (postId: string) =>
-        comments.filter(
-          (comment) =>
-            comment.post_id === postId &&
-            comment.moderation_status === "published",
+      listPublishedRootComments: async (
+        postId: string,
+        limit: number,
+        cursor?: { feedScore: number; createdAt: string; id: string } | null,
+      ) =>
+        comments
+          .filter(
+            (comment) =>
+              comment.post_id === postId &&
+              comment.moderation_status === "published" &&
+              comment.thread_root_comment_id === null &&
+              (!cursor ||
+                comment.feed_score < cursor.feedScore ||
+                (comment.feed_score === cursor.feedScore &&
+                  comment.created_at < cursor.createdAt) ||
+                (comment.feed_score === cursor.feedScore &&
+                  comment.created_at === cursor.createdAt &&
+                  comment.id < cursor.id)),
+          )
+          .sort(
+            (left, right) =>
+              right.feed_score - left.feed_score ||
+              right.created_at.localeCompare(left.created_at) ||
+              right.id.localeCompare(left.id),
+          )
+          .slice(0, limit),
+      listPublishedReplyPreview: async (
+        threadRootCommentIds: string[],
+        perRootLimit: number,
+      ) =>
+        threadRootCommentIds.flatMap((threadRootCommentId) =>
+          comments
+            .filter(
+              (comment) =>
+                comment.thread_root_comment_id === threadRootCommentId &&
+                comment.moderation_status === "published",
+            )
+            .sort(
+              (left, right) =>
+                left.created_at.localeCompare(right.created_at) ||
+                left.id.localeCompare(right.id),
+            )
+            .slice(0, perRootLimit),
         ),
+      listPublishedReplies: async (
+        threadRootCommentId: string,
+        limit: number,
+        cursor?: { createdAt: string; id: string } | null,
+      ) =>
+        comments
+          .filter(
+            (comment) =>
+              comment.thread_root_comment_id === threadRootCommentId &&
+              comment.moderation_status === "published" &&
+              (!cursor ||
+                comment.created_at > cursor.createdAt ||
+                (comment.created_at === cursor.createdAt &&
+                  comment.id > cursor.id)),
+          )
+          .sort(
+            (left, right) =>
+              left.created_at.localeCompare(right.created_at) ||
+              left.id.localeCompare(right.id),
+          )
+          .slice(0, limit),
+      listPublishedOrphanReplies: async (postId: string, limit: number) =>
+        comments
+          .filter((comment) => {
+            if (
+              comment.post_id !== postId ||
+              comment.moderation_status !== "published" ||
+              !comment.thread_root_comment_id
+            ) {
+              return false;
+            }
+
+            const root = comments.find(
+              (candidate) => candidate.id === comment.thread_root_comment_id,
+            );
+            return !root || root.moderation_status !== "published";
+          })
+          .slice(0, limit),
       getCommentById: async (commentId: string) =>
         comments.find((comment) => comment.id === commentId) || null,
       getLikedCommentIds: async (userId: string, commentIds: string[]) =>
@@ -407,6 +488,8 @@ const createRepo = () => {
         const row = createCommentRow({
           id: input.id,
           post_id: input.post_id,
+          thread_root_comment_id: input.thread_root_comment_id ?? null,
+          reply_to_comment_id: input.reply_to_comment_id ?? null,
           author_user_id: input.author_user_id,
           author_public_nickname: input.author_public_nickname,
           body: input.body,
@@ -562,7 +645,9 @@ describe("discussionService", () => {
 
     const result = await service.listComments("post-1", "user-1");
 
-    expect(result.comments.map((comment) => comment.id)).toEqual(["visible-comment"]);
+    expect(result.threads.map((thread) => thread.root.id)).toEqual([
+      "visible-comment",
+    ]);
   });
 
   it("returns and toggles the authenticated viewer's comment like state", async () => {
@@ -591,7 +676,7 @@ describe("discussionService", () => {
       liked: true,
       likeCount: 1,
     });
-    expect(listed.comments[0]).toMatchObject({
+    expect(listed.threads[0]?.root).toMatchObject({
       id: "comment-1",
       viewerHasLiked: true,
       likeCount: 1,
@@ -1142,6 +1227,241 @@ describe("discussionService", () => {
     expect(result.success).toBe(true);
     expect(result.comment?.moderationStatus).toBe("blocked");
     expect(result.message).toContain("could not be published");
-    expect(list.comments).toEqual([]);
+    expect(list.threads).toEqual([]);
+  });
+
+  const createCommentService = (repo: unknown) =>
+    createDiscussionService({
+      discussionRepositoryLike: repo as any,
+      userRepositoryLike: { getById: async () => createUser() },
+      verifiedIdentityRepositoryLike: { getByUserId: async () => verifiedIdentity },
+      moderationServiceLike: {
+        moderatePost: async () => createModerationResult(),
+      },
+    });
+
+  it("stores thread ownership and the direct target for a root reply", async () => {
+    const { repo, posts, comments } = createRepo();
+    posts.push(createPostRow());
+    comments.push(createCommentRow({ id: "comment-1" }));
+    const service = createCommentService(repo);
+
+    const result = await service.createComment(
+      "post-1",
+      { body: "A reply", replyToCommentId: "comment-1" },
+      "user-1",
+    );
+
+    expect(result.success).toBe(true);
+    expect(result.comment).toMatchObject({
+      threadRootCommentId: "comment-1",
+      replyToCommentId: "comment-1",
+      body: "@clear-voter A reply",
+    });
+  });
+
+  it("keeps one thread level while mentioning the direct reply target", async () => {
+    const { repo, posts, comments } = createRepo();
+    posts.push(createPostRow());
+    comments.push(createCommentRow({ id: "comment-1" }));
+    comments.push(
+      createCommentRow({
+        id: "comment-2",
+        thread_root_comment_id: "comment-1",
+        reply_to_comment_id: "comment-1",
+        author_user_id: "user-2",
+        author_public_nickname: "bob",
+      }),
+    );
+    const service = createCommentService(repo);
+
+    const result = await service.createComment(
+      "post-1",
+      { body: "@clear-voter A nested reply", replyToCommentId: "comment-2" },
+      "user-1",
+    );
+
+    expect(result.success).toBe(true);
+    expect(result.comment).toMatchObject({
+      threadRootCommentId: "comment-1",
+      replyToCommentId: "comment-2",
+      body: "@bob A nested reply",
+    });
+  });
+
+  it("rejects a reply whose parent belongs to another post", async () => {
+    const { repo, posts, comments } = createRepo();
+    posts.push(createPostRow());
+    posts.push(createPostRow({ id: "post-2" }));
+    comments.push(createCommentRow({ id: "comment-1", post_id: "post-2" }));
+    const service = createCommentService(repo);
+
+    const result = await service.createComment(
+      "post-1",
+      { body: "A reply", replyToCommentId: "comment-1" },
+      "user-1",
+    );
+
+    expect(result.success).toBe(false);
+    expect(result.errorCode).toBe("COMMENT_NOT_FOUND");
+  });
+
+  it("rejects a reply to an unpublished parent comment", async () => {
+    const { repo, posts, comments } = createRepo();
+    posts.push(createPostRow());
+    comments.push(
+      createCommentRow({ id: "comment-1", moderation_status: "review_required" }),
+    );
+    const service = createCommentService(repo);
+
+    const result = await service.createComment(
+      "post-1",
+      { body: "A reply", replyToCommentId: "comment-1" },
+      "user-1",
+    );
+
+    expect(result.success).toBe(false);
+    expect(result.errorCode).toBe("COMMENT_NOT_FOUND");
+  });
+
+  it("ranks root threads and keeps replies chronological", async () => {
+    const { repo, posts, comments } = createRepo();
+    posts.push(createPostRow());
+    comments.push(createCommentRow({ id: "comment-1", feed_score: 10 }));
+    comments.push(createCommentRow({ id: "comment-3", feed_score: 20 }));
+    comments.push(
+      createCommentRow({
+        id: "comment-2",
+        thread_root_comment_id: "comment-1",
+        reply_to_comment_id: "comment-1",
+        created_at: "2026-07-17T12:02:00.000Z",
+      }),
+      createCommentRow({
+        id: "comment-4",
+        thread_root_comment_id: "comment-1",
+        reply_to_comment_id: "comment-2",
+        created_at: "2026-07-17T12:01:00.000Z",
+      }),
+    );
+    const service = createCommentService(repo);
+
+    const list = await service.listComments("post-1");
+
+    expect(list.threads.map((thread) => thread.root.id)).toEqual([
+      "comment-3",
+      "comment-1",
+    ]);
+    expect(list.threads[1]?.replies.map((comment) => comment.id)).toEqual([
+      "comment-4",
+      "comment-2",
+    ]);
+  });
+
+  it("paginates ranked roots without splitting their reply previews", async () => {
+    const { repo, posts, comments } = createRepo();
+    const firstRootId = "00000000-0000-4000-8000-000000000001";
+    const secondRootId = "00000000-0000-4000-8000-000000000002";
+    posts.push(createPostRow());
+    comments.push(
+      createCommentRow({ id: firstRootId, feed_score: 10 }),
+      createCommentRow({ id: secondRootId, feed_score: 20 }),
+      createCommentRow({
+        id: "00000000-0000-4000-8000-000000000003",
+        thread_root_comment_id: secondRootId,
+        reply_to_comment_id: secondRootId,
+      }),
+    );
+    const service = createCommentService(repo);
+
+    const firstPage = await service.listComments("post-1", null, 1);
+    const secondPage = await service.listComments(
+      "post-1",
+      null,
+      1,
+      firstPage.nextCursor,
+    );
+
+    expect(firstPage.threads.map((thread) => thread.root.id)).toEqual([
+      secondRootId,
+    ]);
+    expect(firstPage.threads[0]?.replies).toHaveLength(1);
+    expect(firstPage.nextCursor).not.toBeNull();
+    expect(secondPage.threads.map((thread) => thread.root.id)).toEqual([
+      firstRootId,
+    ]);
+    expect(secondPage.nextCursor).toBeNull();
+  });
+
+  it("continues chronological reply paging after the inline preview", async () => {
+    const { repo, posts, comments } = createRepo();
+    const rootId = "00000000-0000-4000-8000-000000000010";
+    posts.push(createPostRow());
+    comments.push(
+      createCommentRow({ id: rootId, thread_reply_count: 3 }),
+      createCommentRow({
+        id: "00000000-0000-4000-8000-000000000011",
+        thread_root_comment_id: rootId,
+        reply_to_comment_id: rootId,
+        created_at: "2026-07-17T12:01:00.000Z",
+      }),
+      createCommentRow({
+        id: "00000000-0000-4000-8000-000000000012",
+        thread_root_comment_id: rootId,
+        reply_to_comment_id: rootId,
+        created_at: "2026-07-17T12:02:00.000Z",
+      }),
+      createCommentRow({
+        id: "00000000-0000-4000-8000-000000000013",
+        thread_root_comment_id: rootId,
+        reply_to_comment_id: rootId,
+        created_at: "2026-07-17T12:03:00.000Z",
+      }),
+    );
+    const service = createCommentService(repo);
+
+    const threadPage = await service.listComments("post-1");
+    const replyPage = await service.listCommentReplies(
+      "post-1",
+      rootId,
+      null,
+      1,
+      threadPage.threads[0]?.repliesNextCursor,
+    );
+
+    expect(threadPage.threads[0]?.replies.map((reply) => reply.id)).toEqual([
+      "00000000-0000-4000-8000-000000000011",
+      "00000000-0000-4000-8000-000000000012",
+    ]);
+    expect(replyPage.replies.map((reply) => reply.id)).toEqual([
+      "00000000-0000-4000-8000-000000000013",
+    ]);
+    expect(replyPage.nextCursor).toBeNull();
+  });
+
+  it("promotes replies whose root is unavailable and disables replying", async () => {
+    const { repo, posts, comments } = createRepo();
+    posts.push(createPostRow());
+    comments.push(
+      createCommentRow({
+        id: "hidden-root",
+        moderation_status: "blocked",
+      }),
+      createCommentRow({
+        id: "orphan-reply",
+        thread_root_comment_id: "hidden-root",
+        reply_to_comment_id: "hidden-root",
+      }),
+    );
+    const service = createCommentService(repo);
+
+    const list = await service.listComments("post-1");
+
+    expect(list.threads).toHaveLength(1);
+    expect(list.threads[0]).toMatchObject({
+      root: { id: "orphan-reply" },
+      isOrphaned: true,
+      canReply: false,
+      replies: [],
+    });
   });
 });

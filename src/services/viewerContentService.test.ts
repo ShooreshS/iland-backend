@@ -73,6 +73,8 @@ const createCommentRow = (
 ): DiscussionCommentRow => ({
   id: "comment-1",
   post_id: "reported-post-1",
+  thread_root_comment_id: null,
+  reply_to_comment_id: null,
   author_user_id: "comment-author-1",
   author_public_nickname: "comment-author",
   body: "Reported comment body",
@@ -90,6 +92,9 @@ const createCommentRow = (
   human_review_decision: null,
   human_reviewed_at: null,
   like_count: 0,
+  direct_reply_count: 0,
+  thread_reply_count: 0,
+  feed_score: 1,
   created_at: FIXED_TIME,
   updated_at: FIXED_TIME,
   ...overrides,

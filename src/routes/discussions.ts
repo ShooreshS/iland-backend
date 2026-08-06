@@ -49,6 +49,7 @@ const createDiscussionPostSchema = z
 const createDiscussionCommentSchema = z
   .object({
     body: z.string(),
+    replyToCommentId: z.string().trim().uuid().nullable().optional(),
   })
   .strict();
 
@@ -108,6 +109,9 @@ const parseLimit = (url: URL): number | null => {
   const parsed = Number(raw);
   return Number.isFinite(parsed) ? parsed : null;
 };
+
+const parseCursor = (url: URL): string | null =>
+  url.searchParams.get("cursor")?.trim() || null;
 
 const getDiscussionsRoute: RouteDefinition = {
   method: "GET",
@@ -306,7 +310,7 @@ const getDiscussionCommentsRoute: RouteDefinition = {
 
     const postId = params.id?.trim() || "";
     if (!postId) {
-      return json({ comments: [] });
+      return json({ threads: [], nextCursor: null });
     }
 
     return json(
@@ -314,6 +318,34 @@ const getDiscussionCommentsRoute: RouteDefinition = {
         postId,
         viewerResult.viewer?.userId ?? null,
         parseLimit(url),
+        parseCursor(url),
+      ),
+    );
+  },
+};
+
+const getDiscussionCommentRepliesRoute: RouteDefinition = {
+  method: "GET",
+  path: "/discussions/:id/comments/:commentId/replies",
+  handler: async ({ request, params, url }) => {
+    const viewerResult = await optionalViewer(request);
+    if (!viewerResult.ok) {
+      return viewerResult.response;
+    }
+
+    const postId = params.id?.trim() || "";
+    const threadRootCommentId = params.commentId?.trim() || "";
+    if (!postId || !threadRootCommentId) {
+      return json({ replies: [], nextCursor: null });
+    }
+
+    return json(
+      await discussionService.listCommentReplies(
+        postId,
+        threadRootCommentId,
+        viewerResult.viewer?.userId ?? null,
+        parseLimit(url),
+        parseCursor(url),
       ),
     );
   },
@@ -657,6 +689,7 @@ export const discussionRoutes: RouteDefinition[] = [
   updateDiscussionRoute,
   deleteDiscussionRoute,
   getDiscussionCommentsRoute,
+  getDiscussionCommentRepliesRoute,
   createDiscussionCommentRoute,
   likeDiscussionCommentRoute,
   unlikeDiscussionCommentRoute,

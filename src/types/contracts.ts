@@ -244,6 +244,8 @@ export type ViewerDiscussionPostDto = DiscussionPostDto & {
 export type DiscussionCommentDto = {
   id: string;
   postId: string;
+  threadRootCommentId: string | null;
+  replyToCommentId: string | null;
   authorUserId: string;
   authorNickname: string | null;
   body: string;
@@ -253,6 +255,9 @@ export type DiscussionCommentDto = {
   moderatedAt: string | null;
   moderationPolicyVersion: string | null;
   likeCount: number;
+  directReplyCount: number;
+  threadReplyCount: number;
+  feedScore: number;
   viewerHasLiked: boolean;
   createdAt: string;
   updatedAt: string;
@@ -329,12 +334,28 @@ export type DeleteDiscussionPostResultDto = {
   message?: string;
 };
 
-export type DiscussionCommentListDto = {
-  comments: DiscussionCommentDto[];
+export type DiscussionCommentThreadDto = {
+  root: DiscussionCommentDto;
+  replies: DiscussionCommentDto[];
+  replyCount: number;
+  repliesNextCursor: string | null;
+  isOrphaned: boolean;
+  canReply: boolean;
+};
+
+export type DiscussionCommentThreadListDto = {
+  threads: DiscussionCommentThreadDto[];
+  nextCursor: string | null;
+};
+
+export type DiscussionCommentReplyListDto = {
+  replies: DiscussionCommentDto[];
+  nextCursor: string | null;
 };
 
 export type CreateDiscussionCommentRequestDto = {
   body: string;
+  replyToCommentId?: string | null;
 };
 
 export type CreateDiscussionCommentResultDto = {
