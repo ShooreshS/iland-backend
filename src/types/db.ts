@@ -770,6 +770,14 @@ export type DiscussionPostOpenReportQueueRow = {
   latest_reported_at: string;
 };
 
+export type DiscussionCommentOpenReportQueueRow = {
+  comment_id: string;
+  post_id: string;
+  report_count: number;
+  first_reported_at: string;
+  latest_reported_at: string;
+};
+
 export type DiscussionMediaUploadStatus =
   | "signed"
   | "uploaded"

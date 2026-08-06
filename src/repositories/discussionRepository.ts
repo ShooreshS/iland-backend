@@ -140,6 +140,24 @@ export const discussionRepository = {
     return data || [];
   },
 
+  async listCommentsByIds(commentIds: string[]): Promise<DiscussionCommentRow[]> {
+    if (commentIds.length === 0) {
+      return [];
+    }
+
+    const supabase = requireSupabaseAdminClient();
+    const { data, error } = await supabase
+      .from("discussion_comments")
+      .select(COMMENT_COLUMNS)
+      .in("id", commentIds);
+
+    if (error) {
+      throw error;
+    }
+
+    return data || [];
+  },
+
   async getPostEngagementTotalsByAuthorUserId(userId: string): Promise<{
     postCount: number;
     likeCount: number;

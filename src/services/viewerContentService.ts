@@ -15,6 +15,7 @@ import type {
   ViewerUserInteractionsDto,
 } from "../types/contracts";
 import type {
+  DiscussionCommentRow,
   DiscussionPostRow,
   DiscussionPostReportRow,
   DiscussionUserBlockRow,
@@ -30,6 +31,7 @@ type ViewerContentDiscussionRepository = Pick<
   typeof discussionRepository,
   | "listPostsByAuthorUserId"
   | "listPostsByIds"
+  | "listCommentsByIds"
   | "listReviewActionsForDiscussionPosts"
   | "getPostEngagementTotalsByAuthorUserId"
   | "listUserBlocksByBlockerUserId"
@@ -171,6 +173,11 @@ const buildPostsById = (
 ): Map<string, DiscussionPostRow> =>
   new Map(posts.map((post) => [post.id, post]));
 
+const buildCommentsById = (
+  comments: DiscussionCommentRow[],
+): Map<string, DiscussionCommentRow> =>
+  new Map(comments.map((comment) => [comment.id, comment]));
+
 const buildUsersById = (users: UserRow[]): Map<string, UserRow> =>
   new Map(users.map((user) => [user.id, user]));
 
@@ -295,9 +302,17 @@ export const createViewerContentService = (
       ]);
       const posts = await discussionRepo.listPostsByIds(postIds);
       const postsById = buildPostsById(posts);
+      const commentIds = uniqueStrings(reportRows.map((row) => row.comment_id));
+      const commentsById = buildCommentsById(
+        await discussionRepo.listCommentsByIds(commentIds),
+      );
       const userIds = uniqueStrings([
         ...blockedRows.map((row) => row.blocked_user_id),
-        ...reportRows.map((row) => postsById.get(row.post_id)?.author_user_id),
+        ...reportRows.map((row) =>
+          row.comment_id
+            ? commentsById.get(row.comment_id)?.author_user_id
+            : postsById.get(row.post_id)?.author_user_id,
+        ),
       ]);
       const usersById = buildUsersById(await userRepo.listByIds(userIds));
 
@@ -315,15 +330,20 @@ export const createViewerContentService = (
         }),
         reportsSubmitted: reportRows.map((row: DiscussionPostReportRow) => {
           const post = postsById.get(row.post_id) || null;
-          const authorUserId = post?.author_user_id || null;
+          const comment = row.comment_id
+            ? commentsById.get(row.comment_id) || null
+            : null;
+          const authorUserId = comment?.author_user_id || post?.author_user_id || null;
           return {
             reportId: row.id,
             postId: row.post_id,
+            commentId: row.comment_id,
+            contentType: row.comment_id ? "comment" : "post",
             authorUserId,
             authorNickname: authorUserId
               ? getPublicNickname(usersById.get(authorUserId))
               : null,
-            captionSnippet: getCaptionSnippet(post?.caption),
+            captionSnippet: getCaptionSnippet(comment?.body || post?.caption),
             category: row.category,
             status: row.status,
             submittedAt: row.created_at,

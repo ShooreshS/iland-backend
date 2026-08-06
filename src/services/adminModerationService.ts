@@ -86,6 +86,7 @@ export type ReviewDetail =
       contentType: "comment";
       item: ReviewQueueItem;
       comment: DiscussionCommentRow;
+      reports: ReviewPostReport[];
     };
 
 export type ReviewDecisionResult =
@@ -219,14 +220,21 @@ const mapPostQueueItem = (
   createdAt: row.created_at,
 });
 
-const mapCommentQueueItem = (row: DiscussionCommentRow): ReviewQueueItem => ({
+const mapCommentQueueItem = (
+  row: DiscussionCommentRow,
+  reportSummary?: {
+    reportCount: number;
+    firstReportedAt: string;
+    latestReportedAt: string;
+  } | null,
+): ReviewQueueItem => ({
   contentType: "comment",
   contentId: row.id,
-  reviewSource: "moderation",
-  reportStatus: null,
-  reportCount: null,
-  firstReportedAt: null,
-  latestReportedAt: null,
+  reviewSource: reportSummary ? "user_report" : "moderation",
+  reportStatus: reportSummary ? "open" : null,
+  reportCount: reportSummary?.reportCount ?? null,
+  firstReportedAt: reportSummary?.firstReportedAt ?? null,
+  latestReportedAt: reportSummary?.latestReportedAt ?? null,
   authorUserId: row.author_user_id,
   authorNickname: row.author_public_nickname,
   title: `Comment on ${row.post_id}`,
@@ -392,7 +400,18 @@ export const createAdminModerationService = (
     if (contentType === "all" || contentType === "comment") {
       tasks.push(
         repo.listReviewRequiredComments(normalizedLimit).then((rows) =>
-          rows.map(mapCommentQueueItem),
+          rows.map((row) => mapCommentQueueItem(row)),
+        ),
+      );
+      tasks.push(
+        repo.listOpenReportedComments(normalizedLimit).then((rows) =>
+          rows.map((row) =>
+            mapCommentQueueItem(row.comment, {
+              reportCount: row.reportCount,
+              firstReportedAt: row.firstReportedAt,
+              latestReportedAt: row.latestReportedAt,
+            }),
+          ),
         ),
       );
     }
@@ -401,7 +420,7 @@ export const createAdminModerationService = (
     for (const item of (await Promise.all(tasks)).flat()) {
       const key = `${item.contentType}:${item.contentId}`;
       const current = itemsByKey.get(key);
-      if (!current || current.reviewSource === "user_report") {
+      if (!current || item.reviewSource === "user_report") {
         itemsByKey.set(key, item);
       }
     }
@@ -462,11 +481,19 @@ export const createAdminModerationService = (
     }
 
     const comment = await repo.getCommentById(contentId);
+    const reportSummary =
+      comment?.moderation_status === "published"
+        ? await repo.getOpenReportSummaryForComment(contentId)
+        : null;
+    const reports = reportSummary
+      ? await repo.listOpenReportsForComment(contentId)
+      : [];
     return comment
       ? {
           contentType,
-          item: mapCommentQueueItem(comment),
+          item: mapCommentQueueItem(comment, reportSummary),
           comment,
+          reports: reports.map(mapPostReport),
         }
       : null;
   };
@@ -501,10 +528,16 @@ export const createAdminModerationService = (
       current.item.reviewSource === "user_report" &&
       current.item.reportStatus === "open" &&
       current.item.moderationStatus === "published";
+    const isReportedPublishedComment =
+      input.contentType === "comment" &&
+      current.item.reviewSource === "user_report" &&
+      current.item.reportStatus === "open" &&
+      current.item.moderationStatus === "published";
 
     if (
       current.item.moderationStatus !== "review_required" &&
-      !isReportedPublishedPost
+      !isReportedPublishedPost &&
+      !isReportedPublishedComment
     ) {
       return {
         success: false,
@@ -537,12 +570,19 @@ export const createAdminModerationService = (
                 decision: input.action,
                 reviewedAt,
               })
-          : await repo.updateCommentReviewStatus({
-              contentId: input.contentId,
-              status: nextStatus,
-              decision: input.action,
-              reviewedAt,
-            });
+          : isReportedPublishedComment
+            ? await repo.updateReportedCommentReviewStatus({
+                contentId: input.contentId,
+                status: nextStatus,
+                decision: input.action,
+                reviewedAt,
+              })
+            : await repo.updateCommentReviewStatus({
+                contentId: input.contentId,
+                status: nextStatus,
+                decision: input.action,
+                reviewedAt,
+              });
 
     if (!updated) {
       return {
@@ -566,6 +606,9 @@ export const createAdminModerationService = (
 
     if (isReportedPublishedPost) {
       await repo.markOpenPostReportsReviewed(input.contentId, reviewedAt);
+    }
+    if (isReportedPublishedComment) {
+      await repo.markOpenCommentReportsReviewed(input.contentId, reviewedAt);
     }
 
     return {

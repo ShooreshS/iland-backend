@@ -300,6 +300,8 @@ export type ViewerBlockedUserDto = {
 export type ViewerSubmittedReportDto = {
   reportId: string;
   postId: string;
+  commentId: string | null;
+  contentType: "post" | "comment";
   authorUserId: string | null;
   authorNickname: string | null;
   captionSnippet: string | null;

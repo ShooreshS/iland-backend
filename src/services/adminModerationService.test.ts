@@ -3,6 +3,7 @@ import { generateKeyPairSync } from "node:crypto";
 import { hashOpaqueBearerToken } from "../auth/tokens";
 import type {
   AdminReviewerRow,
+  DiscussionCommentRow,
   DiscussionPostRow,
   ModerationReviewActionRow,
   PollOptionRow,
@@ -153,6 +154,33 @@ const createPostRow = (
   ...overrides,
 });
 
+const createCommentRow = (
+  overrides: Partial<DiscussionCommentRow> = {},
+): DiscussionCommentRow => ({
+  id: "comment-1",
+  post_id: "post-1",
+  author_user_id: "creator-2",
+  author_public_nickname: "commenter",
+  body: "A reported comment",
+  moderation_status: "published",
+  moderation_model: "omni-moderation-latest",
+  moderation_flagged: false,
+  moderation_categories: {},
+  moderation_category_scores: {},
+  moderation_applied_input_types: {},
+  moderation_raw: null,
+  moderated_at: FIXED_TIME,
+  moderation_error: null,
+  moderation_policy_version: "gate1-v2",
+  human_review_status: null,
+  human_review_decision: null,
+  human_reviewed_at: null,
+  like_count: 0,
+  created_at: FIXED_TIME,
+  updated_at: FIXED_TIME,
+  ...overrides,
+});
+
 const option: PollOptionRow = {
   id: "option-1",
   poll_id: "poll-1",
@@ -258,11 +286,14 @@ const createBaseService = (overrides: Record<string, unknown> = {}) =>
       listReviewRequiredPosts: async () => [],
       listOpenReportedPosts: async () => [],
       listReviewRequiredComments: async () => [],
+      listOpenReportedComments: async () => [],
       getPollById: async () => createPollRow(),
       getPostById: async () => null,
       getOpenReportSummaryForPost: async () => null,
       listOpenReportsForPost: async () => [],
       getCommentById: async () => null,
+      getOpenReportSummaryForComment: async () => null,
+      listOpenReportsForComment: async () => [],
       updatePollReviewStatus: async (input: any) =>
         createPollRow({
           moderation_status: input.status,
@@ -273,7 +304,9 @@ const createBaseService = (overrides: Record<string, unknown> = {}) =>
       updatePostReviewStatus: async () => null,
       updateReportedPostReviewStatus: async () => null,
       updateCommentReviewStatus: async () => null,
+      updateReportedCommentReviewStatus: async () => null,
       markOpenPostReportsReviewed: async () => undefined,
+      markOpenCommentReportsReviewed: async () => undefined,
       insertReviewAction: async (input: any) =>
         createReviewActionRow({
           content_type: input.contentType,
@@ -387,6 +420,34 @@ describe("adminModerationService", () => {
     });
   });
 
+  it("lists open reported published comments in the comments queue", async () => {
+    const service = createBaseService({
+      repositoryLike: {
+        listReviewRequiredComments: async () => [],
+        listOpenReportedComments: async () => [
+          {
+            comment: createCommentRow(),
+            reportCount: 2,
+            firstReportedAt: "2026-07-17T12:05:00.000Z",
+            latestReportedAt: "2026-07-17T12:08:00.000Z",
+          },
+        ],
+      },
+    });
+
+    const items = await service.listQueue("comment", 10);
+
+    expect(items).toHaveLength(1);
+    expect(items[0]).toMatchObject({
+      contentType: "comment",
+      contentId: "comment-1",
+      reviewSource: "user_report",
+      reportStatus: "open",
+      reportCount: 2,
+      moderationStatus: "published",
+    });
+  });
+
   it("includes a signed preview URL for stored discussion post images", async () => {
     const service = createBaseService({
       repositoryLike: {
@@ -425,6 +486,50 @@ describe("adminModerationService", () => {
         {
           category: "misinformation",
           comment: "This claim needs a source.",
+          reporterUserId: "reporter-1",
+        },
+      ],
+    });
+  });
+
+  it("returns report details for a reported comment", async () => {
+    const service = createBaseService({
+      repositoryLike: {
+        getCommentById: async () => createCommentRow(),
+        getOpenReportSummaryForComment: async () => ({
+          reportCount: 1,
+          firstReportedAt: "2026-07-17T12:05:00.000Z",
+          latestReportedAt: "2026-07-17T12:05:00.000Z",
+        }),
+        listOpenReportsForComment: async () => [
+          {
+            id: "report-1",
+            post_id: "post-1",
+            comment_id: "comment-1",
+            reporter_user_id: "reporter-1",
+            category: "harassment",
+            comment: "This comment targets another user.",
+            status: "open",
+            created_at: "2026-07-17T12:05:00.000Z",
+            updated_at: "2026-07-17T12:05:00.000Z",
+          },
+        ],
+      },
+    });
+
+    const detail = await service.getReviewDetail("comment", "comment-1");
+
+    expect(detail).toMatchObject({
+      contentType: "comment",
+      item: {
+        reviewSource: "user_report",
+        reportCount: 1,
+      },
+      reports: [
+        {
+          postId: "post-1",
+          commentId: "comment-1",
+          category: "harassment",
           reporterUserId: "reporter-1",
         },
       ],
@@ -517,6 +622,65 @@ describe("adminModerationService", () => {
     if (result.success) {
       expect(result.reviewAction).toMatchObject({
         content_type: "discussion_post",
+        previous_status: "published",
+        new_status: "published",
+      });
+    }
+  });
+
+  it("approves a reported published comment and closes its reports", async () => {
+    let closedReports = false;
+    const service = createBaseService({
+      repositoryLike: {
+        getCommentById: async () => createCommentRow(),
+        getOpenReportSummaryForComment: async () => ({
+          reportCount: 1,
+          firstReportedAt: "2026-07-17T12:05:00.000Z",
+          latestReportedAt: "2026-07-17T12:05:00.000Z",
+        }),
+        listOpenReportsForComment: async () => [],
+        updateReportedCommentReviewStatus: async (input: any) =>
+          createCommentRow({
+            moderation_status: input.status,
+            human_review_status: "reviewed",
+            human_review_decision: input.decision,
+            human_reviewed_at: input.reviewedAt,
+          }),
+        markOpenCommentReportsReviewed: async () => {
+          closedReports = true;
+        },
+        insertReviewAction: async (input: any) =>
+          createReviewActionRow({
+            content_type: input.contentType,
+            content_id: input.contentId,
+            reviewer_verified_identity_id: input.reviewerVerifiedIdentityId,
+            reviewer_user_id: input.reviewerUserId,
+            action: input.action,
+            previous_status: input.previousStatus,
+            new_status: input.newStatus,
+          }),
+      },
+    });
+    const auth = await service.requireAdmin("Bearer oidc-access-token");
+    if (!auth.ok) {
+      throw new Error("Expected admin auth success.");
+    }
+
+    const result = await service.applyDecision({
+      admin: auth.admin,
+      contentType: "comment",
+      contentId: "comment-1",
+      action: "approve",
+    });
+
+    expect(result).toMatchObject({
+      success: true,
+      status: "published",
+    });
+    expect(closedReports).toBe(true);
+    if (result.success) {
+      expect(result.reviewAction).toMatchObject({
+        content_type: "discussion_comment",
         previous_status: "published",
         new_status: "published",
       });

@@ -1,6 +1,7 @@
 import { requireSupabaseAdminClient } from "../db/supabaseClient";
 import type {
   AdminReviewerRow,
+  DiscussionCommentOpenReportQueueRow,
   DiscussionCommentRow,
   DiscussionPostOpenReportQueueRow,
   DiscussionPostReportRow,
@@ -25,9 +26,11 @@ const POST_COLUMNS =
   "id,author_user_id,author_public_nickname,post_type,caption,image_url,image_storage_bucket,image_storage_path,image_mime_type,image_size_bytes,image_alt_text,moderation_status,moderation_model,moderation_flagged,moderation_categories,moderation_category_scores,moderation_applied_input_types,moderation_raw,moderated_at,moderation_error,moderation_policy_version,gate2_status,gate2_model,gate2_result,human_review_status,human_review_decision,human_reviewed_at,like_count,comment_count,feed_score,deliberation_id,created_at,updated_at";
 
 const COMMENT_COLUMNS =
-  "id,post_id,author_user_id,author_public_nickname,body,moderation_status,moderation_model,moderation_flagged,moderation_categories,moderation_category_scores,moderation_applied_input_types,moderation_raw,moderated_at,moderation_error,moderation_policy_version,human_review_status,human_review_decision,human_reviewed_at,created_at,updated_at";
+  "id,post_id,author_user_id,author_public_nickname,body,moderation_status,moderation_model,moderation_flagged,moderation_categories,moderation_category_scores,moderation_applied_input_types,moderation_raw,moderated_at,moderation_error,moderation_policy_version,human_review_status,human_review_decision,human_reviewed_at,like_count,created_at,updated_at";
 const REPORT_QUEUE_COLUMNS =
   "post_id,report_count,first_reported_at,latest_reported_at";
+const COMMENT_REPORT_QUEUE_COLUMNS =
+  "comment_id,post_id,report_count,first_reported_at,latest_reported_at";
 const REPORT_COLUMNS =
   "id,post_id,comment_id,reporter_user_id,category,comment,status,created_at,updated_at";
 
@@ -182,12 +185,119 @@ export const adminModerationRepository = {
       : null;
   },
 
+  async listOpenReportedComments(limit: number): Promise<
+    Array<{
+      comment: DiscussionCommentRow;
+      reportCount: number;
+      firstReportedAt: string;
+      latestReportedAt: string;
+    }>
+  > {
+    const supabase = requireSupabaseAdminClient();
+    const { data: reports, error: reportError } = await supabase
+      .from("discussion_comment_open_report_queue")
+      .select(COMMENT_REPORT_QUEUE_COLUMNS)
+      .order("first_reported_at", { ascending: true })
+      .order("comment_id", { ascending: true })
+      .limit(limit)
+      .returns<DiscussionCommentOpenReportQueueRow[]>();
+
+    if (reportError) {
+      throw reportError;
+    }
+
+    const reportRows = reports || [];
+    const commentIds = reportRows.map((row) => row.comment_id);
+    if (commentIds.length === 0) {
+      return [];
+    }
+
+    const { data: comments, error: commentError } = await supabase
+      .from("discussion_comments")
+      .select(COMMENT_COLUMNS)
+      .in("id", commentIds)
+      .eq("moderation_status", "published")
+      .returns<DiscussionCommentRow[]>();
+
+    if (commentError) {
+      throw commentError;
+    }
+
+    const commentsById = new Map(
+      (comments || []).map((comment) => [comment.id, comment]),
+    );
+    return reportRows
+      .map((row) => {
+        const comment = commentsById.get(row.comment_id);
+        return comment
+          ? {
+              comment,
+              reportCount: row.report_count,
+              firstReportedAt: row.first_reported_at,
+              latestReportedAt: row.latest_reported_at,
+            }
+          : null;
+      })
+      .filter(Boolean) as Array<{
+        comment: DiscussionCommentRow;
+        reportCount: number;
+        firstReportedAt: string;
+        latestReportedAt: string;
+      }>;
+  },
+
+  async getOpenReportSummaryForComment(contentId: string): Promise<{
+    reportCount: number;
+    firstReportedAt: string;
+    latestReportedAt: string;
+  } | null> {
+    const supabase = requireSupabaseAdminClient();
+    const { data, error } = await supabase
+      .from("discussion_comment_open_report_queue")
+      .select(COMMENT_REPORT_QUEUE_COLUMNS)
+      .eq("comment_id", contentId)
+      .maybeSingle<DiscussionCommentOpenReportQueueRow>();
+
+    if (error) {
+      throw error;
+    }
+
+    return data
+      ? {
+          reportCount: data.report_count,
+          firstReportedAt: data.first_reported_at,
+          latestReportedAt: data.latest_reported_at,
+        }
+      : null;
+  },
+
   async listOpenReportsForPost(contentId: string): Promise<DiscussionPostReportRow[]> {
     const supabase = requireSupabaseAdminClient();
     const { data, error } = await supabase
       .from("discussion_post_reports")
       .select(REPORT_COLUMNS)
       .eq("post_id", contentId)
+      .is("comment_id", null)
+      .eq("status", "open")
+      .order("created_at", { ascending: true })
+      .order("id", { ascending: true })
+      .returns<DiscussionPostReportRow[]>();
+
+    if (error) {
+      throw error;
+    }
+
+    return data || [];
+  },
+
+  async listOpenReportsForComment(
+    contentId: string,
+  ): Promise<DiscussionPostReportRow[]> {
+    const supabase = requireSupabaseAdminClient();
+    const { data, error } = await supabase
+      .from("discussion_post_reports")
+      .select(REPORT_COLUMNS)
+      .eq("comment_id", contentId)
       .eq("status", "open")
       .order("created_at", { ascending: true })
       .order("id", { ascending: true })
@@ -341,6 +451,7 @@ export const adminModerationRepository = {
         updated_at: reviewedAt,
       })
       .eq("post_id", contentId)
+      .is("comment_id", null)
       .eq("status", "open");
 
     if (error) {
@@ -368,6 +479,47 @@ export const adminModerationRepository = {
     }
 
     return data || null;
+  },
+
+  async updateReportedCommentReviewStatus(input: {
+    contentId: string;
+    status: PollModerationStatus;
+    decision: ModerationReviewAction;
+    reviewedAt: string;
+  }): Promise<DiscussionCommentRow | null> {
+    const supabase = requireSupabaseAdminClient();
+    const { data, error } = await supabase
+      .from("discussion_comments")
+      .update(buildReviewUpdate(input.status, input.decision, input.reviewedAt))
+      .eq("id", input.contentId)
+      .eq("moderation_status", "published")
+      .select(COMMENT_COLUMNS)
+      .maybeSingle<DiscussionCommentRow>();
+
+    if (error) {
+      throw error;
+    }
+
+    return data || null;
+  },
+
+  async markOpenCommentReportsReviewed(
+    contentId: string,
+    reviewedAt: string,
+  ): Promise<void> {
+    const supabase = requireSupabaseAdminClient();
+    const { error } = await supabase
+      .from("discussion_post_reports")
+      .update({
+        status: "reviewed",
+        updated_at: reviewedAt,
+      })
+      .eq("comment_id", contentId)
+      .eq("status", "open");
+
+    if (error) {
+      throw error;
+    }
   },
 
   async insertReviewAction(input: {

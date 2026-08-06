@@ -1,6 +1,7 @@
 import { describe, expect, it } from "bun:test";
 import { generateKeyPairSync } from "node:crypto";
 import type {
+  DiscussionCommentRow,
   DiscussionPostRow,
   DiscussionPostReportRow,
   DiscussionUserBlockRow,
@@ -62,6 +63,33 @@ const createPostRow = (
   comment_count: 2,
   feed_score: 6,
   deliberation_id: null,
+  created_at: FIXED_TIME,
+  updated_at: FIXED_TIME,
+  ...overrides,
+});
+
+const createCommentRow = (
+  overrides: Partial<DiscussionCommentRow> = {},
+): DiscussionCommentRow => ({
+  id: "comment-1",
+  post_id: "reported-post-1",
+  author_user_id: "comment-author-1",
+  author_public_nickname: "comment-author",
+  body: "Reported comment body",
+  moderation_status: "published",
+  moderation_model: null,
+  moderation_flagged: false,
+  moderation_categories: null,
+  moderation_category_scores: null,
+  moderation_applied_input_types: null,
+  moderation_raw: null,
+  moderated_at: null,
+  moderation_error: null,
+  moderation_policy_version: null,
+  human_review_status: null,
+  human_review_decision: null,
+  human_reviewed_at: null,
+  like_count: 0,
   created_at: FIXED_TIME,
   updated_at: FIXED_TIME,
   ...overrides,
@@ -327,6 +355,7 @@ describe("viewerContentService", () => {
             }),
           ];
         },
+        listCommentsByIds: async () => [],
         deleteUserBlock: async () => undefined,
       },
       userRepositoryLike: {
@@ -363,6 +392,8 @@ describe("viewerContentService", () => {
         {
           reportId: "report-1",
           postId: "reported-post-1",
+          commentId: null,
+          contentType: "post",
           authorUserId: "reported-author-1",
           authorNickname: "reported-nick",
           captionSnippet: "Reported c",
@@ -372,6 +403,58 @@ describe("viewerContentService", () => {
         },
       ],
     });
+  });
+
+  it("returns submitted comment reports with the comment author and body", async () => {
+    const service = createViewerContentService({
+      discussionRepositoryLike: {
+        listUserBlocksByBlockerUserId: async () => [],
+        listReportsByReporterUserId: async () => [
+          createReportRow({ comment_id: "comment-1" }),
+        ],
+        listPostsByIds: async (postIds: string[]) => {
+          expect(postIds).toEqual(["reported-post-1"]);
+          return [
+            createPostRow({
+              id: "reported-post-1",
+              author_user_id: "post-author-1",
+            }),
+          ];
+        },
+        listCommentsByIds: async (commentIds: string[]) => {
+          expect(commentIds).toEqual(["comment-1"]);
+          return [createCommentRow()];
+        },
+      },
+      userRepositoryLike: {
+        listByIds: async (userIds: string[]) => {
+          expect(userIds).toEqual(["comment-author-1"]);
+          return [
+            createUserRow({
+              id: "comment-author-1",
+              public_nickname: "comment-nick",
+            }),
+          ];
+        },
+      },
+    } as any);
+
+    const result = await service.getUserInteractions("user-1");
+
+    expect(result.reportsSubmitted).toEqual([
+      {
+        reportId: "report-1",
+        postId: "reported-post-1",
+        commentId: "comment-1",
+        contentType: "comment",
+        authorUserId: "comment-author-1",
+        authorNickname: "comment-nick",
+        captionSnippet: "Reported c",
+        category: "spam",
+        status: "open",
+        submittedAt: FIXED_TIME,
+      },
+    ]);
   });
 
   it("unblocks a user by blocked user id", async () => {
