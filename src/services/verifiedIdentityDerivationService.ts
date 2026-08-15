@@ -1,6 +1,8 @@
 import { createHmac } from "node:crypto";
 
-export const SUPPORTED_IDENTITY_NORMALIZATION_VERSIONS = [1] as const;
+// v1: legacy Iranian 10-digit NIDN.
+// v2: country-scoped Swedish personnummer (`SWE:<12 digits>`) before SHA-512.
+export const SUPPORTED_IDENTITY_NORMALIZATION_VERSIONS = [1, 2] as const;
 const SUPPORTED_IDENTITY_NORMALIZATION_VERSION_SET = new Set<number>(
   SUPPORTED_IDENTITY_NORMALIZATION_VERSIONS,
 );
@@ -42,4 +44,3 @@ export const deriveCanonicalIdentityKey = (params: {
 
   return createHmac("sha256", pepper).update(normalizedNidnh).digest("hex");
 };
-
