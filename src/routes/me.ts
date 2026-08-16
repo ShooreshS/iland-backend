@@ -22,6 +22,12 @@ const selectedLandUpdateSchema = z
   })
   .strict();
 
+const selectedFlagImageUpdateSchema = z
+  .object({
+    flagImageId: z.string().uuid().nullable(),
+  })
+  .strict();
+
 const selectedLandFlagUpdateSchema = z
   .object({
     landId: z.string().trim().min(1).nullable().optional(),
@@ -97,6 +103,7 @@ const parseOptionalLimitQueryParam = (
 const selectionErrorStatusMap: Record<NonNullable<ViewerLandSelectionResultDto["errorCode"]>, number> = {
   USER_NOT_FOUND: 401,
   LAND_NOT_FOUND: 404,
+  FLAG_IMAGE_NOT_FOUND: 404,
   INVALID_INPUT: 400,
 };
 
@@ -427,6 +434,52 @@ const updateViewerLandRoute: RouteDefinition = {
   },
 };
 
+const updateViewerFlagImageRoute: RouteDefinition = {
+  method: "PATCH",
+  path: "/me/flag-image",
+  handler: async ({ request }) => {
+    const viewerResult = await requireViewer(request);
+    if (!viewerResult.ok) {
+      return viewerResult.response;
+    }
+
+    let requestBody: unknown;
+    try {
+      requestBody = await request.json();
+    } catch {
+      return json(
+        {
+          error: "invalid_request",
+          message: "Request body must be valid JSON.",
+        },
+        400,
+      );
+    }
+
+    const parsedBody = selectedFlagImageUpdateSchema.safeParse(requestBody);
+    if (!parsedBody.success) {
+      return json(
+        {
+          error: "invalid_request",
+          message: "Flag image selection request body is invalid.",
+        },
+        400,
+      );
+    }
+
+    const result = await viewerProfileService.updateSelectedFlagImage(
+      viewerResult.viewer.userId,
+      parsedBody.data,
+    );
+    return json(
+      result,
+      result.success
+        ? 200
+        : selectionErrorStatusMap[result.errorCode || "INVALID_INPUT"],
+    );
+  },
+};
+
 const updateViewerLandFlagRoute: RouteDefinition = {
   method: "PATCH",
   path: "/me/land/flag",
@@ -643,6 +696,7 @@ export const meRoutes: RouteDefinition[] = [
   updateViewerPublicNicknameRoute,
   getViewerLandStateRoute,
   updateViewerLandRoute,
+  updateViewerFlagImageRoute,
   updateViewerLandFlagRoute,
   createViewerLandRoute,
   issueViewerWalletCredentialRoute,

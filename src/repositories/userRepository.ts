@@ -2,7 +2,7 @@ import { requireSupabaseAdminClient } from "../db/supabaseClient";
 import type { NewUserRow, UserRow } from "../types/db";
 
 const USER_COLUMNS =
-  "id,username,display_name,public_nickname,onboarding_status,verification_level,has_wallet,wallet_credential_id,selected_land_id,preferred_language,auth_generation,account_status,created_at,updated_at";
+  "id,username,display_name,public_nickname,onboarding_status,verification_level,has_wallet,wallet_credential_id,selected_land_id,selected_flag_image_id,preferred_language,auth_generation,account_status,created_at,updated_at";
 
 export const userRepository = {
   async getById(userId: string): Promise<UserRow | null> {
@@ -54,6 +54,7 @@ export const userRepository = {
         has_wallet: input.has_wallet,
         wallet_credential_id: input.wallet_credential_id,
         selected_land_id: input.selected_land_id,
+        selected_flag_image_id: input.selected_flag_image_id ?? null,
         preferred_language: input.preferred_language,
         auth_generation: input.auth_generation ?? 1,
         account_status: input.account_status ?? "active",
@@ -116,6 +117,28 @@ export const userRepository = {
       .from("users")
       .update({
         selected_land_id: selectedLandId,
+      })
+      .eq("id", userId)
+      .select(USER_COLUMNS)
+      .maybeSingle<UserRow>();
+
+    if (error) {
+      throw error;
+    }
+
+    return data || null;
+  },
+
+  async updateSelectedFlagImageId(
+    userId: string,
+    selectedFlagImageId: string | null,
+  ): Promise<UserRow | null> {
+    const supabase = requireSupabaseAdminClient();
+
+    const { data, error } = await supabase
+      .from("users")
+      .update({
+        selected_flag_image_id: selectedFlagImageId,
       })
       .eq("id", userId)
       .select(USER_COLUMNS)

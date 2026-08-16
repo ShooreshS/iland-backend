@@ -1,5 +1,6 @@
 import { createHmac, randomInt, randomUUID } from "node:crypto";
 import env from "../config/env";
+import flagImageService from "./flagImageService";
 import identityProfileRepository from "../repositories/identityProfileRepository";
 import landRepository from "../repositories/landRepository";
 import pollRepository from "../repositories/pollRepository";
@@ -35,6 +36,10 @@ import type {
 
 type UpdateSelectedLandInput = {
   landId: string | null;
+};
+
+type UpdateSelectedFlagImageInput = {
+  flagImageId: string | null;
 };
 
 type UpdateSelectedLandFlagInput = {
@@ -382,6 +387,7 @@ const mapUserToDto = (user: UserRow) => ({
   hasWallet: user.has_wallet,
   walletCredentialId: user.wallet_credential_id,
   selectedLandId: user.selected_land_id,
+  selectedFlagImageId: user.selected_flag_image_id || null,
   ...(user.preferred_language ? { preferredLanguage: user.preferred_language } : null),
   createdAt: user.created_at,
   updatedAt: user.updated_at,
@@ -475,9 +481,10 @@ const buildCurrentViewerProfile = async (
   user: UserRow,
 ): Promise<CurrentViewerProfileDto> => {
   const resolvedUser = await ensurePublicNickname(user);
-  const [identityProfileRow, selectedLand, walletCredentialRow] = await Promise.all([
+  const [identityProfileRow, selectedLand, selectedFlagImage, walletCredentialRow] = await Promise.all([
     identityProfileRepository.getByUserId(resolvedUser.id),
     resolveSelectedLand(resolvedUser),
+    flagImageService.getActiveById(resolvedUser.selected_flag_image_id, resolvedUser.id),
     walletCredentialRepository.getByUserId(resolvedUser.id),
   ]);
 
@@ -500,14 +507,17 @@ const buildCurrentViewerProfile = async (
     wallet: buildViewerWalletState(resolvedUser, walletCredential),
     walletCredential,
     selectedLand,
+    selectedFlagImage,
     primaryCitizenship: null,
   };
 };
 
 const buildViewerLandState = async (user: UserRow): Promise<ViewerLandStateDto> => {
-  const [activeLands, selectedLand] = await Promise.all([
+  const [activeLands, selectedLand, selectedFlagImage, flagImages] = await Promise.all([
     landRepository.listActive(),
     resolveSelectedLand(user),
+    flagImageService.getActiveById(user.selected_flag_image_id, user.id),
+    flagImageService.listActive(user.id),
   ]);
 
   const mappedLands = activeLands.map(mapLandRowToDto);
@@ -518,6 +528,9 @@ const buildViewerLandState = async (user: UserRow): Promise<ViewerLandStateDto> 
   return {
     selectedLandId: normalizeText(user.selected_land_id),
     selectedLand,
+    selectedFlagImageId: normalizeText(user.selected_flag_image_id),
+    selectedFlagImage,
+    flagImages,
     lands: mappedLands,
   };
 };
@@ -1040,6 +1053,43 @@ export const viewerProfileService = {
       : null;
 
     return mapSelectionSuccess(updatedUser, selectedLand);
+  },
+
+  async updateSelectedFlagImage(
+    viewerUserId: string,
+    input: UpdateSelectedFlagImageInput,
+  ): Promise<ViewerLandSelectionResultDto> {
+    const user = await userRepository.getById(viewerUserId);
+    if (!user) {
+      return createLandSelectionFailure(
+        "USER_NOT_FOUND",
+        "The current user could not be resolved.",
+      );
+    }
+
+    const normalizedFlagImageId = normalizeText(input.flagImageId);
+    if (normalizedFlagImageId) {
+      const flagImage = await flagImageService.getActiveById(normalizedFlagImageId);
+      if (!flagImage) {
+        return createLandSelectionFailure(
+          "FLAG_IMAGE_NOT_FOUND",
+          "The selected flag image does not exist.",
+        );
+      }
+    }
+
+    const updatedUser = await userRepository.updateSelectedFlagImageId(
+      user.id,
+      normalizedFlagImageId,
+    );
+    if (!updatedUser) {
+      return createLandSelectionFailure(
+        "USER_NOT_FOUND",
+        "The current user could not be resolved.",
+      );
+    }
+
+    return mapSelectionSuccess(updatedUser);
   },
 
   async updateSelectedLandFlag(

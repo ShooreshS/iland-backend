@@ -19,6 +19,7 @@ export type UserRow = {
   has_wallet: boolean;
   wallet_credential_id: string | null;
   selected_land_id: string | null;
+  selected_flag_image_id?: string | null;
   preferred_language: string | null;
   auth_generation: number;
   account_status: "active" | "disabled" | "banned";
@@ -35,6 +36,7 @@ export type NewUserRow = {
   has_wallet: boolean;
   wallet_credential_id: string | null;
   selected_land_id: string | null;
+  selected_flag_image_id?: string | null;
   preferred_language: string | null;
   auth_generation?: number;
   account_status?: "active" | "disabled" | "banned";
@@ -877,6 +879,39 @@ export type NewLandRow = {
   founder_user_id?: string | null;
   description?: string | null;
   is_active?: boolean;
+};
+
+export type FlagImageUploadStatus = "signed" | "active" | "abandoned";
+
+export type FlagImageRow = {
+  id: string;
+  name: string;
+  creator_user_id: string | null;
+  storage_bucket: string;
+  storage_path: string;
+  original_file_name: string | null;
+  mime_type: string;
+  size_bytes: number;
+  width: number;
+  height: number;
+  upload_status: FlagImageUploadStatus;
+  completed_at: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type NewFlagImageRow = {
+  id?: string;
+  name: string;
+  creator_user_id: string;
+  storage_bucket: string;
+  storage_path: string;
+  original_file_name?: string | null;
+  mime_type: string;
+  size_bytes: number;
+  width: number;
+  height: number;
+  upload_status?: FlagImageUploadStatus;
 };
 
 export type VoteRow = {

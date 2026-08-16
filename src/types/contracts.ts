@@ -1036,6 +1036,7 @@ export type AppUserDto = {
   hasWallet: boolean;
   walletCredentialId: string | null;
   selectedLandId: string | null;
+  selectedFlagImageId: string | null;
   preferredLanguage?: string;
   createdAt: string;
   updatedAt: string;
@@ -1233,12 +1234,72 @@ export type CurrentViewerProfileDto = {
   wallet: ViewerWalletStateDto;
   walletCredential: WalletCredentialDto | null;
   selectedLand: LandDto | null;
+  selectedFlagImage: FlagImageDto | null;
   primaryCitizenship: null;
+};
+
+export type FlagImageDto = {
+  id: string;
+  name: string;
+  viewerIsCreator: boolean;
+  imageUrl: string;
+  mimeType: string;
+  sizeBytes: number;
+  width: number;
+  height: number;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type FlagImageUploadDto = {
+  id: string;
+  uploadUrl: string;
+  storageBucket: string;
+  storagePath: string;
+  mimeType: string;
+  sizeBytes: number;
+  width: number;
+  height: number;
+  expiresInSeconds: number;
+  maxSizeBytes: number;
+};
+
+export type FlagImageErrorCode =
+  | "USER_NOT_FOUND"
+  | "FLAG_IMAGE_NOT_FOUND"
+  | "FLAG_IMAGE_IN_USE"
+  | "NOT_FLAG_IMAGE_CREATOR"
+  | "VALIDATION_FAILED"
+  | "STORAGE_FAILED"
+  | "UPLOAD_NOT_READY";
+
+export type CreateFlagImageUploadResultDto = {
+  success: boolean;
+  upload?: FlagImageUploadDto;
+  errorCode?: FlagImageErrorCode;
+  message?: string;
+};
+
+export type CompleteFlagImageUploadResultDto = {
+  success: boolean;
+  flagImage?: FlagImageDto;
+  errorCode?: FlagImageErrorCode;
+  message?: string;
+};
+
+export type DeleteFlagImageResultDto = {
+  success: boolean;
+  deletedFlagImageId?: string;
+  errorCode?: FlagImageErrorCode;
+  message?: string;
 };
 
 export type ViewerLandStateDto = {
   selectedLandId: string | null;
   selectedLand: LandDto | null;
+  selectedFlagImageId: string | null;
+  selectedFlagImage: FlagImageDto | null;
+  flagImages: FlagImageDto[];
   lands: LandDto[];
 };
 
@@ -1247,7 +1308,7 @@ export type ViewerLandSelectionResultDto = {
   profile?: CurrentViewerProfileDto;
   state?: ViewerLandStateDto;
   land?: LandDto | null;
-  errorCode?: "USER_NOT_FOUND" | "LAND_NOT_FOUND" | "INVALID_INPUT";
+  errorCode?: "USER_NOT_FOUND" | "LAND_NOT_FOUND" | "FLAG_IMAGE_NOT_FOUND" | "INVALID_INPUT";
   message?: string;
 };
 

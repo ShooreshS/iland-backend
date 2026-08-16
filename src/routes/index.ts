@@ -2,6 +2,7 @@ import { authRoutes } from "./auth";
 import { adminModerationRoutes } from "./adminModeration";
 import { discussionMediaRoutes } from "./discussionMedia";
 import { discussionRoutes } from "./discussions";
+import { flagImageRoutes } from "./flagImages";
 import { healthRoutes } from "./health";
 import { idpRoutes } from "./idp";
 import { mapRoutes } from "./map";
@@ -16,6 +17,7 @@ export const routes: RouteDefinition[] = [
   ...authRoutes,
   ...discussionMediaRoutes,
   ...discussionRoutes,
+  ...flagImageRoutes,
   ...healthRoutes,
   ...idpRoutes,
   ...pollRoutes,
