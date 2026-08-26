@@ -5,6 +5,7 @@ import { withRequestLogging } from "./middleware/requestLogger";
 import { resolveRoute } from "./routes";
 import { createZkpAutoResultPublisherService } from "./services/zkpAutoResultPublisherService";
 import { createPollMapRefreshWorker } from "./services/pollMapRefreshWorker";
+import { createNotificationDeliveryWorker } from "./services/notificationDeliveryWorker";
 import type { RouteHandler } from "./types/http";
 
 const baseHandler: RouteHandler = async (context) => {
@@ -40,6 +41,13 @@ if (env.pollMapRefreshWorker.enabled) {
   pollMapRefreshWorker.start();
 } else {
   console.info("[pollMapRefreshWorker] disabled");
+}
+
+const notificationDeliveryWorker = createNotificationDeliveryWorker();
+if (env.notifications.delivery.enabled) {
+  notificationDeliveryWorker.start();
+} else {
+  console.info("[notificationDeliveryWorker] disabled");
 }
 
 const zkpAutoResultPublisher = createZkpAutoResultPublisherService();

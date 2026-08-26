@@ -148,6 +148,20 @@ const parsed = z
     WALLET_ISSUER_SIGNING_SECRET: z.string().min(1).optional(),
     VERIFIED_IDENTITY_PEPPER: z.string().min(1).optional(),
     OPENAI_API_KEY: z.string().min(1).optional(),
+    NOTIFICATION_PUSH_DELIVERY_ENABLED: z.string().optional(),
+    NOTIFICATION_DELIVERY_INTERVAL_MS: z.coerce.number().int().min(250).optional(),
+    NOTIFICATION_DELIVERY_BATCH_SIZE: z.coerce.number().int().min(1).max(100).optional(),
+    NOTIFICATION_DELIVERY_LOCK_TIMEOUT_SECONDS: z.coerce.number().int().min(10).optional(),
+    NOTIFICATION_DELIVERY_MAX_ATTEMPTS: z.coerce.number().int().min(1).optional(),
+    NOTIFICATION_DELIVERY_RETRY_BASE_MS: z.coerce.number().int().min(1_000).optional(),
+    NOTIFICATION_TOKEN_ENCRYPTION_KEY: z.string().min(1).optional(),
+    APNS_TEAM_ID: z.string().min(1).optional(),
+    APNS_KEY_ID: z.string().min(1).optional(),
+    APNS_PRIVATE_KEY: z.string().min(1).optional(),
+    APNS_BUNDLE_ID: z.string().min(1).optional(),
+    FCM_PROJECT_ID: z.string().min(1).optional(),
+    FCM_CLIENT_EMAIL: z.string().email().optional(),
+    FCM_PRIVATE_KEY: z.string().min(1).optional(),
     POLL_MAP_REFRESH_WORKER_ENABLED: z.string().optional(),
     POLL_MAP_REFRESH_INTERVAL_MS: z.coerce.number().int().min(250).optional(),
     POLL_MAP_REFRESH_PENDING_THRESHOLD: z.coerce.number().int().min(1).optional(),
@@ -252,6 +266,39 @@ const parsed = z
           "AUTH_ENABLE_TRANSITIONAL_CRYPTO_BYPASS must be false in production.",
         path: ["AUTH_ENABLE_TRANSITIONAL_CRYPTO_BYPASS"],
       });
+    }
+
+    const notificationDeliveryEnabled =
+      input.NOTIFICATION_PUSH_DELIVERY_ENABLED !== undefined
+        ? toBoolean(input.NOTIFICATION_PUSH_DELIVERY_ENABLED)
+        : false;
+    if (!skipServerOnlyAuthValidation && notificationDeliveryEnabled) {
+      if (!input.NOTIFICATION_TOKEN_ENCRYPTION_KEY) {
+        context.addIssue({
+          code: z.ZodIssueCode.custom,
+          message:
+            "NOTIFICATION_TOKEN_ENCRYPTION_KEY is required when push delivery is enabled.",
+          path: ["NOTIFICATION_TOKEN_ENCRYPTION_KEY"],
+        });
+      }
+
+      const hasApns = Boolean(
+        input.APNS_TEAM_ID &&
+          input.APNS_KEY_ID &&
+          input.APNS_PRIVATE_KEY &&
+          input.APNS_BUNDLE_ID,
+      );
+      const hasFcm = Boolean(
+        input.FCM_PROJECT_ID && input.FCM_CLIENT_EMAIL && input.FCM_PRIVATE_KEY,
+      );
+      if (!hasApns && !hasFcm) {
+        context.addIssue({
+          code: z.ZodIssueCode.custom,
+          message:
+            "At least one complete APNs or FCM credential set is required when push delivery is enabled.",
+          path: ["NOTIFICATION_PUSH_DELIVERY_ENABLED"],
+        });
+      }
     }
 
     if (
@@ -739,6 +786,34 @@ const parsed = z
     ),
     VERIFIED_IDENTITY_PEPPER: emptyToUndefined(process.env.VERIFIED_IDENTITY_PEPPER),
     OPENAI_API_KEY: emptyToUndefined(process.env.OPENAI_API_KEY),
+    NOTIFICATION_PUSH_DELIVERY_ENABLED: emptyToUndefined(
+      process.env.NOTIFICATION_PUSH_DELIVERY_ENABLED,
+    ),
+    NOTIFICATION_DELIVERY_INTERVAL_MS: emptyToUndefined(
+      process.env.NOTIFICATION_DELIVERY_INTERVAL_MS,
+    ),
+    NOTIFICATION_DELIVERY_BATCH_SIZE: emptyToUndefined(
+      process.env.NOTIFICATION_DELIVERY_BATCH_SIZE,
+    ),
+    NOTIFICATION_DELIVERY_LOCK_TIMEOUT_SECONDS: emptyToUndefined(
+      process.env.NOTIFICATION_DELIVERY_LOCK_TIMEOUT_SECONDS,
+    ),
+    NOTIFICATION_DELIVERY_MAX_ATTEMPTS: emptyToUndefined(
+      process.env.NOTIFICATION_DELIVERY_MAX_ATTEMPTS,
+    ),
+    NOTIFICATION_DELIVERY_RETRY_BASE_MS: emptyToUndefined(
+      process.env.NOTIFICATION_DELIVERY_RETRY_BASE_MS,
+    ),
+    NOTIFICATION_TOKEN_ENCRYPTION_KEY: emptyToUndefined(
+      process.env.NOTIFICATION_TOKEN_ENCRYPTION_KEY,
+    ),
+    APNS_TEAM_ID: emptyToUndefined(process.env.APNS_TEAM_ID),
+    APNS_KEY_ID: emptyToUndefined(process.env.APNS_KEY_ID),
+    APNS_PRIVATE_KEY: emptyToUndefined(process.env.APNS_PRIVATE_KEY),
+    APNS_BUNDLE_ID: emptyToUndefined(process.env.APNS_BUNDLE_ID),
+    FCM_PROJECT_ID: emptyToUndefined(process.env.FCM_PROJECT_ID),
+    FCM_CLIENT_EMAIL: emptyToUndefined(process.env.FCM_CLIENT_EMAIL),
+    FCM_PRIVATE_KEY: emptyToUndefined(process.env.FCM_PRIVATE_KEY),
     POLL_MAP_REFRESH_WORKER_ENABLED: emptyToUndefined(
       process.env.POLL_MAP_REFRESH_WORKER_ENABLED,
     ),
@@ -958,6 +1033,10 @@ const walletIssuerSigningSecret =
 const verifiedIdentityPepper =
   parsed.VERIFIED_IDENTITY_PEPPER || "iland-backend-verified-identity-dev-pepper";
 const supabaseEnabled = Boolean(parsed.SUPABASE_URL && parsed.SUPABASE_SERVICE_ROLE_KEY);
+const notificationPushDeliveryEnabled =
+  (parsed.NOTIFICATION_PUSH_DELIVERY_ENABLED !== undefined
+    ? toBoolean(parsed.NOTIFICATION_PUSH_DELIVERY_ENABLED)
+    : false) && supabaseEnabled;
 const pollMapRefreshWorkerEnabled =
   (parsed.POLL_MAP_REFRESH_WORKER_ENABLED !== undefined
     ? toBoolean(parsed.POLL_MAP_REFRESH_WORKER_ENABLED)
@@ -1101,6 +1180,38 @@ export const env = Object.freeze({
   }),
   openai: Object.freeze({
     apiKeyConfigured: Boolean(parsed.OPENAI_API_KEY),
+  }),
+  notifications: Object.freeze({
+    tokenEncryptionKey: parsed.NOTIFICATION_TOKEN_ENCRYPTION_KEY ?? null,
+    delivery: Object.freeze({
+      enabled: notificationPushDeliveryEnabled,
+      intervalMs: parsed.NOTIFICATION_DELIVERY_INTERVAL_MS ?? 5_000,
+      batchSize: parsed.NOTIFICATION_DELIVERY_BATCH_SIZE ?? 25,
+      lockTimeoutSeconds:
+        parsed.NOTIFICATION_DELIVERY_LOCK_TIMEOUT_SECONDS ?? 120,
+      maxAttempts: parsed.NOTIFICATION_DELIVERY_MAX_ATTEMPTS ?? 5,
+      retryBaseMs: parsed.NOTIFICATION_DELIVERY_RETRY_BASE_MS ?? 30_000,
+    }),
+    apns: Object.freeze({
+      configured: Boolean(
+        parsed.APNS_TEAM_ID &&
+          parsed.APNS_KEY_ID &&
+          parsed.APNS_PRIVATE_KEY &&
+          parsed.APNS_BUNDLE_ID,
+      ),
+      teamId: parsed.APNS_TEAM_ID ?? null,
+      keyId: parsed.APNS_KEY_ID ?? null,
+      privateKey: parsed.APNS_PRIVATE_KEY?.replace(/\\n/g, "\n") ?? null,
+      bundleId: parsed.APNS_BUNDLE_ID ?? null,
+    }),
+    fcm: Object.freeze({
+      configured: Boolean(
+        parsed.FCM_PROJECT_ID && parsed.FCM_CLIENT_EMAIL && parsed.FCM_PRIVATE_KEY,
+      ),
+      projectId: parsed.FCM_PROJECT_ID ?? null,
+      clientEmail: parsed.FCM_CLIENT_EMAIL ?? null,
+      privateKey: parsed.FCM_PRIVATE_KEY?.replace(/\\n/g, "\n") ?? null,
+    }),
   }),
   pollMapRefreshWorker: Object.freeze({
     enabled: pollMapRefreshWorkerEnabled,

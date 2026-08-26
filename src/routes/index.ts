@@ -7,6 +7,7 @@ import { healthRoutes } from "./health";
 import { idpRoutes } from "./idp";
 import { mapRoutes } from "./map";
 import { meRoutes } from "./me";
+import { notificationRoutes } from "./notifications";
 import { pollRoutes } from "./polls";
 import { referenceRoutes } from "./reference";
 import { verificationRoutes } from "./verification";
@@ -22,6 +23,7 @@ export const routes: RouteDefinition[] = [
   ...idpRoutes,
   ...pollRoutes,
   ...verificationRoutes,
+  ...notificationRoutes,
   ...meRoutes,
   ...mapRoutes,
   ...referenceRoutes,
