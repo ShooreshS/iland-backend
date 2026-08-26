@@ -32,3 +32,5 @@ scripts/human-ceremony/final/
 # Content modration
 moderation/policy.json
 moderation/openai-api-key.txt
+
+supabase/.temp
