@@ -25,6 +25,68 @@ const sha256 = (bytes) => createHash("sha256").update(bytes).digest("hex");
 const finiteNumber = (value) => Number.isFinite(value) ? value : null;
 const integer = (value) => Number.isInteger(value) ? value : null;
 const stringOrNull = (value) => typeof value === "string" && value.length > 0 ? value : null;
+const rounded = (value) => Math.round(value * 1000) / 1000;
+const median = (sorted) => sorted.length % 2 === 0
+  ? (sorted[sorted.length / 2 - 1] + sorted[sorted.length / 2]) / 2
+  : sorted[Math.floor(sorted.length / 2)];
+const nearestRank = (sorted, probability) =>
+  sorted[Math.max(0, Math.ceil(probability * sorted.length) - 1)];
+const seededRandom = (seedMaterial) => {
+  let state = Number.parseInt(sha256(seedMaterial).slice(0, 8), 16) >>> 0;
+  return () => {
+    state += 0x6D2B79F5;
+    let value = state;
+    value = Math.imul(value ^ (value >>> 15), value | 1);
+    value ^= value + Math.imul(value ^ (value >>> 7), value | 61);
+    return ((value ^ (value >>> 14)) >>> 0) / 4294967296;
+  };
+};
+const metricSummary = (values) => {
+  const sorted = values.filter(Number.isFinite).sort((a, b) => a - b);
+  if (sorted.length === 0) return null;
+  const mean = sorted.reduce((sum, value) => sum + value, 0) / sorted.length;
+  const sampleStdDev = sorted.length > 1
+    ? Math.sqrt(
+      sorted.reduce((sum, value) => sum + (value - mean) ** 2, 0) / (sorted.length - 1),
+    )
+    : null;
+  const random = seededRandom(JSON.stringify(sorted));
+  const bootstrapMeans = [];
+  const bootstrapMedians = [];
+  for (let repetition = 0; repetition < 10000; repetition += 1) {
+    const sample = Array.from(
+      { length: sorted.length },
+      () => sorted[Math.floor(random() * sorted.length)],
+    ).sort((a, b) => a - b);
+    bootstrapMeans.push(sample.reduce((sum, value) => sum + value, 0) / sample.length);
+    bootstrapMedians.push(median(sample));
+  }
+  bootstrapMeans.sort((a, b) => a - b);
+  bootstrapMedians.sort((a, b) => a - b);
+  return {
+    n: sorted.length,
+    min: rounded(sorted[0]),
+    median: rounded(median(sorted)),
+    mean: rounded(mean),
+    sampleStdDev: sampleStdDev === null ? null : rounded(sampleStdDev),
+    p50NearestRank: rounded(nearestRank(sorted, 0.5)),
+    p95NearestRank: rounded(nearestRank(sorted, 0.95)),
+    max: rounded(sorted[sorted.length - 1]),
+    bootstrap95: {
+      repetitions: 10000,
+      method: "percentile_nearest_rank",
+      median: {
+        lower: rounded(nearestRank(bootstrapMedians, 0.025)),
+        upper: rounded(nearestRank(bootstrapMedians, 0.975)),
+      },
+      mean: {
+        lower: rounded(nearestRank(bootstrapMeans, 0.025)),
+        upper: rounded(nearestRank(bootstrapMeans, 0.975)),
+      },
+    },
+  };
+};
+const csvValue = (value) => JSON.stringify(value ?? "");
 const countBy = (values, selector) => Object.fromEntries(
   [...new Set(values.map(selector))].sort().map((key) => [
     key,
@@ -36,6 +98,8 @@ const sessions = [];
 const recordRows = [];
 const stageRows = [];
 const payloadRows = [];
+const proofRows = [];
+const memoryRows = [];
 const seenRecordIds = new Set();
 
 for (const sessionPath of sessionPaths) {
@@ -144,6 +208,64 @@ for (const sessionPath of sessionPaths) {
         storageTaskFailures: integer(record.storageTaskFailures),
       });
     }
+    if (workflow === "mobile_zkp_benchmark") {
+      const proofRow = {
+        schemaVersion: "civicos-mobile-proof-run-v1",
+        sessionId: session.sessionId,
+        sessionSha256,
+        recordId: record.recordId,
+        attemptRecordId: stringOrNull(record.attemptRecordId),
+        suiteRunId: stringOrNull(record.suiteRunId),
+        cohort: stringOrNull(record.cohort),
+        trialType: stringOrNull(record.trial?.type),
+        sequence: integer(record.trial?.sequence),
+        outcome: stringOrNull(record.outcome),
+        errorClass: stringOrNull(record.errorClass),
+        artifactLoadMs: finiteNumber(record.timingsMs?.artifactLoadMs),
+        witnessBuildMs: finiteNumber(record.timingsMs?.witnessBuildMs),
+        proveMs: finiteNumber(record.timingsMs?.proveMs),
+        totalMs: finiteNumber(record.timingsMs?.totalMs),
+        proofJsonBytes: integer(record.output?.jsonBytes),
+        proofSha256: stringOrNull(record.output?.sha256),
+        hasGroth16Shape: record.output?.hasGroth16Shape === true,
+        peakResidentBytes: integer(record.memory?.peak?.peakResidentBytes),
+        peakPhysicalFootprintBytes: integer(record.memory?.peak?.peakPhysicalFootprintBytes),
+        peakTotalPssBytes: integer(record.memory?.peak?.peakTotalPssBytes),
+        peakSampleCount: integer(record.memory?.peak?.sampleCount),
+        peakSamplerDurationMs: finiteNumber(record.memory?.peak?.durationMs),
+        settleDelayMs: finiteNumber(record.memory?.settleDelayMs),
+        thermalStateBefore: stringOrNull(record.deviceCondition?.before?.thermalState),
+        thermalStateAfter: stringOrNull(record.deviceCondition?.after?.thermalState),
+        batteryPercentBefore: finiteNumber(record.deviceCondition?.before?.batteryPercent),
+        batteryPercentAfter: finiteNumber(record.deviceCondition?.after?.batteryPercent),
+        lowPowerModeBefore: record.deviceCondition?.before?.lowPowerMode === true,
+        circuitId: stringOrNull(record.circuit?.circuitId),
+        proverVersion: stringOrNull(record.circuit?.proverVersion),
+        artifactVersion: stringOrNull(record.artifact?.version),
+        artifactManifestHash: stringOrNull(record.artifact?.artifactManifestHash),
+        verifierKeyHash: stringOrNull(record.artifact?.verifierKeyHash),
+      };
+      proofRows.push(proofRow);
+      memoryRows.push({
+        sessionId: session.sessionId,
+        recordId: record.recordId,
+        cohort: stringOrNull(record.cohort),
+        sequence: integer(record.trial?.sequence),
+        beforeResidentBytes: integer(record.memory?.before?.residentBytes),
+        beforePhysicalFootprintBytes: integer(record.memory?.before?.physicalFootprintBytes),
+        beforeProofResidentBytes: integer(record.memory?.beforeProof?.residentBytes),
+        beforeProofPhysicalFootprintBytes: integer(record.memory?.beforeProof?.physicalFootprintBytes),
+        peakResidentBytes: integer(record.memory?.peak?.peakResidentBytes),
+        peakPhysicalFootprintBytes: integer(record.memory?.peak?.peakPhysicalFootprintBytes),
+        peakTotalPssBytes: integer(record.memory?.peak?.peakTotalPssBytes),
+        peakSampleCount: integer(record.memory?.peak?.sampleCount),
+        afterProofResidentBytes: integer(record.memory?.afterProof?.residentBytes),
+        afterProofPhysicalFootprintBytes: integer(record.memory?.afterProof?.physicalFootprintBytes),
+        afterSettleResidentBytes: integer(record.memory?.afterSettle?.residentBytes),
+        afterSettlePhysicalFootprintBytes: integer(record.memory?.afterSettle?.physicalFootprintBytes),
+        settleDelayMs: finiteNumber(record.memory?.settleDelayMs),
+      });
+    }
     recordRows.push(row);
 
     for (const [sequence, stage] of (record.stages || []).entries()) {
@@ -188,6 +310,29 @@ const onboardingRows = workflow("identity_onboarding");
 const voteRows = workflow("vote_participation");
 const inclusionRows = workflow("audit_receipt_inclusion");
 const cleanupRows = workflow("runtime_privacy_cleanup");
+const exportPrivacyRows = workflow("experiment_export_privacy_validation");
+const proofCohorts = Object.fromEntries(
+  [...new Set(proofRows.map((row) => row.cohort || "unspecified"))].sort().map((cohort) => {
+    const rows = proofRows.filter((row) => (row.cohort || "unspecified") === cohort);
+    const successes = rows.filter((row) => row.outcome === "success");
+    return [cohort, {
+      attempted: rows.length,
+      completed: successes.length,
+      failures: rows.length - successes.length,
+      artifactLoadMs: metricSummary(successes.map((row) => row.artifactLoadMs)),
+      witnessBuildMs: metricSummary(successes.map((row) => row.witnessBuildMs)),
+      proveMs: metricSummary(successes.map((row) => row.proveMs)),
+      totalMs: metricSummary(successes.map((row) => row.totalMs)),
+      proofJsonBytes: metricSummary(successes.map((row) => row.proofJsonBytes)),
+      peakResidentBytes: metricSummary(successes.map((row) => row.peakResidentBytes)),
+      peakPhysicalFootprintBytes: metricSummary(
+        successes.map((row) => row.peakPhysicalFootprintBytes),
+      ),
+      peakTotalPssBytes: metricSummary(successes.map((row) => row.peakTotalPssBytes)),
+      peakSampleCount: metricSummary(successes.map((row) => row.peakSampleCount)),
+    }];
+  }),
+);
 const summary = {
   schemaVersion: "civicos-mobile-experiment-inventory-v1",
   summarizedAt: new Date().toISOString(),
@@ -198,6 +343,13 @@ const summary = {
   recordsByWorkflow: countBy(recordRows, (row) => row.workflow),
   recordsByExperiment: countBy(recordRows, (row) => row.experimentId || "unspecified"),
   recordsByOutcome: countBy(recordRows, (row) => row.outcome || "unspecified"),
+  e1e2: {
+    proofRecords: proofRows.length,
+    successfulProofRecords: proofRows.filter((row) => row.outcome === "success").length,
+    failedProofRecords: proofRows.filter((row) => row.outcome !== "success").length,
+    groth16ShapePasses: proofRows.filter((row) => row.hasGroth16Shape).length,
+    cohorts: proofCohorts,
+  },
   e3: {
     onboardingRecords: onboardingRows.length,
     onboardingSuccesses: onboardingRows.filter((row) => row.outcome === "success").length,
@@ -213,6 +365,9 @@ const summary = {
     cleanupRecords: cleanupRows.length,
     cleanupRecordsWithFailures: cleanupRows.filter((row) =>
       (row.fileDeleteFailures || 0) > 0 || (row.storageTaskFailures || 0) > 0).length,
+    exportPrivacyValidationRecords: exportPrivacyRows.length,
+    successfulExportPrivacyValidations: exportPrivacyRows
+      .filter((row) => row.outcome === "success").length,
   },
   sessions,
 };
@@ -238,9 +393,31 @@ writeFileSync(
   `${payloadRows.map((row) => JSON.stringify(row)).join("\n")}\n`,
   { mode: 0o600 },
 );
+writeFileSync(
+  resolve(outputDir, "mobile-proof-runs.jsonl"),
+  `${proofRows.map((row) => JSON.stringify(row)).join("\n")}\n`,
+  { mode: 0o600 },
+);
+const memoryColumns = [
+  "sessionId", "recordId", "cohort", "sequence", "beforeResidentBytes",
+  "beforePhysicalFootprintBytes", "beforeProofResidentBytes",
+  "beforeProofPhysicalFootprintBytes", "peakResidentBytes",
+  "peakPhysicalFootprintBytes", "peakTotalPssBytes", "peakSampleCount",
+  "afterProofResidentBytes", "afterProofPhysicalFootprintBytes",
+  "afterSettleResidentBytes", "afterSettlePhysicalFootprintBytes", "settleDelayMs",
+];
+writeFileSync(
+  resolve(outputDir, "mobile-memory-samples.csv"),
+  `${[
+    memoryColumns.join(","),
+    ...memoryRows.map((row) => memoryColumns.map((column) => csvValue(row[column])).join(",")),
+  ].join("\n")}\n`,
+  { mode: 0o600 },
+);
 console.log(JSON.stringify({
   sessionCount: summary.sessionCount,
   recordCount: summary.recordCount,
   stageObservationCount: summary.stageObservationCount,
   payloadObservationCount: summary.payloadObservationCount,
+  proofRunCount: proofRows.length,
 }, null, 2));

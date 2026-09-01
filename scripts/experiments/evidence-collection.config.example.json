@@ -6,8 +6,10 @@
     "/absolute/private/path/89212/iphone-session.json",
     "/absolute/private/path/89212/android-session.json"
   ],
-  "historicalFivePolls": {
-    "enabled": false
+  "historicalPollCohort": {
+    "enabled": false,
+    "backendUrl": "https://backend.example",
+    "expectedPollCount": 4
   },
   "postgresStorage": {
     "enabled": false,

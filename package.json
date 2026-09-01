@@ -21,7 +21,7 @@
     "zkp:replace-example-polls": "bun scripts/replace-example-polls-with-production-zkp.ts",
     "oidc:signing-keys": "bun scripts/oidc-signing-keys.ts",
     "oidc:clients": "bun scripts/oidc-clients.ts",
-    "experiment:five-polls": "node scripts/experiments/collect-five-poll-evidence.mjs",
+    "experiment:poll-cohort": "node scripts/experiments/collect-poll-cohort-evidence.mjs",
     "experiment:faults": "node scripts/experiments/run-vote-fault-trials.mjs",
     "experiment:privacy": "node scripts/experiments/audit-privacy-markers.mjs",
     "experiment:verify-mobile": "node scripts/experiments/verify-mobile-benchmark-exports.mjs",

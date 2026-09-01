@@ -12,7 +12,11 @@ test("normalizes configured stages and command-line sessions", () => {
       schemaVersion: "civicos-evidence-collection-config-v1",
       outputRoot: "results",
       mobileSessions: ["ios.json"],
-      historicalFivePolls: { enabled: true },
+      historicalPollCohort: {
+        enabled: true,
+        backendUrl: "https://backend.example",
+        expectedPollCount: 4,
+      },
       privacyAudit: {
         enabled: true,
         markerFile: "markers.json",
@@ -27,7 +31,9 @@ test("normalizes configured stages and command-line sessions", () => {
     "/private/config/ios.json",
     "/private/android.json",
   ]);
-  assert.equal(config.historicalFivePolls.enabled, true);
+  assert.equal(config.historicalPollCohort.enabled, true);
+  assert.equal(config.historicalPollCohort.backendUrl, "https://backend.example");
+  assert.equal(config.historicalPollCohort.expectedPollCount, 4);
   assert.equal(config.faultTrials.enabled, true);
   assert.equal(config.privacyAudit.markerFile, "/private/config/markers.json");
   assert.deepEqual(config.privacyAudit.targets, [

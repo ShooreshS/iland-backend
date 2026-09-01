@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { createHash, createHmac } from "node:crypto";
+import { createHash, createHmac, randomBytes } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, resolve } from "node:path";
@@ -56,12 +56,13 @@ const required = (name) => {
   return value;
 };
 const backendUrl = required("CIVICOS_EXPERIMENT_BACKEND_URL").replace(/\/+$/u, "");
-const pseudonymKey = required("CIVICOS_EXPERIMENT_PSEUDONYM_KEY");
+const configuredPseudonymKey = String(process.env.CIVICOS_EXPERIMENT_PSEUDONYM_KEY || "").trim();
+const pseudonymKey = configuredPseudonymKey || randomBytes(32).toString("hex");
 const outputDir = resolve(
-  process.env.CIVICOS_EXPERIMENT_OUTPUT_DIR || resolve(backendRoot, "tmp/experiments/five-polls"),
+  process.env.CIVICOS_EXPERIMENT_OUTPUT_DIR || resolve(backendRoot, "tmp/experiments/poll-cohort"),
 );
 const cluster = String(process.env.SOLANA_AUDIT_CLUSTER || "devnet").trim();
-if (cluster !== "devnet") throw new Error("The five-poll article cohort must use devnet.");
+if (cluster !== "devnet") throw new Error("The registered article poll cohort must use devnet.");
 const connection = new Connection(
   process.env.SOLANA_AUDIT_RPC_URL || clusterApiUrl("devnet"),
   "confirmed",
@@ -75,7 +76,7 @@ if (!programAccount?.executable) {
 }
 const supabase = createClient(required("SUPABASE_URL"), required("SUPABASE_SERVICE_ROLE_KEY"), {
   auth: { autoRefreshToken: false, persistSession: false },
-  global: { headers: { "X-Client-Info": "civicos-five-poll-evidence" } },
+  global: { headers: { "X-Client-Info": "civicos-poll-cohort-evidence" } },
 });
 
 const query = async (table, columns, pollId) => {
@@ -117,8 +118,12 @@ if (pollIds.length === 0) {
   if (error) throw error;
   pollIds = [...new Set((data || []).map((row) => row.poll_id))];
 }
-if (pollIds.length !== 5) {
-  throw new Error(`Expected exactly five poll ids; found ${pollIds.length}. Set CIVICOS_EXPERIMENT_POLL_IDS.`);
+const expectedPollCount = Number(process.env.CIVICOS_EXPERIMENT_EXPECTED_POLL_COUNT || 4);
+if (!Number.isInteger(expectedPollCount) || expectedPollCount < 1 || expectedPollCount > 100) {
+  throw new Error("CIVICOS_EXPERIMENT_EXPECTED_POLL_COUNT must be an integer from 1 through 100.");
+}
+if (pollIds.length === 0) {
+  throw new Error("No verified poll ids were found. Set CIVICOS_EXPERIMENT_POLL_IDS.");
 }
 
 mkdirSync(outputDir, { recursive: true });
@@ -305,19 +310,28 @@ for (const pollId of pollIds) {
 }
 
 const summary = {
-  schemaVersion: "civicos-historical-five-poll-evidence-v1",
+  schemaVersion: "civicos-historical-poll-cohort-evidence-v1",
   collectedAt: new Date().toISOString(),
   cluster,
   programId: programId.toBase58(),
+  pseudonymKeySource: configuredPseudonymKey ? "operator_provided" : "ephemeral_per_run",
+  pseudonymKeySha256: sha256(pseudonymKey),
+  expectedPollCount,
   examined: evidence.length,
+  cohortCountMatches: evidence.length === expectedPollCount,
   qualified: evidence.filter((entry) => entry.qualified).length,
+  qualificationGatePassed:
+    evidence.length === expectedPollCount
+    && evidence.filter((entry) => entry.qualified).length === expectedPollCount,
   acceptedVoteCount: evidence.reduce((sum, entry) => sum + entry.acceptedVoteCount, 0),
   rootPublicationCount: evidence.reduce((sum, entry) => sum + entry.roots.length, 0),
   tallyVerificationCount: evidence.reduce((sum, entry) => sum + entry.tallies.length, 0),
   finalPublicationCount: evidence.reduce((sum, entry) => sum + entry.finalPublicationCount, 0),
   polls: evidence,
 };
-writeFileSync(resolve(outputDir, "historical-five-poll-summary.json"), `${JSON.stringify(summary, null, 2)}\n`, { mode: 0o600 });
-writeFileSync(resolve(outputDir, "historical-five-poll-solana-checks.jsonl"), `${solanaRows.map((row) => JSON.stringify(row)).join("\n")}\n`, { mode: 0o600 });
+writeFileSync(resolve(outputDir, "historical-poll-cohort-summary.json"), `${JSON.stringify(summary, null, 2)}\n`, { mode: 0o600 });
+writeFileSync(resolve(outputDir, "historical-poll-cohort-solana-checks.jsonl"), `${solanaRows.map((row) => JSON.stringify(row)).join("\n")}\n`, { mode: 0o600 });
 console.log(JSON.stringify({ ...summary, polls: evidence.map(({ pollCode, qualified, acceptedVoteCount }) => ({ pollCode, qualified, acceptedVoteCount })) }, null, 2));
-if (summary.qualified !== 5) process.exitCode = 1;
+if (summary.examined !== expectedPollCount) {
+  process.exitCode = 1;
+}

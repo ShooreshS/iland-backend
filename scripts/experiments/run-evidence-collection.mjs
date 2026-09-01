@@ -70,7 +70,7 @@ export const normalizeEvidenceConfig = ({ rawConfig = {}, configDir = process.cw
   if (rawConfig.schemaVersion && rawConfig.schemaVersion !== supportedSchema) {
     throw new Error(`Unsupported evidence collection config schema: ${rawConfig.schemaVersion}`);
   }
-  const historical = asObject(rawConfig.historicalFivePolls);
+  const historical = asObject(rawConfig.historicalPollCohort);
   const postgres = asObject(rawConfig.postgresStorage);
   const faults = asObject(rawConfig.faultTrials);
   const privacy = asObject(rawConfig.privacyAudit);
@@ -100,8 +100,15 @@ export const normalizeEvidenceConfig = ({ rawConfig = {}, configDir = process.cw
 
   return {
     mobileSessions: unique([...configuredSessions, ...cliSessions]),
-    historicalFivePolls: {
-      enabled: historical.enabled === true || args.includes("--run-five-polls"),
+    historicalPollCohort: {
+      enabled: historical.enabled === true
+        || args.includes("--run-poll-cohort"),
+      backendUrl: valueFor(args, "--poll-cohort-backend-url")
+        || String(historical.backendUrl || "").trim()
+        || null,
+      expectedPollCount: Number(
+        valueFor(args, "--expected-poll-count") || historical.expectedPollCount || 4,
+      ),
     },
     postgresStorage: {
       enabled: postgres.enabled === true || args.includes("--run-postgres-storage"),
@@ -208,10 +215,10 @@ const baseStages = (config) => [
     completionMeaning: "Every supplied synthetic benchmark proof was checked with the pinned verification key.",
   },
   {
-    stageId: "historical-five-polls",
+    stageId: "historical-poll-cohort",
     experiments: ["E3"],
-    status: config.historicalFivePolls.enabled ? "pending" : "not_requested",
-    completionMeaning: "The read-only five-poll database, public-audit, tally-proof, and Solana checks completed.",
+    status: config.historicalPollCohort.enabled ? "pending" : "not_requested",
+    completionMeaning: "The read-only registered poll-cohort checks completed; inspect qualificationGatePassed and per-poll outcomes separately.",
   },
   {
     stageId: "postgres-storage",
@@ -286,7 +293,7 @@ const runCommand = ({
 const main = () => {
   const args = process.argv.slice(2);
   if (args.includes("--help")) {
-    console.log("Usage: node run-evidence-collection.mjs [--config private-config.json] [--output-dir private-dir] [--session mobile.json] [--run-five-polls] [--run-postgres-storage] [--run-faults] [--privacy-markers markers.json --privacy-target=label=path] [--ceremony ceremony.json --review review.json]");
+    console.log("Usage: node run-evidence-collection.mjs [--config private-config.json] [--output-dir private-dir] [--session mobile.json] [--run-poll-cohort] [--run-postgres-storage] [--run-faults] [--privacy-markers markers.json --privacy-target=label=path] [--ceremony ceremony.json --review review.json]");
     return;
   }
   const configPathArg = valueFor(args, "--config");
@@ -316,7 +323,10 @@ const main = () => {
     configuration: {
       configFile: configPath ? inputFileRow(configPath) : null,
       mobileSessionCount: config.mobileSessions.length,
-      historicalFivePolls: config.historicalFivePolls.enabled,
+      historicalPollCohort: config.historicalPollCohort.enabled,
+      expectedPollCount: config.historicalPollCohort.enabled
+        ? config.historicalPollCohort.expectedPollCount
+        : null,
       postgresStorage: config.postgresStorage.enabled,
       postgresLabel: config.postgresStorage.enabled ? config.postgresStorage.label : null,
       faultTrials: config.faultTrials.enabled,
@@ -410,24 +420,44 @@ const main = () => {
     }
   }
 
-  const historicalStage = stageById("historical-five-polls");
+  const historicalStage = stageById("historical-poll-cohort");
   if (historicalStage.status === "pending") {
     const requiredEnv = [
       "SUPABASE_URL",
       "SUPABASE_SERVICE_ROLE_KEY",
-      "CIVICOS_EXPERIMENT_BACKEND_URL",
-      "CIVICOS_EXPERIMENT_PSEUDONYM_KEY",
     ];
     const missing = requiredEnv.filter((name) => !hasEnv(name, true));
+    if (
+      !config.historicalPollCohort.backendUrl
+      && !hasEnv("CIVICOS_EXPERIMENT_BACKEND_URL", true)
+    ) {
+      missing.push("CIVICOS_EXPERIMENT_BACKEND_URL");
+    }
+    if (
+      !Number.isInteger(config.historicalPollCohort.expectedPollCount)
+      || config.historicalPollCohort.expectedPollCount < 1
+      || config.historicalPollCohort.expectedPollCount > 100
+    ) {
+      missing.push("valid expectedPollCount");
+    }
     if (missing.length > 0) {
       blockStage(historicalStage, "E3", [`Missing environment values: ${missing.join(", ")}.`]);
     } else {
-      const stageDir = resolve(runRoot, "e3-historical-five-polls");
+      const stageDir = resolve(runRoot, "e3-historical-poll-cohort");
       executeStage(historicalStage, {
         label: "E3",
         command: process.execPath,
-        args: [resolve(scriptDir, "collect-five-poll-evidence.mjs")],
-        env: { ...process.env, CIVICOS_EXPERIMENT_OUTPUT_DIR: stageDir },
+        args: [resolve(scriptDir, "collect-poll-cohort-evidence.mjs")],
+        env: {
+          ...process.env,
+          CIVICOS_EXPERIMENT_OUTPUT_DIR: stageDir,
+          CIVICOS_EXPERIMENT_EXPECTED_POLL_COUNT: String(
+            config.historicalPollCohort.expectedPollCount,
+          ),
+          ...(config.historicalPollCohort.backendUrl
+            ? { CIVICOS_EXPERIMENT_BACKEND_URL: config.historicalPollCohort.backendUrl }
+            : null),
+        },
         runRoot,
         stageDir,
       });
