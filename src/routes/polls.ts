@@ -14,6 +14,7 @@ import type {
   VoteSubmissionRequestDto,
 } from "../types/contracts";
 import type { RouteDefinition } from "../types/http";
+import { createVoteExperimentSpanCollector } from "../experiments/voteExperimentSpans";
 
 const hex64Schema = z
   .string()
@@ -958,13 +959,21 @@ const createSubmitVoteRoute = (path: string): RouteDefinition => ({
   method: "POST",
   path,
   handler: async ({ request, params }) => {
-    const viewerResult = await requireViewer(request);
+    const experiment = createVoteExperimentSpanCollector(
+      request.headers.get("x-civicos-experiment-run"),
+    );
+    try {
+    const viewerResult = experiment
+      ? await experiment.measure("authentication", () => requireViewer(request))
+      : await requireViewer(request);
     if (!viewerResult.ok) {
+      experiment?.addResult({ success: false, responseClass: "AUTHENTICATION_REJECTED" });
       return viewerResult.response;
     }
 
     const pollId = params.id?.trim() || "";
     if (!pollId) {
+      experiment?.addResult({ success: false, responseClass: "INVALID_POLL_ID" });
       return json(
         {
           error: "invalid_poll_id",
@@ -974,10 +983,15 @@ const createSubmitVoteRoute = (path: string): RouteDefinition => ({
       );
     }
 
-    let requestBody: unknown;
+    let parsedBody: z.SafeParseReturnType<unknown, z.infer<typeof voteRequestSchema>>;
     try {
-      requestBody = await request.json();
+      const parseAndValidate = async () =>
+        voteRequestSchema.safeParse(await request.json());
+      parsedBody = experiment
+        ? await experiment.measure("request_parse_and_validation", parseAndValidate)
+        : await parseAndValidate();
     } catch {
+      experiment?.addResult({ success: false, responseClass: "INVALID_JSON" });
       return json(
         {
           error: "invalid_request",
@@ -987,8 +1001,8 @@ const createSubmitVoteRoute = (path: string): RouteDefinition => ({
       );
     }
 
-    const parsedBody = voteRequestSchema.safeParse(requestBody);
     if (!parsedBody.success) {
+      experiment?.addResult({ success: false, responseClass: "INVALID_VOTE_PAYLOAD" });
       return json(
         {
           error: "invalid_request",
@@ -1079,6 +1093,11 @@ const createSubmitVoteRoute = (path: string): RouteDefinition => ({
       expectedVoteCommitment: parsedBody.data.voteCommitment ?? null,
       encryptedVote: parsedBody.data.encryptedVote,
       viewer: viewerResult.viewer.user,
+      experiment,
+    });
+    experiment?.addResult({
+      success: result.success,
+      responseClass: result.success ? "ACCEPTED" : result.errorCode,
     });
 
     if (result.success) {
@@ -1086,6 +1105,15 @@ const createSubmitVoteRoute = (path: string): RouteDefinition => ({
     }
 
     return json(result, voteErrorStatusMap[result.errorCode] || 400);
+    } finally {
+      if (experiment) {
+        await experiment.finish().catch((error) => {
+          console.error("[experiment] failed to persist vote span", {
+            errorClass: error instanceof Error ? error.name : "EXPERIMENT_WRITE_FAILED",
+          });
+        });
+      }
+    }
   },
 });
 

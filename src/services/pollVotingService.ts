@@ -51,6 +51,7 @@ import type {
 } from "../types/contracts";
 import type { PollOptionRow, PollRow, PollTallyProofRow, UserRow } from "../types/db";
 import type { JsonValue } from "../types/json";
+import type { VoteExperimentSpanCollector } from "../experiments/voteExperimentSpans";
 
 const POLL_STATUS_SORT_ORDER: Record<PollDto["status"], number> = {
   active: 0,
@@ -937,11 +938,19 @@ export const createPollVotingService = (
     privacy?: VotePrivacyPayloadDto | null;
     expectedVoteCommitment?: string | null;
     encryptedVote?: unknown;
+    experiment?: VoteExperimentSpanCollector | null;
   }): Promise<VoteSubmissionResultDto> {
     const { pollId, viewer, privacy } = params;
+    const measure = <T>(stage: string, operation: () => Promise<T> | T): Promise<T> =>
+      params.experiment
+        ? params.experiment.measure(stage, operation)
+        : Promise.resolve().then(operation);
     const optionId = toStringOrEmpty(params.optionId);
 
-    const poll = await pollRepository.getById(pollId);
+    const poll = await measure(
+      "poll_and_policy_fetch",
+      () => pollRepository.getById(pollId),
+    );
     if (!poll) {
       return buildFailure("POLL_NOT_FOUND", "The requested poll does not exist.");
     }
@@ -1061,7 +1070,10 @@ export const createPollVotingService = (
 
     let verifiedIdentityId: string | null = null;
     if (requiresVerifiedIdentity) {
-      const verifiedIdentity = await verifiedIdentityRepository.getByUserId(viewer.id);
+      const verifiedIdentity = await measure(
+        "eligibility_evaluation",
+        () => verifiedIdentityRepository.getByUserId(viewer.id),
+      );
       if (!verifiedIdentity) {
         return rejectProductionVote(
           ZKP_AUDIT_REJECTION_REASON_CODES.verifiedIdentityRequired,
@@ -1095,7 +1107,10 @@ export const createPollVotingService = (
       }
     }
 
-    const identityProfile = await identityProfileRepository.getByUserId(viewer.id);
+    const identityProfile = await measure(
+      "eligibility_evaluation",
+      () => identityProfileRepository.getByUserId(viewer.id),
+    );
     const requiresIdentityProfile = pollRequiresIdentityProfile(pollPolicy);
 
     if (!identityProfile && requiresIdentityProfile) {
@@ -1171,7 +1186,10 @@ export const createPollVotingService = (
         );
       }
 
-      const pollEncryptionKey = await getPollEncryptionKeyForPoll(pollId);
+      const pollEncryptionKey = await measure(
+        "encryption_material_lookup",
+        () => getPollEncryptionKeyForPoll(pollId),
+      );
       if (!pollEncryptionKey.success) {
         return rejectProductionVote(
           ZKP_AUDIT_REJECTION_REASON_CODES.pollEncryptionKeyUnavailable,
@@ -1208,14 +1226,17 @@ export const createPollVotingService = (
         );
       }
 
-      const proofVerification = await verifyProductionVoteProof({
-        poll,
-        proof: productionPrivacy.proof,
-        encryptedVoteHash,
-        expectedVoteCommitment:
-          params.expectedVoteCommitment || productionPrivacy.voteCommitment,
-        expectedOptionCount: productionOptionCount,
-      });
+      const proofVerification = await measure(
+        "proof_verification",
+        () => verifyProductionVoteProof({
+          poll,
+          proof: productionPrivacy.proof,
+          encryptedVoteHash,
+          expectedVoteCommitment:
+            params.expectedVoteCommitment || productionPrivacy.voteCommitment,
+          expectedOptionCount: productionOptionCount,
+        }),
+      );
       if (!proofVerification.ok) {
         if (proofVerification.reason.startsWith("VERIFIER_")) {
           console.error("[zkp] production vote verifier rejected before proof acceptance", {
@@ -1258,11 +1279,13 @@ export const createPollVotingService = (
         );
       }
 
-      const existingNullifierVote =
-        await pollZkVoteRepository.getByPollIdAndNullifier(
+      const existingNullifierVote = await measure(
+        "duplicate_check",
+        () => pollZkVoteRepository.getByPollIdAndNullifier(
           pollId,
           proofAuditMaterial.nullifier,
-        );
+        ),
+      );
       if (existingNullifierVote) {
         return rejectProductionVote(
           ZKP_AUDIT_REJECTION_REASON_CODES.duplicateNullifier,
@@ -1282,43 +1305,49 @@ export const createPollVotingService = (
       }
 
       try {
-        const insertedVote = await pollZkVoteRepository.insertVerified({
-          poll_id: pollId,
-          nullifier: proofAuditMaterial.nullifier,
-          vote_commitment: proofAuditMaterial.voteCommitment,
-          encrypted_vote: encryptedVoteJson,
-          encrypted_vote_hash: proofAuditMaterial.encryptedVoteHash,
-          encrypted_vote_commitment: proofAuditMaterial.encryptedVoteCommitment,
-          proof_hash: proofAuditMaterial.proofHash,
-          proof_system_version: proofAuditMaterial.proofSystemVersion,
-          verification_method_version:
-            proofAuditMaterial.verificationMethodVersion,
-          proof_verification_status: proofAuditMaterial.proofVerificationStatus,
-          proof_public_inputs_json:
-            proofAuditMaterial.proofPublicInputsJson as unknown as JsonValue,
-          proof_envelope_hash: proofAuditMaterial.proofEnvelopeHash,
-          verifier_key_hash: proofAuditMaterial.verifierKeyHash,
-          circuit_id: proofAuditMaterial.circuitId,
-          accepted_at: submittedAt,
-          batch_id: null,
-        });
+        const insertedVote = await measure(
+          "database_commit_and_audit",
+          async () => {
+            const inserted = await pollZkVoteRepository.insertVerified({
+              poll_id: pollId,
+              nullifier: proofAuditMaterial.nullifier,
+              vote_commitment: proofAuditMaterial.voteCommitment,
+              encrypted_vote: encryptedVoteJson,
+              encrypted_vote_hash: proofAuditMaterial.encryptedVoteHash,
+              encrypted_vote_commitment: proofAuditMaterial.encryptedVoteCommitment,
+              proof_hash: proofAuditMaterial.proofHash,
+              proof_system_version: proofAuditMaterial.proofSystemVersion,
+              verification_method_version:
+                proofAuditMaterial.verificationMethodVersion,
+              proof_verification_status: proofAuditMaterial.proofVerificationStatus,
+              proof_public_inputs_json:
+                proofAuditMaterial.proofPublicInputsJson as unknown as JsonValue,
+              proof_envelope_hash: proofAuditMaterial.proofEnvelopeHash,
+              verifier_key_hash: proofAuditMaterial.verifierKeyHash,
+              circuit_id: proofAuditMaterial.circuitId,
+              accepted_at: submittedAt,
+              batch_id: null,
+            });
 
-        await zkpAuditEvents.appendVoteAccepted({
-          pollId: insertedVote.poll_id,
-          voteId: insertedVote.id,
-          nullifier: insertedVote.nullifier,
-          voteCommitment: insertedVote.vote_commitment,
-          encryptedVoteHash: insertedVote.encrypted_vote_hash,
-          encryptedVoteCommitment: insertedVote.encrypted_vote_commitment,
-          proofHash: insertedVote.proof_hash,
-          proofEnvelopeHash: insertedVote.proof_envelope_hash,
-          proofVerificationStatus: insertedVote.proof_verification_status,
-          verifierKeyHash: insertedVote.verifier_key_hash,
-          circuitId: insertedVote.circuit_id,
-          occurredAt: insertedVote.accepted_at,
-        });
+            await zkpAuditEvents.appendVoteAccepted({
+              pollId: inserted.poll_id,
+              voteId: inserted.id,
+              nullifier: inserted.nullifier,
+              voteCommitment: inserted.vote_commitment,
+              encryptedVoteHash: inserted.encrypted_vote_hash,
+              encryptedVoteCommitment: inserted.encrypted_vote_commitment,
+              proofHash: inserted.proof_hash,
+              proofEnvelopeHash: inserted.proof_envelope_hash,
+              proofVerificationStatus: inserted.proof_verification_status,
+              verifierKeyHash: inserted.verifier_key_hash,
+              circuitId: inserted.circuit_id,
+              occurredAt: inserted.accepted_at,
+            });
+            return inserted;
+          },
+        );
 
-        return {
+        return await measure("receipt_construction", async () => ({
           success: true,
           viewerVote: null,
           receipt: buildVoteReceipt({
@@ -1332,7 +1361,7 @@ export const createPollVotingService = (
             proofHash: insertedVote.proof_hash,
             acceptedAt: insertedVote.accepted_at,
           }),
-        };
+        }));
       } catch (error) {
         if (isUniqueViolation(error)) {
           return rejectProductionVote(
