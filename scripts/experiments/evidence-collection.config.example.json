@@ -1,0 +1,34 @@
+{
+  "schemaVersion": "civicos-evidence-collection-config-v1",
+  "outputRoot": "/absolute/private/path/89212/coordinated-evidence",
+  "runLabel": "build-89212",
+  "mobileSessions": [
+    "/absolute/private/path/89212/iphone-session.json",
+    "/absolute/private/path/89212/android-session.json"
+  ],
+  "historicalFivePolls": {
+    "enabled": false
+  },
+  "postgresStorage": {
+    "enabled": false,
+    "label": "rows-1000"
+  },
+  "faultTrials": {
+    "enabled": false
+  },
+  "privacyAudit": {
+    "enabled": false,
+    "markerFile": "/absolute/private/path/89212/e6/markers.json",
+    "targets": [
+      {
+        "label": "service_logs",
+        "path": "/absolute/private/path/89212/e6/service-logs"
+      }
+    ]
+  },
+  "e7e8": {
+    "enabled": false,
+    "ceremonyFile": "/absolute/private/path/89212/e7/ceremony.json",
+    "reviewFile": "/absolute/private/path/89212/e8/review.json"
+  }
+}

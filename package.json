@@ -25,7 +25,10 @@
     "experiment:faults": "node scripts/experiments/run-vote-fault-trials.mjs",
     "experiment:privacy": "node scripts/experiments/audit-privacy-markers.mjs",
     "experiment:verify-mobile": "node scripts/experiments/verify-mobile-benchmark-exports.mjs",
-    "experiment:e7-e8": "node scripts/experiments/validate-e7-e8-evidence.mjs"
+    "experiment:e7-e8": "node scripts/experiments/validate-e7-e8-evidence.mjs",
+    "experiment:summarize-mobile": "node scripts/experiments/summarize-mobile-experiment-exports.mjs",
+    "experiment:collect": "node scripts/experiments/run-evidence-collection.mjs",
+    "experiment:test-collector": "node --test scripts/experiments/run-evidence-collection.test.mjs"
   },
   "dependencies": {
     "@peculiar/x509": "^2.0.0",
