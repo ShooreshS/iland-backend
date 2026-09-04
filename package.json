@@ -27,6 +27,7 @@
     "experiment:verify-mobile": "node scripts/experiments/verify-mobile-benchmark-exports.mjs",
     "experiment:e7-e8": "node scripts/experiments/validate-e7-e8-evidence.mjs",
     "experiment:summarize-mobile": "node scripts/experiments/summarize-mobile-experiment-exports.mjs",
+    "experiment:summarize-e3-e4": "node scripts/experiments/summarize-e3-e4-prospective-evidence.mjs",
     "experiment:collect": "node scripts/experiments/run-evidence-collection.mjs",
     "experiment:test-collector": "node --test scripts/experiments/run-evidence-collection.test.mjs"
   },

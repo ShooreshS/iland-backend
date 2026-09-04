@@ -4,6 +4,7 @@ import { discussionMediaRoutes } from "./discussionMedia";
 import { discussionRoutes } from "./discussions";
 import { flagImageRoutes } from "./flagImages";
 import { healthRoutes } from "./health";
+import { humanVerificationRoutes } from "./humanVerification";
 import { idpRoutes } from "./idp";
 import { mapRoutes } from "./map";
 import { meRoutes } from "./me";
@@ -20,6 +21,7 @@ export const routes: RouteDefinition[] = [
   ...discussionRoutes,
   ...flagImageRoutes,
   ...healthRoutes,
+  ...humanVerificationRoutes,
   ...idpRoutes,
   ...pollRoutes,
   ...verificationRoutes,

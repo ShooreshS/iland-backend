@@ -6,6 +6,7 @@ import { resolveRoute } from "./routes";
 import { createZkpAutoResultPublisherService } from "./services/zkpAutoResultPublisherService";
 import { createPollMapRefreshWorker } from "./services/pollMapRefreshWorker";
 import { createNotificationDeliveryWorker } from "./services/notificationDeliveryWorker";
+import { createHumanVerificationRetentionWorker } from "./services/humanVerificationRetentionWorker";
 import type { RouteHandler } from "./types/http";
 
 const baseHandler: RouteHandler = async (context) => {
@@ -48,6 +49,14 @@ if (env.notifications.delivery.enabled) {
   notificationDeliveryWorker.start();
 } else {
   console.info("[notificationDeliveryWorker] disabled");
+}
+
+const humanVerificationRetentionWorker =
+  createHumanVerificationRetentionWorker();
+if (env.supabase.enabled) {
+  humanVerificationRetentionWorker.start();
+} else {
+  console.info("[humanVerificationRetentionWorker] disabled");
 }
 
 const zkpAutoResultPublisher = createZkpAutoResultPublisherService();
