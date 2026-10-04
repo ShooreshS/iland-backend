@@ -1,0 +1,104 @@
+{
+  "schemaVersion": "civicos-trust-boundary-audit-v1",
+  "cohortId": "android-release-build",
+  "build": "replace-with-version-and-build",
+  "commit": "replace-with-mobile-commit",
+  "specimens": [
+    {
+      "specimenId": "civil-identifier",
+      "dataClass": "raw-civil-identifier",
+      "expectation": "device_only_raw",
+      "value": "replace-with-authorized-synthetic-identifier",
+      "inputEncoding": "utf8",
+      "representations": [
+        "raw",
+        "base64",
+        "base64url",
+        "hex",
+        "json_string",
+        "url_component",
+        "sha512_hex"
+      ]
+    },
+    {
+      "specimenId": "document-portrait",
+      "dataClass": "document-portrait-image",
+      "expectation": "device_only_raw",
+      "value": "replace-with-base64-encoded-authorized-fixture",
+      "inputEncoding": "base64",
+      "representations": [
+        "raw",
+        "base64",
+        "base64url",
+        "hex",
+        "sha256_hex"
+      ]
+    },
+    {
+      "specimenId": "live-face",
+      "dataClass": "live-face-image",
+      "expectation": "device_only_raw",
+      "value": "replace-with-base64-encoded-authorized-fixture",
+      "inputEncoding": "base64",
+      "representations": [
+        "raw",
+        "base64",
+        "base64url",
+        "hex",
+        "sha256_hex"
+      ]
+    }
+  ],
+  "targets": [
+    {
+      "targetId": "proxy-capture",
+      "flowId": "automatic-identity-success",
+      "side": "server",
+      "layer": "network",
+      "checkpoint": "immediate",
+      "path": "/absolute/private/path/e6-tb/proxy"
+    },
+    {
+      "targetId": "service-logs",
+      "flowId": "automatic-identity-success",
+      "side": "server",
+      "layer": "application-logs",
+      "checkpoint": "immediate",
+      "path": "/absolute/private/path/e6-tb/service-logs"
+    },
+    {
+      "targetId": "device-after-cleanup",
+      "flowId": "automatic-identity-success",
+      "side": "device",
+      "layer": "app-container",
+      "checkpoint": "after-cleanup",
+      "path": "/absolute/private/path/e6-tb/device-after-cleanup"
+    }
+  ],
+  "identifierTrials": [
+    {
+      "trialId": "normalization-v1",
+      "flowId": "automatic-identity-success",
+      "normalizationVersion": 1,
+      "observedNidnh": "replace-with-128-character-sha512-value",
+      "candidatesFile": "/absolute/private/path/e6-tb/authorized-v1-candidates.txt",
+      "candidateSpaceSize": 10000000000,
+      "completeCandidateSpace": false
+    }
+  ],
+  "reviewFindings": [
+    {
+      "findingId": "reencoded-image-review",
+      "targetId": "service-logs",
+      "dataClass": "document-or-face-image",
+      "exposureClass": "unobserved",
+      "method": "preregistered-perceptual-image-review",
+      "evidenceFile": "/absolute/private/path/e6-tb/review/reencoded-image-review.txt",
+      "reviewerCodes": [
+        "reviewer-a",
+        "reviewer-b"
+      ],
+      "secondReviewerConfirmed": true
+    }
+  ]
+}

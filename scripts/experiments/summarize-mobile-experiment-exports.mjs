@@ -98,6 +98,7 @@ const sessions = [];
 const recordRows = [];
 const stageRows = [];
 const payloadRows = [];
+const trustBoundaryRows = [];
 const proofRows = [];
 const memoryRows = [];
 const seenRecordIds = new Set();
@@ -286,6 +287,23 @@ for (const sessionPath of sessionPaths) {
         timingClock: stringOrNull(stage?.timingClock),
       };
       stageRows.push(stageRow);
+      if (stageRow.stage === "identity_transfer_boundary_prepared") {
+        trustBoundaryRows.push({
+          schemaVersion: "civicos-mobile-trust-boundary-observation-v1",
+          ...stageRow,
+          transferClass: stringOrNull(stage?.metadata?.transferClass),
+          protocolFieldCount: integer(stage?.metadata?.protocolFieldCount),
+          nestedFieldCount: integer(stage?.metadata?.nestedFieldCount),
+          unexpectedFieldCount: integer(stage?.metadata?.unexpectedFieldCount),
+          sourceMediaIncluded: stage?.metadata?.sourceMediaIncluded === true,
+          directCivilValueIncluded: stage?.metadata?.directCivilValueIncluded === true,
+          digestIncluded: stage?.metadata?.digestIncluded === true,
+          livenessDecisionIncluded: stage?.metadata?.livenessDecisionIncluded === true,
+          likenessDecisionIncluded: stage?.metadata?.likenessDecisionIncluded === true,
+          likenessScoreIncluded: stage?.metadata?.likenessScoreIncluded === true,
+          humanReviewReferenceIncluded: stage?.metadata?.humanReviewReferenceIncluded === true,
+        });
+      }
       if (["request_serialization", "application_payload_observation"].includes(stageRow.stage)) {
         payloadRows.push({
           schemaVersion: "civicos-mobile-application-payload-observation-v1",
@@ -340,6 +358,7 @@ const summary = {
   recordCount: recordRows.length,
   stageObservationCount: stageRows.length,
   payloadObservationCount: payloadRows.length,
+  trustBoundaryObservationCount: trustBoundaryRows.length,
   recordsByWorkflow: countBy(recordRows, (row) => row.workflow),
   recordsByExperiment: countBy(recordRows, (row) => row.experimentId || "unspecified"),
   recordsByOutcome: countBy(recordRows, (row) => row.outcome || "unspecified"),
@@ -368,6 +387,17 @@ const summary = {
     exportPrivacyValidationRecords: exportPrivacyRows.length,
     successfulExportPrivacyValidations: exportPrivacyRows
       .filter((row) => row.outcome === "success").length,
+    trustBoundaryObservations: trustBoundaryRows.length,
+    automaticDerivedOutputObservations: trustBoundaryRows.filter((row) =>
+      row.transferClass === "automatic_derived_outputs").length,
+    humanReviewReferenceObservations: trustBoundaryRows.filter((row) =>
+      row.humanReviewReferenceIncluded).length,
+    observationsWithSourceMedia: trustBoundaryRows.filter((row) =>
+      row.sourceMediaIncluded).length,
+    observationsWithDirectCivilValue: trustBoundaryRows.filter((row) =>
+      row.directCivilValueIncluded).length,
+    observationsWithUnexpectedFields: trustBoundaryRows.filter((row) =>
+      (row.unexpectedFieldCount || 0) > 0).length,
   },
   sessions,
 };
@@ -391,6 +421,13 @@ writeFileSync(
 writeFileSync(
   resolve(outputDir, "mobile-application-payloads.jsonl"),
   `${payloadRows.map((row) => JSON.stringify(row)).join("\n")}\n`,
+  { mode: 0o600 },
+);
+writeFileSync(
+  resolve(outputDir, "mobile-trust-boundary-observations.jsonl"),
+  trustBoundaryRows.length > 0
+    ? `${trustBoundaryRows.map((row) => JSON.stringify(row)).join("\n")}\n`
+    : "",
   { mode: 0o600 },
 );
 writeFileSync(
@@ -419,5 +456,6 @@ console.log(JSON.stringify({
   recordCount: summary.recordCount,
   stageObservationCount: summary.stageObservationCount,
   payloadObservationCount: summary.payloadObservationCount,
+  trustBoundaryObservationCount: summary.trustBoundaryObservationCount,
   proofRunCount: proofRows.length,
 }, null, 2));

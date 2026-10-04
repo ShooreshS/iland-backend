@@ -28,6 +28,10 @@
       }
     ]
   },
+  "trustBoundaryAudit": {
+    "enabled": false,
+    "protocolFile": "/absolute/private/path/android-release/e6-tb/trust-boundary-protocol.json"
+  },
   "e7e8": {
     "enabled": false,
     "ceremonyFile": "/absolute/private/path/89212/e7/ceremony.json",

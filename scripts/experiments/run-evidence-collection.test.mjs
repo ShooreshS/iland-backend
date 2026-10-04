@@ -22,6 +22,10 @@ test("normalizes configured stages and command-line sessions", () => {
         markerFile: "markers.json",
         targets: [{ label: "service logs", path: "logs" }],
       },
+      trustBoundaryAudit: {
+        enabled: true,
+        protocolFile: "trust-boundary.json",
+      },
     },
     configDir: "/private/config",
     args: ["--session", "/private/android.json", "--run-faults"],
@@ -39,6 +43,11 @@ test("normalizes configured stages and command-line sessions", () => {
   assert.deepEqual(config.privacyAudit.targets, [
     { label: "service-logs", path: "/private/config/logs" },
   ]);
+  assert.equal(
+    config.trustBoundaryAudit.protocolFile,
+    "/private/config/trust-boundary.json",
+  );
+  assert.equal(config.trustBoundaryAudit.enabled, true);
   assert.equal(config.outputRoot, "/private/config/results");
 });
 

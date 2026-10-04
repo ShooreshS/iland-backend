@@ -24,12 +24,13 @@
     "experiment:poll-cohort": "node scripts/experiments/collect-poll-cohort-evidence.mjs",
     "experiment:faults": "node scripts/experiments/run-vote-fault-trials.mjs",
     "experiment:privacy": "node scripts/experiments/audit-privacy-markers.mjs",
+    "experiment:trust-boundary": "node scripts/experiments/audit-trust-boundary.mjs",
     "experiment:verify-mobile": "node scripts/experiments/verify-mobile-benchmark-exports.mjs",
     "experiment:e7-e8": "node scripts/experiments/validate-e7-e8-evidence.mjs",
     "experiment:summarize-mobile": "node scripts/experiments/summarize-mobile-experiment-exports.mjs",
     "experiment:summarize-e3-e4": "node scripts/experiments/summarize-e3-e4-prospective-evidence.mjs",
     "experiment:collect": "node scripts/experiments/run-evidence-collection.mjs",
-    "experiment:test-collector": "node --test scripts/experiments/run-evidence-collection.test.mjs"
+    "experiment:test-collector": "node --test scripts/experiments/run-evidence-collection.test.mjs scripts/experiments/audit-trust-boundary.test.mjs scripts/experiments/summarize-mobile-experiment-exports.test.mjs"
   },
   "dependencies": {
     "@peculiar/x509": "^2.0.0",

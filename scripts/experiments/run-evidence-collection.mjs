@@ -74,6 +74,7 @@ export const normalizeEvidenceConfig = ({ rawConfig = {}, configDir = process.cw
   const postgres = asObject(rawConfig.postgresStorage);
   const faults = asObject(rawConfig.faultTrials);
   const privacy = asObject(rawConfig.privacyAudit);
+  const trustBoundary = asObject(rawConfig.trustBoundaryAudit);
   const e7e8 = asObject(rawConfig.e7e8);
   const cliSessions = valuesFor(args, "--session").map((path) => resolve(process.cwd(), path));
   const configuredSessions = Array.isArray(rawConfig.mobileSessions)
@@ -97,6 +98,7 @@ export const normalizeEvidenceConfig = ({ rawConfig = {}, configDir = process.cw
   const cliMarkerFile = valueFor(args, "--privacy-markers");
   const cliCeremonyFile = valueFor(args, "--ceremony");
   const cliReviewFile = valueFor(args, "--review");
+  const cliTrustBoundaryProtocol = valueFor(args, "--trust-boundary-protocol");
 
   return {
     mobileSessions: unique([...configuredSessions, ...cliSessions]),
@@ -123,6 +125,12 @@ export const normalizeEvidenceConfig = ({ rawConfig = {}, configDir = process.cw
         ? resolve(process.cwd(), cliMarkerFile)
         : resolveConfiguredPath(configDir, privacy.markerFile),
       targets: [...configuredTargets, ...cliTargets],
+    },
+    trustBoundaryAudit: {
+      enabled: trustBoundary.enabled === true || Boolean(cliTrustBoundaryProtocol),
+      protocolFile: cliTrustBoundaryProtocol
+        ? resolve(process.cwd(), cliTrustBoundaryProtocol)
+        : resolveConfiguredPath(configDir, trustBoundary.protocolFile),
     },
     e7e8: {
       enabled: e7e8.enabled === true || Boolean(cliCeremonyFile) || Boolean(cliReviewFile),
@@ -204,9 +212,9 @@ const inputFileRow = (path) => ({
 const baseStages = (config) => [
   {
     stageId: "mobile-session-inventory",
-    experiments: ["E1", "E2", "E3", "E4", "E6"],
+    experiments: ["E1", "E2", "E3", "E4", "E6", "E6-TB"],
     status: config.mobileSessions.length > 0 ? "pending" : "not_requested",
-    completionMeaning: "Supplied mobile sessions were indexed into records, stage observations, payload observations, and aggregate counts.",
+    completionMeaning: "Supplied mobile sessions were indexed into records, stage observations, payload and trust-boundary observations, and aggregate counts.",
   },
   {
     stageId: "mobile-proof-verification",
@@ -239,6 +247,12 @@ const baseStages = (config) => [
     completionMeaning: "Exact markers were scanned in every supplied extract.",
   },
   {
+    stageId: "trust-boundary-audit",
+    experiments: ["E6-TB"],
+    status: config.trustBoundaryAudit.enabled ? "pending" : "not_requested",
+    completionMeaning: "Raw, reversible, and deterministic representations were scanned and configured civil-identifier reconstruction trials completed.",
+  },
+  {
     stageId: "e7-e8-validation",
     experiments: ["E7", "E8"],
     status: config.e7e8.enabled ? "pending" : "not_requested",
@@ -253,6 +267,7 @@ const claimBoundaries = {
   E4: "Repeat application, wire, artifact, and dedicated-database size measurements at every registered size.",
   E5: "The automated fault runner covers only its registered strata; external failure injection remains separate.",
   E6: "Exact-marker scanning does not replace encoded-data inspection, retention checks, or reviewer sampling.",
+  "E6-TB": "A completed scan reports observations only; apply the preregistered path, retention, reviewer, and claim gates before changing an RQ1 claim.",
   E7: "Validation checks supplied evidence; independent contributions and the ceremony must occur first.",
   E8: "Validation checks supplied evidence; an independent reviewer must perform the review first.",
 };
@@ -293,7 +308,7 @@ const runCommand = ({
 const main = () => {
   const args = process.argv.slice(2);
   if (args.includes("--help")) {
-    console.log("Usage: node run-evidence-collection.mjs [--config private-config.json] [--output-dir private-dir] [--session mobile.json] [--run-poll-cohort] [--run-postgres-storage] [--run-faults] [--privacy-markers markers.json --privacy-target=label=path] [--ceremony ceremony.json --review review.json]");
+    console.log("Usage: node run-evidence-collection.mjs [--config private-config.json] [--output-dir private-dir] [--session mobile.json] [--run-poll-cohort] [--run-postgres-storage] [--run-faults] [--privacy-markers markers.json --privacy-target=label=path] [--trust-boundary-protocol private-protocol.json] [--ceremony ceremony.json --review review.json]");
     return;
   }
   const configPathArg = valueFor(args, "--config");
@@ -332,6 +347,7 @@ const main = () => {
       faultTrials: config.faultTrials.enabled,
       privacyAudit: config.privacyAudit.enabled,
       privacyTargetLabels: config.privacyAudit.targets.map((target) => target.label),
+      trustBoundaryAudit: config.trustBoundaryAudit.enabled,
       e7e8Validation: config.e7e8.enabled,
     },
     sourceInputs: [],
@@ -573,6 +589,43 @@ const main = () => {
           ...config.privacyAudit.targets.map((target) => `--target=${target.label}=${target.path}`),
           "--output",
           resolve(stageDir, "privacy-marker-audit.json"),
+        ],
+        env: process.env,
+        runRoot,
+        stageDir,
+      });
+    }
+  }
+
+  const trustBoundaryStage = stageById("trust-boundary-audit");
+  if (trustBoundaryStage.status === "pending") {
+    const reasons = [];
+    if (!hasEnv("CIVICOS_EXPERIMENT_PSEUDONYM_KEY")) {
+      reasons.push("Missing environment value: CIVICOS_EXPERIMENT_PSEUDONYM_KEY.");
+    }
+    if (
+      !config.trustBoundaryAudit.protocolFile
+      || !existsSync(config.trustBoundaryAudit.protocolFile)
+    ) {
+      reasons.push("The trust-boundary protocol file is missing.");
+    }
+    if (reasons.length > 0) {
+      blockStage(trustBoundaryStage, "E6-TB", reasons);
+    } else {
+      manifest.sourceInputs.push({
+        role: "trust-boundary-private-protocol",
+        ...inputFileRow(config.trustBoundaryAudit.protocolFile),
+      });
+      const stageDir = resolve(runRoot, "e6-tb-trust-boundary-audit");
+      executeStage(trustBoundaryStage, {
+        label: "E6-TB",
+        command: process.execPath,
+        args: [
+          resolve(scriptDir, "audit-trust-boundary.mjs"),
+          "--protocol",
+          config.trustBoundaryAudit.protocolFile,
+          "--output-dir",
+          stageDir,
         ],
         env: process.env,
         runRoot,
