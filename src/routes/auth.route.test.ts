@@ -235,6 +235,60 @@ describe("auth lifecycle routes", () => {
     });
   });
 
+  it("POST /auth/register/complete accepts approved human-review evidence", async () => {
+    const humanReviewEvidence = {
+      method: "human_review",
+      liveness: { passed: true },
+      likeness: {
+        passed: true,
+        similarity: 0.01,
+        threshold: 0.03,
+        humanReviewed: true,
+      },
+      humanReview: {
+        requestId: "35f0ec72-c728-4cf2-ae41-b7ff386fa62d",
+        reviewToken: "r".repeat(64),
+      },
+    };
+    const body = buildRegistrationCompleteBody({
+      verificationEvidence: humanReviewEvidence,
+    });
+
+    const response = await invokeRoute(findRoute("POST", "/auth/register/complete"), {
+      body,
+    });
+
+    expect(response.status).toBe(201);
+    expect(state.serviceCalls).toContainEqual({
+      method: "completeRegistration",
+      input: [body],
+    });
+  });
+
+  it("POST /auth/register/complete rejects human-review evidence without its bearer token", async () => {
+    const response = await invokeRoute(findRoute("POST", "/auth/register/complete"), {
+      body: buildRegistrationCompleteBody({
+        verificationEvidence: {
+          method: "human_review",
+          liveness: { passed: true },
+          likeness: {
+            passed: true,
+            similarity: 0.01,
+            threshold: 0.03,
+          },
+          humanReview: {
+            requestId: "35f0ec72-c728-4cf2-ae41-b7ff386fa62d",
+          },
+        },
+      }),
+    });
+
+    expect(response.status).toBe(400);
+    expect(
+      state.serviceCalls.some((call) => call.method === "completeRegistration"),
+    ).toBe(false);
+  });
+
   it("DELETE /auth/account forwards the confirmation phrase for the viewer", async () => {
     const route = findRoute("DELETE", "/auth/account");
 

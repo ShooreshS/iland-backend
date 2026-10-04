@@ -185,6 +185,10 @@ const registerCompleteRoute: RouteDefinition = {
             ? 409
           : result.errorCode === "ACCOUNT_DISABLED"
             ? 403
+            : result.errorCode === "HUMAN_REVIEW_NOT_APPROVED"
+              ? 403
+            : result.errorCode === "HUMAN_REVIEW_ALREADY_USED"
+              ? 409
             : result.errorCode === "CREDENTIAL_ALREADY_BOUND"
               ? 409
               : 501,

@@ -15,6 +15,7 @@ import authSessionRepository from "../repositories/authSessionRepository";
 import accountDeletionRepository from "../repositories/accountDeletionRepository";
 import refreshTokenFamilyRepository from "../repositories/refreshTokenFamilyRepository";
 import userRepository from "../repositories/userRepository";
+import humanVerificationApprovalService from "./humanVerificationApprovalService";
 import type {
   AuthCredentialRow,
   AuthChallengePurpose,
@@ -45,6 +46,13 @@ type RegistrationCompletionInput = {
   normalizationVersion: number;
   verificationMethod: "passport_nfc";
   platform: AuthCredentialPlatform;
+  verificationEvidence?: {
+    method?: "device_comparison" | "human_review";
+    humanReview?: {
+      requestId: string;
+      reviewToken: string;
+    };
+  };
 };
 
 type LoginCompletionInput = {
@@ -408,6 +416,48 @@ export const authService = {
       );
     }
 
+    const appAttestationResult =
+      await appAttestationVerifier.verifyRegistrationAttestation({
+        platform: input.platform,
+        appAttestation: input.appAttestation,
+        challenge: input.challenge,
+      });
+    if (!appAttestationResult.success) {
+      return attestationRejectedResponse(
+        appAttestationResult.errorCode,
+        appAttestationResult.message,
+      );
+    }
+
+    let humanReviewApprovalInput: {
+      requestId: string;
+      reviewToken: string;
+      credentialId: string;
+      publicKeyPem: string;
+    } | null = null;
+    if (input.verificationEvidence?.method === "human_review") {
+      const humanReview = input.verificationEvidence.humanReview;
+      if (!humanReview) {
+        return {
+          success: false as const,
+          errorCode: "HUMAN_REVIEW_NOT_APPROVED",
+          message: "Human-review evidence is incomplete.",
+        };
+      }
+      humanReviewApprovalInput = {
+        requestId: humanReview.requestId,
+        reviewToken: humanReview.reviewToken,
+        credentialId: input.credentialId,
+        publicKeyPem: input.publicKeyPem,
+      };
+      const approval = await humanVerificationApprovalService.validate(
+        humanReviewApprovalInput,
+      );
+      if (!approval.success) {
+        return approval;
+      }
+    }
+
     const user =
       await authAccountBindingService.resolveOrCreateUserByVerifiedIdentity({
         nidnh: input.nidnh,
@@ -440,19 +490,6 @@ export const authService = {
         message:
           "The supplied credential id is already enrolled with a different public key.",
       };
-    }
-
-    const appAttestationResult =
-      await appAttestationVerifier.verifyRegistrationAttestation({
-        platform: input.platform,
-        appAttestation: input.appAttestation,
-        challenge: input.challenge,
-      });
-    if (!appAttestationResult.success) {
-      return attestationRejectedResponse(
-        appAttestationResult.errorCode,
-        appAttestationResult.message,
-      );
     }
 
     const authCredential =
@@ -501,6 +538,21 @@ export const authService = {
           status: "verified",
         });
 
+    let consumedHumanReviewRequestId: string | null = null;
+    if (humanReviewApprovalInput) {
+      const approval = await humanVerificationApprovalService.consume(
+        humanReviewApprovalInput,
+      );
+      if (!approval.success) {
+        return approval;
+      }
+      consumedHumanReviewRequestId = approval.request.id;
+      await humanVerificationApprovalService.associateUser(
+        consumedHumanReviewRequestId,
+        user.id,
+      );
+    }
+
     await authChallengeRepository.markConsumed(input.challengeId);
 
     await authAuditEventRepository.insert({
@@ -516,6 +568,7 @@ export const authService = {
         transitionalCryptoBypassUsed:
           appAttestationResult.transitionalCryptoBypassUsed,
         appAttestationCredentialId: appAttestationCredential.id,
+        humanVerificationRequestId: consumedHumanReviewRequestId,
       },
     });
 
@@ -532,6 +585,17 @@ export const authService = {
 
     if (!sessionResult.success) {
       return sessionResult;
+    }
+
+    if (consumedHumanReviewRequestId) {
+      await humanVerificationApprovalService
+        .deleteConsumedMedia(consumedHumanReviewRequestId)
+        .catch((error) => {
+          console.warn("[auth] consumed human-review media cleanup failed", {
+            requestId: consumedHumanReviewRequestId,
+            message: error instanceof Error ? error.message : "Unknown cleanup failure",
+          });
+        });
     }
 
     return {

@@ -58,7 +58,7 @@ const buildRefreshFamily = (
   rotation_counter: 0,
   last_rotated_at: nowIso,
   last_used_at: null,
-  expires_at: "2026-07-28T10:00:00.000Z",
+  expires_at: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString(),
   revoked_at: null,
   revocation_reason: null,
   created_at: nowIso,

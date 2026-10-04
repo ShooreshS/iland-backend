@@ -202,7 +202,11 @@ export type NewAuthAuditEventRow = {
   occurred_at?: string;
 };
 
-export type AuthChallengePurpose = "register" | "login" | "recover";
+export type AuthChallengePurpose =
+  | "register"
+  | "login"
+  | "recover"
+  | "human_verification";
 
 export type AuthChallengeRow = {
   id: string;
@@ -223,6 +227,91 @@ export type NewAuthChallengeRow = {
   credential_id_hint?: string | null;
   expires_at: string;
   metadata?: Record<string, unknown>;
+};
+
+export type HumanVerificationStatus =
+  | "uploading"
+  | "pending"
+  | "approved"
+  | "rejected"
+  | "consumed"
+  | "expired"
+  | "cancelled";
+
+export type HumanVerificationMediaKind = "document_portrait" | "live_face";
+
+export type HumanVerificationRequestRow = {
+  id: string;
+  access_token_hash: string;
+  device_credential_id: string;
+  device_public_key_pem: string;
+  platform: AuthCredentialPlatform;
+  status: HumanVerificationStatus;
+  document_type: string;
+  similarity: number;
+  comparison_threshold: number;
+  comparison_model: string | null;
+  liveness_passed: boolean;
+  gaze_passed: boolean | null;
+  app_attestation: Record<string, unknown>;
+  reviewer_verified_identity_id: string | null;
+  reviewer_user_id: string | null;
+  user_message: string | null;
+  internal_note: string | null;
+  submitted_at: string | null;
+  decided_at: string | null;
+  consumed_at: string | null;
+  consumed_by_user_id: string | null;
+  expires_at: string;
+  created_at: string;
+  updated_at: string;
+};
+
+export type HumanVerificationMediaRow = {
+  id: string;
+  request_id: string;
+  kind: HumanVerificationMediaKind;
+  storage_bucket: string;
+  storage_path: string;
+  mime_type: "image/jpeg";
+  size_bytes: number;
+  width: number;
+  height: number;
+  sha256: string;
+  upload_status: "signed" | "uploaded" | "deleted";
+  completed_at: string | null;
+  deleted_at: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type HumanVerificationReviewActionRow = {
+  id: string;
+  request_id: string;
+  reviewer_verified_identity_id: string;
+  reviewer_user_id: string;
+  action: "approve" | "reject";
+  previous_status: HumanVerificationStatus;
+  new_status: HumanVerificationStatus;
+  internal_note: string | null;
+  user_message: string | null;
+  created_at: string;
+};
+
+export type HumanVerificationPushInstallationRow = {
+  request_id: string;
+  platform: AuthCredentialPlatform;
+  provider: "apns" | "fcm";
+  provider_environment: "sandbox" | "production";
+  token_ciphertext: string;
+  token_hash: string;
+  locale: string | null;
+  status: "active" | "sent" | "invalid" | "failed";
+  last_delivery_error: string | null;
+  last_registered_at: string;
+  last_delivery_at: string | null;
+  created_at: string;
+  updated_at: string;
 };
 
 export type IdentityProfileRow = {
