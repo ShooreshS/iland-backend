@@ -9,6 +9,8 @@ test.json
 test.md
 dev
 tmp/
+docs/security/
+
 
 sso-client-secrets/
 

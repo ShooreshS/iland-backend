@@ -159,3 +159,5 @@ With backend running and app flags set, you can immediately test:
 - No demo/seed records are auto-inserted by backend code.
 - `/health/db` returns `not_configured` when Supabase env vars are missing.
 - Restricted poll voting may require identity/home location data depending on poll rules.
+- Credential inventory, rotation dependencies, and the incident checklist are in
+  [the Railway incident response runbook](docs/security/railway-incident-2026-10-21.md).
