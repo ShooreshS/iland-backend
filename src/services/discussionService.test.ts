@@ -507,6 +507,33 @@ const createRepo = () => {
 };
 
 describe("discussionService", () => {
+  it("rejects caller URLs before fetching or moderation, even with supplied metadata", async () => {
+    const { repo, posts } = createRepo();
+    posts.push(createPostRow({ moderation_status: "draft" }));
+    let moderationCalls = 0;
+    const service = createDiscussionService({
+      discussionRepositoryLike: repo as any,
+      userRepositoryLike: { getById: async () => createUser() },
+      verifiedIdentityRepositoryLike: { getByUserId: async () => verifiedIdentity },
+      moderationServiceLike: { moderatePost: async () => { moderationCalls++; throw new Error("Unexpected moderation"); } },
+    });
+    const originalFetch = globalThis.fetch;
+    let fetchCalls = 0;
+    globalThis.fetch = Object.assign(async () => { fetchCalls++; throw new Error("Unexpected fetch"); },
+      { preconnect: originalFetch.preconnect });
+    try {
+      for (const imageUrl of ["http://127.0.0.1/internal", "http://[::1]/", "http://169.254.169.254/", "https://public.audit.invalid/image"]) {
+        for (const metadata of [{}, { mimeType: "image/jpeg", sizeBytes: 128 }]) {
+          const input = { postType: "discussion" as const, caption: "Synthetic", image: { imageUrl, ...metadata } };
+          expect((await service.createPost(input, "user-1")).success).toBe(false);
+          expect((await service.updatePost(posts[0].id, input, "user-1")).success).toBe(false);
+        }
+      }
+      expect(fetchCalls).toBe(0);
+      expect(moderationCalls).toBe(0);
+    } finally { globalThis.fetch = originalFetch; }
+  });
+
   it("lists published posts for anonymous readers without resolving likes", async () => {
     const { repo, posts } = createRepo();
     let likedLookupCount = 0;

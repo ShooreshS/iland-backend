@@ -36,7 +36,7 @@ const CREDENTIAL_SCHEMA_HASH = "2".repeat(64);
 const OPTION_SET_HASH = "3".repeat(64);
 const OPTION_COUNT = 2;
 const CREDENTIAL_ROOT = "4".repeat(64);
-const NULLIFIER = "5".repeat(64);
+const NULLIFIER = "1".repeat(64);
 const VOTE_COMMITMENT = "6".repeat(64);
 const ENCRYPTED_VOTE_HASH = "7".repeat(64);
 const ENCRYPTED_VOTE_COMMITMENT = "c".repeat(64);
@@ -469,6 +469,27 @@ describe("groth16ProofVerifierService", () => {
         ),
       ),
     );
+  });
+
+  it("rejects noncanonical nullifiers before cryptographic verification", async () => {
+    for (const value of [
+      21888242871839275222246405745257275088548364400416034343698204186575808495617n,
+      BigInt(`0x${NULLIFIER}`) + 21888242871839275222246405745257275088548364400416034343698204186575808495617n,
+      (1n << 256n) - 1n,
+    ]) {
+      const proof = createProof();
+      proof.publicInputs.nullifier = value.toString(16).padStart(64, "0");
+      proof.publicInputsHash = hashGroth16VotePublicInputs(proof.publicInputs);
+      let verifierCalls = 0;
+      const result = await verifyGroth16VoteProofForPoll({
+        poll: createPoll(), proof, encryptedVoteHash: ENCRYPTED_VOTE_HASH,
+        expectedVoteCommitment: VOTE_COMMITMENT, expectedOptionCount: OPTION_COUNT,
+      }, { config: configuredVerifier, isAcceptedCredentialRoot: acceptCredentialRoot,
+        verifyProof: async () => { verifierCalls++; return true; } });
+      expect(result.ok).toBe(false);
+      if (!result.ok) expect(result.reason).toBe("PROOF_INVALID");
+      expect(verifierCalls).toBe(0);
+    }
   });
 
   it("accepts the depth-32 CredentialCommitmentVote fixture through the default verifier engine", async () => {

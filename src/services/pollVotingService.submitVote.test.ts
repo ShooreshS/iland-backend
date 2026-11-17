@@ -677,6 +677,8 @@ describe("pollVotingService.submitVote", () => {
     const privacy = createProductionVotePrivacyPayload(encryptedVoteHash);
     const audit = createMockZkpAuditEventService();
     const service = createPollVotingService({
+      // Opening validation has its own real-crypto integration cases.
+      verifyEncryptedVoteOpening: async () => true,
       getPollEncryptionKeyForPoll,
       zkpAuditEventService: audit.service,
       verifyGroth16VoteProofForPoll: async (input) => {
@@ -849,6 +851,8 @@ describe("pollVotingService.submitVote", () => {
     const privacy = createProductionVotePrivacyPayload(encryptedVoteHash);
     const audit = createMockZkpAuditEventService();
     const service = createPollVotingService({
+      // Opening validation has its own real-crypto integration cases.
+      verifyEncryptedVoteOpening: async () => true,
       getPollEncryptionKeyForPoll,
       zkpAuditEventService: audit.service,
       verifyGroth16VoteProofForPoll: async () => {
@@ -908,6 +912,8 @@ describe("pollVotingService.submitVote", () => {
     const privacy = createProductionVotePrivacyPayload("a".repeat(64));
     const audit = createMockZkpAuditEventService();
     const service = createPollVotingService({
+      // Opening validation has its own real-crypto integration cases.
+      verifyEncryptedVoteOpening: async () => true,
       getPollEncryptionKeyForPoll,
       zkpAuditEventService: audit.service,
       verifyGroth16VoteProofForPoll: async () => {
@@ -986,6 +992,8 @@ describe("pollVotingService.submitVote", () => {
     const encryptedVote = createEncryptedVotePayload();
     const audit = createMockZkpAuditEventService();
     const service = createPollVotingService({
+      // Opening validation has its own real-crypto integration cases.
+      verifyEncryptedVoteOpening: async () => true,
       getPollEncryptionKeyForPoll,
       zkpAuditEventService: audit.service,
       verifyGroth16VoteProofForPoll: async () => {
@@ -1059,6 +1067,8 @@ describe("pollVotingService.submitVote", () => {
     const privacy = createProductionVotePrivacyPayload(encryptedVoteHash);
     const audit = createMockZkpAuditEventService();
     const service = createPollVotingService({
+      // Opening validation has its own real-crypto integration cases.
+      verifyEncryptedVoteOpening: async () => true,
       getPollEncryptionKeyForPoll,
       zkpAuditEventService: audit.service,
       verifyGroth16VoteProofForPoll: async () => ({

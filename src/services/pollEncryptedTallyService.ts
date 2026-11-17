@@ -16,6 +16,7 @@ import {
   getBallotCustodyPolicy,
 } from "./ballotCustodyPolicyService";
 import { canonicalizeJson } from "./pollPolicyService";
+import { poseidonHashHex64 } from "./poseidonBn254Service";
 
 const ENCRYPTED_VOTE_AAD_VERSION = "civicos-encrypted-vote-aad-v1";
 const ENCRYPTED_VOTE_OPENING_VERSION = "civicos-encrypted-vote-opening-v1";
@@ -193,7 +194,7 @@ const optionIdsByIndex = (options: readonly PollOptionRow[]): string[] =>
 
 const parseOptionIndex = (value: unknown): number | null => {
   const numeric =
-    typeof value === "number" ? Math.trunc(value) : Number(asString(value));
+    typeof value === "number" ? value : Number(asString(value));
   return Number.isInteger(numeric) && numeric >= 0 ? numeric : null;
 };
 
@@ -201,7 +202,7 @@ const countDecryptedVote = (input: {
   poll: PollRow;
   options: readonly PollOptionRow[];
   countsByOptionId: Record<string, number>;
-  vote: PollZkVoteRow;
+  vote: Pick<PollZkVoteRow, "id" | "encrypted_vote" | "nullifier" | "vote_commitment" | "encrypted_vote_commitment" | "accepted_at">;
   privateKeyJwk: JsonValue;
 }): boolean => {
   let opening: Record<string, unknown> | null = null;
@@ -246,7 +247,7 @@ const countDecryptedVote = (input: {
 const decryptAcceptedVoteForFinalization = (input: {
   poll: PollRow;
   options: readonly PollOptionRow[];
-  vote: PollZkVoteRow;
+  vote: Pick<PollZkVoteRow, "id" | "encrypted_vote" | "nullifier" | "vote_commitment" | "encrypted_vote_commitment" | "accepted_at">;
   privateKeyJwk: JsonValue;
 }): FinalizationVoteOpeningResult => {
   let opening: Record<string, unknown> | null = null;
@@ -358,6 +359,37 @@ export const createPollEncryptedTallyService = (
     dependencies.ballotCustodyPolicy ?? getBallotCustodyPolicy();
 
   return {
+    // The current private-beta policy already trusts this backend with ballot
+    // decryption. Authenticate the opening and recompute both commitments
+    // before accepting it; the Groth16 circuit does not bind ciphertext bytes.
+    async verifyVoteOpeningBeforeAcceptance(input: {
+      poll: PollRow;
+      options: readonly PollOptionRow[];
+      encryptedVote: JsonValue;
+      nullifier: string;
+      voteCommitment: string;
+      encryptedVoteCommitment: string;
+    }): Promise<boolean> {
+      const keyRow = await pollEncryptionKeys.getByPollId(input.poll.id);
+      if (!keyRow || keyRow.key_id !== input.poll.poll_encryption_key_id ||
+          !canBackendDecryptPollEncryptionCustodyModel(keyRow.custody_model, getCustodyPolicy())) {
+        return false;
+      }
+      const opened = decryptAcceptedVoteForFinalization({
+        poll: input.poll, options: input.options, privateKeyJwk: keyRow.private_key_jwk,
+        vote: { id: "pending", encrypted_vote: input.encryptedVote, nullifier: input.nullifier,
+          vote_commitment: input.voteCommitment, encrypted_vote_commitment: input.encryptedVoteCommitment, accepted_at: "" },
+      });
+      if (!opened.success) return false;
+      const commitment = await poseidonHashHex64([
+        1001, opened.vote.optionIndex, opened.vote.encryptedVoteRandomness, input.poll.option_set_hash!,
+      ]);
+      if (commitment !== input.encryptedVoteCommitment) return false;
+      return (await poseidonHashHex64([
+        input.nullifier, commitment, input.poll.option_set_hash!, opened.vote.voteRandomness,
+      ])) === input.voteCommitment;
+    },
+
     async getProvisionalTally(input: {
       poll: PollRow;
       options: readonly PollOptionRow[];

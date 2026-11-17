@@ -185,6 +185,7 @@ type PollVotingServiceDependencies = {
   verifyGroth16VoteProofForPoll?: typeof verifyGroth16VoteProofForPoll;
   hashEncryptedVotePayload?: typeof hashEncryptedVotePayload;
   getPollEncryptionKeyForPoll?: typeof pollEncryptionKeyService.getOrCreatePublicKeyForPoll;
+  verifyEncryptedVoteOpening?: typeof pollEncryptedTallyService.verifyVoteOpeningBeforeAcceptance;
   zkpAuditEventService?: Pick<
     typeof zkpAuditEventService,
     "appendVoteAccepted" | "appendVoteRejected"
@@ -766,6 +767,8 @@ export const createPollVotingService = (
   const getPollEncryptionKeyForPoll =
     dependencies.getPollEncryptionKeyForPoll ??
     pollEncryptionKeyService.getOrCreatePublicKeyForPoll;
+  const verifyEncryptedVoteOpening = dependencies.verifyEncryptedVoteOpening ??
+    pollEncryptedTallyService.verifyVoteOpeningBeforeAcceptance;
   const zkpAuditEvents =
     dependencies.zkpAuditEventService ?? zkpAuditEventService;
 
@@ -1046,11 +1049,12 @@ export const createPollVotingService = (
       }
     }
 
-    const productionOptionCount = productionZkpPoll
+    const productionOptions = productionZkpPoll
       ? getOrderedActivePollOptions(
           await pollRepository.getOptionsByPollId(pollId),
-        ).length
-      : 0;
+        )
+      : [];
+    const productionOptionCount = productionOptions.length;
     if (productionZkpPoll && productionOptionCount > 8) {
       return rejectProductionVote(
         ZKP_AUDIT_REJECTION_REASON_CODES.tooManyOptions,
@@ -1278,6 +1282,20 @@ export const createPollVotingService = (
             verifierKeyHash: proofAuditMaterial.verifierKeyHash,
             circuitId: proofAuditMaterial.circuitId,
           },
+        );
+      }
+
+      if (!(await verifyEncryptedVoteOpening({
+        poll, options: productionOptions, encryptedVote: encryptedVoteJson,
+        nullifier: proofAuditMaterial.nullifier,
+        voteCommitment: proofAuditMaterial.voteCommitment,
+        encryptedVoteCommitment: proofAuditMaterial.encryptedVoteCommitment,
+      }))) {
+        return rejectProductionVote(
+          ZKP_AUDIT_REJECTION_REASON_CODES.proofInvalid,
+          "PROOF_INVALID",
+          "Encrypted vote opening does not match the verified ballot commitments.",
+          proofAuditHints,
         );
       }
 

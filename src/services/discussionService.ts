@@ -258,41 +258,13 @@ const resolveImageMetadataFromUrl = async (
     return { ok: true, image: null };
   }
 
-  let mimeType = normalizeText(input?.mimeType)?.toLowerCase() || null;
-  let sizeBytes =
-    Number.isInteger(input?.sizeBytes) && Number(input?.sizeBytes) > 0
-      ? Number(input?.sizeBytes)
-      : null;
-
-  if (!mimeType || !sizeBytes) {
-    try {
-      const response = await fetch(imageUrl, { method: "HEAD" });
-      mimeType =
-        mimeType ||
-        normalizeText(response.headers.get("content-type"))?.split(";")[0]?.toLowerCase() ||
-        null;
-      const contentLength = Number(response.headers.get("content-length"));
-      sizeBytes =
-        sizeBytes || (Number.isInteger(contentLength) && contentLength > 0
-          ? contentLength
-          : null);
-    } catch {
-      // Gate 0 will return a user-safe metadata error when HEAD cannot resolve it.
-    }
-  }
-
+  // Completed uploads are resolved above through an owner-bound storage row.
+  // Client URLs must never cause backend or moderation-provider network I/O,
+  // even when callers supply plausible MIME and size metadata themselves.
   return {
-    ok: true,
-    image: {
-      moderationImageUrl: imageUrl,
-      storedImageUrl: imageUrl,
-      storageBucket: null,
-      storagePath: null,
-      uploadId: null,
-      mimeType: mimeType || "",
-      sizeBytes: sizeBytes || 0,
-      altText: normalizeText(input?.altText),
-    },
+    ok: false,
+    errorCode: "VALIDATION_FAILED",
+    message: "Discussion images require a completed image upload.",
   };
 };
 

@@ -15,6 +15,7 @@ import {
   CIVIC_ENCRYPTED_VOTE_KEY_AGREEMENT,
 } from "./pollEncryptionKeyService";
 import { canonicalizeJson } from "./pollPolicyService";
+import { poseidonHashHex64 } from "./poseidonBn254Service";
 import type {
   PollEncryptionKeyRow,
   PollOptionRow,
@@ -199,6 +200,29 @@ const encryptOpening = (input: {
 };
 
 describe("pollEncryptedTallyService", () => {
+  it("authenticates vote openings and recomputes both proof commitments before acceptance", async () => {
+    const poll = createPoll();
+    const options = [createOption()];
+    const { keyRow, publicKeyJwk } = createPollKeyRow(poll);
+    const nullifier = "1".repeat(64);
+    const encryptedVoteCommitment = await poseidonHashHex64([1001, 0, "9".repeat(64), poll.option_set_hash!]);
+    const voteCommitment = await poseidonHashHex64([nullifier, encryptedVoteCommitment, poll.option_set_hash!, "a".repeat(64)]);
+    const encryptedVote = encryptOpening({ poll, publicKeyJwk, encryptedVoteCommitment, optionIndex: 0 });
+    const service = createPollEncryptedTallyService({ pollEncryptionKeys: { getByPollId: async () => keyRow } });
+    const input = { poll, options, nullifier, voteCommitment, encryptedVoteCommitment, encryptedVote };
+    expect(await service.verifyVoteOpeningBeforeAcceptance(input)).toBe(true);
+    expect(await service.verifyVoteOpeningBeforeAcceptance({ ...input,
+      encryptedVote: { ...(encryptedVote as object), authTag: Buffer.alloc(16).toString("base64url") } as JsonValue,
+    })).toBe(false);
+    expect(await service.verifyVoteOpeningBeforeAcceptance({ ...input,
+      encryptedVote: encryptOpening({ poll, publicKeyJwk, encryptedVoteCommitment, optionIndex: 1 }),
+    })).toBe(false);
+    expect(await service.verifyVoteOpeningBeforeAcceptance({ ...input, voteCommitment: "2".repeat(64) })).toBe(false);
+    expect(await service.verifyVoteOpeningBeforeAcceptance({ ...input, nullifier: "2".repeat(64) })).toBe(false);
+    keyRow.custody_model = "unsupported";
+    expect(await service.verifyVoteOpeningBeforeAcceptance(input)).toBe(false);
+  });
+
   it("decrypts accepted encrypted votes into provisional option counts", async () => {
     const poll = createPoll();
     const optionA = createOption({ id: "option-a", label: "Yes", display_order: 0 });

@@ -41,6 +41,8 @@ export const CIVIC_PRODUCTION_ENCRYPTED_VOTE_VERSION =
 const CIVIC_ZKP_DOMAIN = "org.civicos.zkp" as const;
 const CIVIC_PRODUCTION_MAX_OPTIONS = 8;
 const HEX_64_PATTERN = /^[0-9a-f]{64}$/;
+const BN254_SCALAR_FIELD =
+  21888242871839275222246405745257275088548364400416034343698204186575808495617n;
 
 export type Groth16VotePublicInputsDto = {
   version: string;
@@ -603,6 +605,12 @@ export const verifyGroth16VoteProofForPoll = async (
       "PROOF_INVALID",
       "Groth16 vote proof contains malformed 32-byte public inputs.",
     );
+  }
+
+  // snarkjs reduces public signals modulo the scalar field. The database's
+  // replay key must have exactly one encoding for each verified nullifier.
+  if (BigInt(`0x${nullifier}`) >= BN254_SCALAR_FIELD) {
+    return reject("PROOF_INVALID", "Groth16 vote nullifier is not a canonical BN254 field element.");
   }
 
   if (
